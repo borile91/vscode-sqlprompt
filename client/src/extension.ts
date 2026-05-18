@@ -1,121 +1,409 @@
 import * as path from 'path';
-import { workspace, ExtensionContext, commands, window } from 'vscode';
+import {
+    ExtensionContext,
+    ExtensionMode,
+    commands,
+    window,
+    extensions,
+    Uri,
+} from "vscode";
 
 import {
-  LanguageClient,
-  LanguageClientOptions,
-  ServerOptions,
-  TransportKind
-} from 'vscode-languageclient/node';
+    LanguageClient,
+    LanguageClientOptions,
+    RevealOutputChannelOn,
+    ServerOptions,
+    TransportKind,
+} from "vscode-languageclient/node";
 
 let client: LanguageClient | undefined;
+let connectionSyncDebounce: ReturnType<typeof setTimeout> | undefined;
+let mssqlApiPromise: Promise<any | undefined> | undefined;
 
-export async function activate(context: ExtensionContext) {
-  console.log('SQL Prompt: extension activating...');
+type ColumnInfo = {
+    name: string;
+    dataType: string;
+    maxLength: number | null;
+    isNullable: boolean;
+    isPrimaryKey: boolean;
+};
 
-  const serverModule = context.asAbsolutePath(
-    path.join('server', 'out', 'server.js')
-  );
+type TableInfo = {
+    schema: string;
+    name: string;
+    columns: ColumnInfo[];
+};
 
-  const debugOptions = { execArgv: ['--nolazy', '--inspect=6009'] };
+// Our extension's identifier as published — used by the mssql connectionSharing
+// API so the permission dialog shows "SQL Prompt" and the approval is persisted.
+const EXTENSION_ID = "giacomoborile.vscode-sqlprompt";
 
-  const serverOptions: ServerOptions = {
-    run: { module: serverModule, transport: TransportKind.ipc },
-    debug: {
-      module: serverModule,
-      transport: TransportKind.ipc,
-      options: debugOptions
+async function getMssqlApi(): Promise<any | undefined> {
+    if (mssqlApiPromise) {
+        return mssqlApiPromise;
     }
-  };
 
-  const clientOptions: LanguageClientOptions = {
-    documentSelector: [
-      { scheme: 'file', language: 'sql' },
-      { scheme: 'untitled', language: 'sql' }
-    ],
-    synchronize: {
-      configurationSection: 'sqlPrompt'
+    const mssqlExt = extensions.getExtension<any>("ms-mssql.mssql");
+    if (!mssqlExt) {
+        return undefined;
     }
-  };
 
-  client = new LanguageClient(
-    'sqlPrompt',
-    'SQL Prompt Language Server',
-    serverOptions,
-    clientOptions
-  );
+    mssqlApiPromise = (async () => {
+        try {
+            const api = await mssqlExt.activate();
+            if (!api?.connectionSharing) {
+                return undefined;
+            }
+            return api;
+        } catch {
+            return undefined;
+        }
+    })();
 
-  // Register commands
-  context.subscriptions.push(
-    commands.registerCommand('sqlPrompt.connect', async () => {
-      const config = workspace.getConfiguration('sqlPrompt');
-      const connection = config.get<any>('connection');
+    return mssqlApiPromise;
+}
 
-      if (!connection || !connection.server) {
-        const server = await window.showInputBox({
-          prompt: 'SQL Server hostname',
-          value: 'localhost'
-        });
-        if (!server) return;
+function extractRowsFromSimpleQueryResult(result: any): any[] {
+    const rows = result?.rows;
+    const columnInfo = result?.columnInfo;
 
-        const database = await window.showInputBox({
-          prompt: 'Database name',
-          value: 'master'
-        });
-        if (!database) return;
+    if (!Array.isArray(rows)) {
+        return [];
+    }
 
-        const user = await window.showInputBox({
-          prompt: 'Username (leave empty for Windows Auth)',
-          value: ''
-        });
+    if (!rows.length) {
+        return rows;
+    }
 
-        let password = '';
-        if (user) {
-          password = await window.showInputBox({
-            prompt: 'Password',
-            password: true
-          }) || '';
+    if (!Array.isArray(rows[0])) {
+        return rows;
+    }
+
+    if (!Array.isArray(columnInfo)) {
+        return [];
+    }
+
+    return rows.map((values: any[]) => {
+        const row: Record<string, any> = {};
+        for (let i = 0; i < columnInfo.length; i++) {
+            const rawName = columnInfo[i]?.columnName ?? columnInfo[i]?.name;
+            const name = typeof rawName === "string" ? rawName : `col_${i}`;
+            row[name] = values[i];
+        }
+        return row;
+    });
+}
+
+function mapRowsToSchemaSnapshot(rows: any[]): TableInfo[] {
+    const tableMap = new Map<string, TableInfo>();
+
+    for (const row of rows) {
+        const schema = row.schema_name.displayValue;
+        const table = row.table_name.displayValue;
+        if (!schema || !table) {
+            continue;
         }
 
-        await config.update('connection', {
-          server,
-          database,
-          user,
-          password,
-          port: 1433,
-          trustServerCertificate: true
-        }, true);
-      }
+        const key = `${schema}.${table}`;
+        if (!tableMap.has(key)) {
+            tableMap.set(key, {
+                schema,
+                name: table,
+                columns: [],
+            });
+        }
 
-      // Send connect request to server
-      if (client) {
-        await client.sendRequest('sqlPrompt/connect');
-        window.showInformationMessage('SQL Prompt: Connected!');
-      }
-    }),
+        tableMap.get(key)!.columns.push({
+            name: row.column_name,
+            dataType: row.data_type,
+            maxLength:
+                typeof row.max_length === "number" ? row.max_length : null,
+            isNullable: row.is_nullable === true || row.is_nullable === 1,
+            isPrimaryKey:
+                row.is_primary_key === true || row.is_primary_key === 1,
+        });
+    }
 
-    commands.registerCommand('sqlPrompt.disconnect', async () => {
-      if (client) {
-        await client.sendRequest('sqlPrompt/disconnect');
-        window.showInformationMessage('SQL Prompt: Disconnected.');
-      }
-    }),
+    return Array.from(tableMap.values());
+}
 
-    commands.registerCommand('sqlPrompt.reloadSchema', async () => {
-      if (client) {
-        await client.sendRequest('sqlPrompt/reloadSchema');
-        window.showInformationMessage('SQL Prompt: Schema reloaded.');
-      }
-    })
-  );
+async function loadSchemaViaConnectionSharing(ownerUri: string): Promise<TableInfo[] | undefined> {
+    const api = await getMssqlApi();
+    if (!api?.connectionSharing) {
+        return undefined;
+    }
 
-  await client.start();
-  console.log('SQL Prompt: language server started.');
+    const schemaQuery = `
+      SELECT
+        s.name AS schema_name,
+        t.name AS table_name,
+        c.name AS column_name,
+        ty.name AS data_type,
+        c.max_length,
+        c.is_nullable,
+        CASE WHEN pk.column_id IS NOT NULL THEN 1 ELSE 0 END AS is_primary_key
+      FROM sys.tables t
+      INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
+      INNER JOIN sys.columns c ON t.object_id = c.object_id
+      INNER JOIN sys.types ty ON c.user_type_id = ty.user_type_id
+      LEFT JOIN (
+        SELECT ic.object_id, ic.column_id
+        FROM sys.index_columns ic
+        INNER JOIN sys.indexes i ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+        WHERE i.is_primary_key = 1
+      ) pk ON c.object_id = pk.object_id AND c.column_id = pk.column_id
+      ORDER BY s.name, t.name, c.column_id
+    `;
+
+    try {
+        const result = await api.connectionSharing.executeSimpleQuery?.(
+            ownerUri,
+            schemaQuery,
+        );
+        const rows = extractRowsFromSimpleQueryResult(result);
+        return mapRowsToSchemaSnapshot(rows);
+    } catch {
+        return undefined;
+    }
+}
+
+/**
+ * Reads the mssql connection for the currently active SQL editor and sends it
+ * to the language server so it can (re)load the schema.
+ *
+ * When showNotification is true (connection just changed), also pops an
+ * information message including the active database name.
+ */
+async function syncMssqlConnection(showNotification = false): Promise<boolean> {
+    if (!client) {
+        console.log("SQL Prompt: syncMssqlConnection — client not ready");
+        return false;
+    }
+
+    const editor = window.activeTextEditor;
+    if (!editor || editor.document.languageId !== "sql") {
+        console.log("SQL Prompt: syncMssqlConnection — no active SQL editor");
+        return false;
+    }
+
+    const api = await getMssqlApi();
+    if (!api?.connectionSharing) {
+        return false;
+    }
+
+    const ownerUri = editor.document.uri.toString();
+
+    try {
+        const isConnected = await api.connectionSharing.isConnected?.(ownerUri);
+        if (!isConnected) {
+            console.log("SQL Prompt: syncMssqlConnection — active SQL file is not connected in mssql");
+            return false;
+        }
+    } catch {
+        return false;
+    }
+
+    const schemaSnapshot = await loadSchemaViaConnectionSharing(ownerUri);
+    if (!schemaSnapshot) {
+        return false;
+    }
+
+    try {
+        const result = await client.sendRequest<{
+            success: boolean;
+            tableCount: number;
+        }>("sqlPrompt/updateSchemaSnapshot", { tables: schemaSnapshot });
+
+        if (!result?.success) {
+            return false;
+        }
+
+        window.setStatusBarMessage(
+            `SQL Prompt: schema loaded — ${result.tableCount} table(s)`,
+            5000,
+        );
+
+        if (showNotification) {
+            let dbDetail = "";
+            try {
+                const db: string | undefined =
+                    await api.connectionSharing.getActiveDatabase?.(EXTENSION_ID);
+                if (db) {
+                    dbDetail = ` · ${db}`;
+                }
+            } catch {
+                /* permission not yet granted or no active connection */
+            }
+            window.showInformationMessage(
+                `SQL Prompt: connected${dbDetail} — ${result.tableCount} table(s) loaded`,
+            );
+        }
+
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Subscribes to mssql's URI-ownership change event so that whenever the user
+ * connects / disconnects / switches connection in the mssql extension, we
+ * automatically re-sync the schema and show a notification.
+ *
+ * The event is exposed via api.uriOwnershipApi.onDidChangeUriOwnership and
+ * is backed internally by connectionManager.onConnectionsChanged.
+ */
+async function setupMssqlConnectionListener(
+    context: ExtensionContext,
+): Promise<void> {
+    const api = await getMssqlApi();
+    if (!api?.uriOwnershipApi?.onDidChangeUriOwnership) {
+        return;
+    }
+
+    const ownershipEvent = api.uriOwnershipApi.onDidChangeUriOwnership;
+    context.subscriptions.push(
+        ownershipEvent(() => {
+            // Debounce to absorb mssql connection transition bursts.
+            if (connectionSyncDebounce) {
+                clearTimeout(connectionSyncDebounce);
+            }
+            connectionSyncDebounce = setTimeout(async () => {
+                connectionSyncDebounce = undefined;
+                await syncMssqlConnection(true);
+            }, 600);
+        }),
+    );
+}
+
+function setupMssqlApiLifetime(context: ExtensionContext): void {
+    context.subscriptions.push({
+        dispose: () => {
+            mssqlApiPromise = undefined;
+        },
+    });
+}
+
+export async function activate(context: ExtensionContext) {
+    console.log("SQL Prompt: extension activating...");
+    setupMssqlApiLifetime(context);
+
+    const serverModule = context.asAbsolutePath(
+        path.join("server", "out", "server.js"),
+    );
+
+    const debugOptions = { execArgv: ["--nolazy", "--inspect-brk=6009"] };
+
+    const serverOptions: ServerOptions = {
+        run: { module: serverModule, transport: TransportKind.ipc },
+        debug: {
+            module: serverModule,
+            transport: TransportKind.ipc,
+            options: debugOptions,
+        },
+    };
+
+    const clientOptions: LanguageClientOptions = {
+        documentSelector: [
+            { scheme: "file", language: "sql" },
+            { scheme: "untitled", language: "sql" },
+        ],
+        synchronize: {
+            configurationSection: "sqlPrompt",
+        },
+        outputChannelName: "SQL Prompt",
+        revealOutputChannelOn: RevealOutputChannelOn.Info,
+    };
+
+    // forceDebug: when running in development mode, always start the language
+    // server with --inspect=6009 regardless of process.execArgv. This is needed
+    // because modern VS Code may not expose --inspect-brk in the extension host's
+    // execArgv, which would otherwise prevent the debug server options from being
+    // used and make "Attach to Server" fail to find anything on port 6009.
+    const forceDebug = context.extensionMode === ExtensionMode.Development;
+    client = new LanguageClient(
+        "sqlPrompt",
+        "SQL Prompt Language Server",
+        serverOptions,
+        clientOptions,
+        forceDebug,
+    );
+
+    context.subscriptions.push(
+        // Connect: triggers the mssql connect dialog for the current file, then
+        // syncs the resulting connection to our language server.
+        commands.registerCommand("sqlPrompt.connect", async () => {
+            const editor = window.activeTextEditor;
+            if (!editor || editor.document.languageId !== "sql") {
+                window.showWarningMessage(
+                    "SQL Prompt: open a .sql file first.",
+                );
+                return;
+            }
+
+            if (!extensions.getExtension("ms-mssql.mssql")) {
+                window.showErrorMessage(
+                    "SQL Prompt: the ms-mssql.mssql extension is required. Please install it.",
+                );
+                return;
+            }
+
+            // Let the user connect through the standard mssql dialog
+            await commands.executeCommand("mssql.connect");
+
+            // Give the mssql extension a moment to complete the connection, then sync
+            setTimeout(() => syncMssqlConnection(), 2000);
+        }),
+
+        commands.registerCommand("sqlPrompt.disconnect", async () => {
+            if (client) {
+                await client.sendRequest("sqlPrompt/disconnect");
+                window.showInformationMessage("SQL Prompt: disconnected.");
+            }
+        }),
+
+        // Manually force a schema reload from the currently active mssql connection.
+        commands.registerCommand("sqlPrompt.reloadSchema", async () => {
+            const editor = window.activeTextEditor;
+            if (!editor || editor.document.languageId !== "sql") {
+                window.showWarningMessage(
+                    "SQL Prompt: open a .sql file first.",
+                );
+                return;
+            }
+
+            const reloaded = await syncMssqlConnection(true);
+            if (!reloaded) {
+                window.showWarningMessage(
+                    "SQL Prompt: no active mssql connection found. " +
+                    "Connect the file via the mssql extension first.",
+                );
+            }
+        }),
+
+        // Auto-sync whenever the user switches to a different SQL file
+        window.onDidChangeActiveTextEditor(async (editor) => {
+            if (editor && editor.document.languageId === "sql") {
+                await syncMssqlConnection();
+            }
+        }),
+    );
+
+    await client.start();
+    console.log("SQL Prompt: language server started.");
+
+    // Subscribe to mssql connection changes so the schema reloads automatically
+    // whenever the user connects/disconnects/switches connection in mssql.
+    await setupMssqlConnectionListener(context);
+
+    // Sync connection for the editor that is already open when the extension activates
+    setTimeout(() => syncMssqlConnection(), 1500);
 }
 
 export async function deactivate() {
-  if (client) {
-    await client.stop();
-    client = undefined;
-  }
+    mssqlApiPromise = undefined;
+    if (client) {
+        await client.stop();
+        client = undefined;
+    }
 }

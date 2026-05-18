@@ -1,105 +1,114 @@
 {
-  "name": "vscode-sqlprompt",
-  "displayName": "SQL Prompt",
-  "description": "SQL Server IntelliSense - schema-aware autocomplete like Redgate SQL Prompt",
-  "version": "0.1.0",
-  "publisher": "giacomoborile",
-  "engines": {
-    "vscode": "^1.75.0"
-  },
-  "categories": [
-    "Programming Languages"
-  ],
-  "activationEvents": [
-    "onLanguage:sql"
-  ],
-  "main": "./client/out/extension",
-  "contributes": {
-    "languages": [
-      {
-        "id": "sql",
-        "aliases": ["SQL", "sql"],
-        "extensions": [".sql"]
-      }
-    ],
-    "configuration": {
-      "type": "object",
-      "title": "SQL Prompt Configuration",
-      "properties": {
-        "sqlPrompt.connection": {
-          "type": "object",
-          "default": {
-            "server": "localhost",
-            "database": "master",
-            "user": "",
-            "password": "",
-            "port": 1433,
-            "trustServerCertificate": true
-          },
-          "description": "SQL Server connection settings",
-          "properties": {
-            "server": {
-              "type": "string",
-              "description": "SQL Server hostname"
-            },
-            "database": {
-              "type": "string",
-              "description": "Database name"
-            },
-            "user": {
-              "type": "string",
-              "description": "Username"
-            },
-            "password": {
-              "type": "string",
-              "description": "Password"
-            },
-            "port": {
-              "type": "number",
-              "description": "Port number"
-            },
-            "trustServerCertificate": {
-              "type": "boolean",
-              "description": "Trust server certificate"
-            }
-          }
-        },
-        "sqlPrompt.trace.server": {
-          "scope": "window",
-          "type": "string",
-          "enum": [
-            "off",
-            "messages",
-            "verbose"
-          ],
-          "default": "off",
-          "description": "Traces the communication between VS Code and the language server."
-        }
-      }
+    "name": "vscode-sqlprompt",
+    "displayName": "SQL Prompt",
+    "description": "SQL Server IntelliSense - schema-aware autocomplete like Redgate SQL Prompt",
+    "version": "0.1.0",
+    "publisher": "giacomoborile",
+    "repository": "borile91/vscode-sqlprompt",
+    "engines": {
+        "vscode": "^1.75.0"
     },
-    "commands": [
-      {
-        "command": "sqlPrompt.connect",
-        "title": "SQL Prompt: Connect to Database"
-      },
-      {
-        "command": "sqlPrompt.disconnect",
-        "title": "SQL Prompt: Disconnect"
-      },
-      {
-        "command": "sqlPrompt.reloadSchema",
-        "title": "SQL Prompt: Reload Schema"
-      }
-    ]
-  },
-  "scripts": {
-    "vscode:prepublish": "npm run compile",
-    "compile": "tsc -b",
-    "watch": "tsc -b -w",
-    "postinstall": "cd client && npm install && cd ../server && npm install"
-  },
-  "devDependencies": {
-    "@types/node": "^20.11.0",
-    "typescript": "^5.3.3"
-  }
+    "categories": [
+        "Programming Languages"
+    ],
+    "extensionDependencies": [
+        "ms-mssql.mssql"
+    ],
+    "activationEvents": [
+        "onLanguage:sql"
+    ],
+    "main": "./client/out/extension",
+    "contributes": {
+        "languages": [
+            {
+                "id": "sql",
+                "aliases": [
+                    "SQL",
+                    "sql"
+                ],
+                "extensions": [
+                    ".sql"
+                ]
+            }
+        ],
+        "configuration": {
+            "type": "object",
+            "title": "SQL Prompt Configuration",
+            "properties": {
+                "sqlPrompt.connection": {
+                    "type": "object",
+                    "default": {
+                        "server": "localhost",
+                        "database": "master",
+                        "user": "",
+                        "password": "",
+                        "port": 1433,
+                        "trustServerCertificate": true
+                    },
+                    "description": "SQL Server connection settings",
+                    "properties": {
+                        "server": {
+                            "type": "string",
+                            "description": "SQL Server hostname"
+                        },
+                        "database": {
+                            "type": "string",
+                            "description": "Database name"
+                        },
+                        "user": {
+                            "type": "string",
+                            "description": "Username"
+                        },
+                        "password": {
+                            "type": "string",
+                            "description": "Password"
+                        },
+                        "port": {
+                            "type": "number",
+                            "description": "Port number"
+                        },
+                        "trustServerCertificate": {
+                            "type": "boolean",
+                            "description": "Trust server certificate"
+                        }
+                    }
+                },
+                "sqlPrompt.trace.server": {
+                    "scope": "window",
+                    "type": "string",
+                    "enum": [
+                        "off",
+                        "messages",
+                        "verbose"
+                    ],
+                    "default": "off",
+                    "description": "Traces the communication between VS Code and the language server."
+                }
+            }
+        },
+        "commands": [
+            {
+                "command": "sqlPrompt.connect",
+                "title": "SQL Prompt: Connect to Database"
+            },
+            {
+                "command": "sqlPrompt.disconnect",
+                "title": "SQL Prompt: Disconnect"
+            },
+            {
+                "command": "sqlPrompt.reloadSchema",
+                "title": "SQL Prompt: Reload Schema"
+            }
+        ]
+    },
+    "scripts": {
+        "vscode:prepublish": "npm run compile",
+        "compile": "tsc -b",
+        "watch": "tsc -b -w",
+        "postinstall": "cd client && npm install && cd ../server && npm install"
+    },
+    "devDependencies": {
+        "@types/node": "^20.11.0",
+        "typescript": "^5.3.3"
+    }
 }
