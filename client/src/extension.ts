@@ -5,7 +5,6 @@ import {
     commands,
     window,
     extensions,
-    Uri,
 } from "vscode";
 
 import {
@@ -32,6 +31,21 @@ type TableInfo = {
     schema: string;
     name: string;
     columns: ColumnInfo[];
+    foreignKeys: ForeignKeyInfo[];
+};
+
+type ForeignKeyMapping = {
+    column: string;
+    referencedColumn: string;
+};
+
+type ForeignKeyInfo = {
+    name: string;
+    parentSchema: string;
+    parentTable: string;
+    referencedSchema: string;
+    referencedTable: string;
+    mappings: ForeignKeyMapping[];
 };
 
 // Our extension's identifier as published — used by the mssql connectionSharing
@@ -94,12 +108,19 @@ function extractRowsFromSimpleQueryResult(result: any): any[] {
     });
 }
 
+function getCellValue(cell: any): any {
+    if (cell && typeof cell === "object" && "displayValue" in cell) {
+        return cell.displayValue;
+    }
+    return cell;
+}
+
 function mapRowsToSchemaSnapshot(rows: any[]): TableInfo[] {
     const tableMap = new Map<string, TableInfo>();
 
     for (const row of rows) {
-        const schema = row.schema_name.displayValue;
-        const table = row.table_name.displayValue;
+        const schema = getCellValue(row.schema_name);
+        const table = getCellValue(row.table_name);
         if (!schema || !table) {
             continue;
         }
@@ -110,21 +131,80 @@ function mapRowsToSchemaSnapshot(rows: any[]): TableInfo[] {
                 schema,
                 name: table,
                 columns: [],
+                foreignKeys: [],
             });
         }
 
         tableMap.get(key)!.columns.push({
-            name: row.column_name,
-            dataType: row.data_type,
+            name: getCellValue(row.column_name),
+            dataType: getCellValue(row.data_type),
             maxLength:
-                typeof row.max_length === "number" ? row.max_length : null,
-            isNullable: row.is_nullable === true || row.is_nullable === 1,
+                typeof getCellValue(row.max_length) === "number"
+                    ? getCellValue(row.max_length)
+                    : null,
+            isNullable:
+                getCellValue(row.is_nullable) === true ||
+                getCellValue(row.is_nullable) === 1,
             isPrimaryKey:
-                row.is_primary_key === true || row.is_primary_key === 1,
+                getCellValue(row.is_primary_key) === true ||
+                getCellValue(row.is_primary_key) === 1,
         });
     }
 
     return Array.from(tableMap.values());
+}
+
+function mapRowsToForeignKeys(rows: any[]): ForeignKeyInfo[] {
+    const fkMap = new Map<string, ForeignKeyInfo>();
+
+    for (const row of rows) {
+        const parentSchema = getCellValue(row.parent_schema);
+        const parentTable = getCellValue(row.parent_table);
+        const fkName = getCellValue(row.fk_name);
+
+        if (!parentSchema || !parentTable || !fkName) {
+            continue;
+        }
+
+        const fkKey = `${parentSchema}.${parentTable}::${fkName}`;
+        if (!fkMap.has(fkKey)) {
+            fkMap.set(fkKey, {
+                name: fkName,
+                parentSchema,
+                parentTable,
+                referencedSchema: getCellValue(row.referenced_schema),
+                referencedTable: getCellValue(row.referenced_table),
+                mappings: [],
+            });
+        }
+
+        fkMap.get(fkKey)!.mappings.push({
+            column: getCellValue(row.parent_column),
+            referencedColumn: getCellValue(row.referenced_column),
+        });
+    }
+
+    return Array.from(fkMap.values());
+}
+
+function attachForeignKeysToTables(
+    tables: TableInfo[],
+    foreignKeys: ForeignKeyInfo[],
+): TableInfo[] {
+    const tableMap = new Map<string, TableInfo>();
+    for (const table of tables) {
+        tableMap.set(`${table.schema}.${table.name}`.toLowerCase(), table);
+    }
+
+    for (const fk of foreignKeys) {
+        const key = `${fk.parentSchema}.${fk.parentTable}`.toLowerCase();
+        const table = tableMap.get(key);
+        if (table) {
+            table.foreignKeys.push(fk);
+        }
+    }
+
+    return tables;
 }
 
 async function loadSchemaViaConnectionSharing(ownerUri: string): Promise<TableInfo[] | undefined> {
@@ -155,13 +235,44 @@ async function loadSchemaViaConnectionSharing(ownerUri: string): Promise<TableIn
       ORDER BY s.name, t.name, c.column_id
     `;
 
+        const foreignKeysQuery = `
+            SELECT
+                fk.name AS fk_name,
+                sch_parent.name AS parent_schema,
+                t_parent.name AS parent_table,
+                c_parent.name AS parent_column,
+                sch_ref.name AS referenced_schema,
+                t_ref.name AS referenced_table,
+                c_ref.name AS referenced_column,
+                fkc.constraint_column_id
+            FROM sys.foreign_keys fk
+            INNER JOIN sys.foreign_key_columns fkc ON fk.object_id = fkc.constraint_object_id
+            INNER JOIN sys.tables t_parent ON fkc.parent_object_id = t_parent.object_id
+            INNER JOIN sys.schemas sch_parent ON t_parent.schema_id = sch_parent.schema_id
+            INNER JOIN sys.columns c_parent ON fkc.parent_object_id = c_parent.object_id AND fkc.parent_column_id = c_parent.column_id
+            INNER JOIN sys.tables t_ref ON fkc.referenced_object_id = t_ref.object_id
+            INNER JOIN sys.schemas sch_ref ON t_ref.schema_id = sch_ref.schema_id
+            INNER JOIN sys.columns c_ref ON fkc.referenced_object_id = c_ref.object_id AND fkc.referenced_column_id = c_ref.column_id
+            ORDER BY sch_parent.name, t_parent.name, fk.name, fkc.constraint_column_id
+        `;
+
     try {
         const result = await api.connectionSharing.executeSimpleQuery?.(
             ownerUri,
             schemaQuery,
         );
+        const fkResult = await api.connectionSharing.executeSimpleQuery?.(
+            ownerUri,
+            foreignKeysQuery,
+        );
+
         const rows = extractRowsFromSimpleQueryResult(result);
-        return mapRowsToSchemaSnapshot(rows);
+        const fkRows = extractRowsFromSimpleQueryResult(fkResult);
+
+        const schemaTables = mapRowsToSchemaSnapshot(rows);
+        const foreignKeys = mapRowsToForeignKeys(fkRows);
+
+        return attachForeignKeysToTables(schemaTables, foreignKeys);
     } catch {
         return undefined;
     }

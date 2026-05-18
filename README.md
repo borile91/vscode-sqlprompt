@@ -294,9 +294,11 @@ code --install-extension vscode-sqlprompt-0.1.0.vsix
 
 ## Prossimi Sviluppi
 
+- [ ] Join propone tabelle correlate (FK) e ON clause precompilata
 - [ ] Completamento colonne dopo alias (es. `od.` → colonne di PRESTITI_DETTAGLIO)
 - [ ] Snippet per INSERT, UPDATE, DELETE
-- [ ] Supporto multi-database
 - [ ] Stored procedures e views nell'IntelliSense
 - [ ] Hover con info colonna
 - [ ] Go to Definition su tabelle
+- [ ] Formattazione con stili redgate
+- [ ] Supporto multi-database

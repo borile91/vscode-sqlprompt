@@ -12,6 +12,21 @@ export interface TableInfo {
   schema: string;
   name: string;
   columns: ColumnInfo[];
+    foreignKeys: ForeignKeyInfo[];
+}
+
+export interface ForeignKeyMapping {
+    column: string;
+    referencedColumn: string;
+}
+
+export interface ForeignKeyInfo {
+    name: string;
+    parentSchema: string;
+    parentTable: string;
+    referencedSchema: string;
+    referencedTable: string;
+    mappings: ForeignKeyMapping[];
 }
 
 export interface ConnectionConfig {
@@ -131,6 +146,7 @@ export class SchemaLoader {
                     schema: row.schema_name,
                     name: row.table_name,
                     columns: [],
+                    foreignKeys: [],
                 });
             }
 
@@ -141,6 +157,62 @@ export class SchemaLoader {
                 isNullable: row.is_nullable,
                 isPrimaryKey: row.is_primary_key === 1,
             });
+        }
+
+        const fkResult = await this.pool.request().query(`
+      SELECT
+        fk.name AS fk_name,
+        sch_parent.name AS parent_schema,
+        t_parent.name AS parent_table,
+        c_parent.name AS parent_column,
+        sch_ref.name AS referenced_schema,
+        t_ref.name AS referenced_table,
+        c_ref.name AS referenced_column,
+        fkc.constraint_column_id
+      FROM sys.foreign_keys fk
+      INNER JOIN sys.foreign_key_columns fkc ON fk.object_id = fkc.constraint_object_id
+      INNER JOIN sys.tables t_parent ON fkc.parent_object_id = t_parent.object_id
+      INNER JOIN sys.schemas sch_parent ON t_parent.schema_id = sch_parent.schema_id
+      INNER JOIN sys.columns c_parent ON fkc.parent_object_id = c_parent.object_id AND fkc.parent_column_id = c_parent.column_id
+      INNER JOIN sys.tables t_ref ON fkc.referenced_object_id = t_ref.object_id
+      INNER JOIN sys.schemas sch_ref ON t_ref.schema_id = sch_ref.schema_id
+      INNER JOIN sys.columns c_ref ON fkc.referenced_object_id = c_ref.object_id AND fkc.referenced_column_id = c_ref.column_id
+      ORDER BY sch_parent.name, t_parent.name, fk.name, fkc.constraint_column_id
+    `);
+
+        const fkMap = new Map<string, ForeignKeyInfo>();
+
+        for (const row of fkResult.recordset) {
+            const parentKey = `${row.parent_schema}.${row.parent_table}`;
+            const table = tableMap.get(parentKey);
+            if (!table) {
+                continue;
+            }
+
+            const fkKey = `${parentKey}.${row.fk_name}`;
+            if (!fkMap.has(fkKey)) {
+                fkMap.set(fkKey, {
+                    name: row.fk_name,
+                    parentSchema: row.parent_schema,
+                    parentTable: row.parent_table,
+                    referencedSchema: row.referenced_schema,
+                    referencedTable: row.referenced_table,
+                    mappings: [],
+                });
+            }
+
+            fkMap.get(fkKey)!.mappings.push({
+                column: row.parent_column,
+                referencedColumn: row.referenced_column,
+            });
+        }
+
+        for (const fk of fkMap.values()) {
+            const tableKey = `${fk.parentSchema}.${fk.parentTable}`;
+            const table = tableMap.get(tableKey);
+            if (table) {
+                table.foreignKeys.push(fk);
+            }
         }
 
         console.log(`Loaded schema: ${tableMap.size} tables`);
