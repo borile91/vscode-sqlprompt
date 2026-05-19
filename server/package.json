@@ -1,13 +1,17 @@
 {
-  "name": "sqlprompt-server",
-  "version": "0.1.0",
-  "private": true,
-  "dependencies": {
-    "mssql": "^11.0.1",
-    "vscode-languageserver": "^9.0.1",
-    "vscode-languageserver-textdocument": "^1.0.11"
-  },
-  "devDependencies": {
-    "@types/mssql": "^12.3.0"
-  }
+    "name": "sqlprompt-server",
+    "version": "0.1.0",
+    "private": true,
+    "scripts": {
+        "compile": "tsc -b",
+        "test": "tsc -b && node --test out/__tests__/sqlLexer.test.js out/__tests__/cursorContextResolver.test.js out/__tests__/scopeBuilder.test.js out/__tests__/documentTextService.test.js"
+    },
+    "dependencies": {
+        "mssql": "^11.0.1",
+        "vscode-languageserver": "^9.0.1",
+        "vscode-languageserver-textdocument": "^1.0.11"
+    },
+    "devDependencies": {
+        "@types/mssql": "^12.3.0"
+    }
 }

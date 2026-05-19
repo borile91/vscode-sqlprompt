@@ -5,6 +5,7 @@ import {
     commands,
     window,
     extensions,
+    Uri,
 } from "vscode";
 
 import {
@@ -108,19 +109,45 @@ function extractRowsFromSimpleQueryResult(result: any): any[] {
     });
 }
 
-function getCellValue(cell: any): any {
-    if (cell && typeof cell === "object" && "displayValue" in cell) {
-        return cell.displayValue;
+function normalizeCellValue(value: any): any {
+    if (value == null) {
+        return value;
     }
-    return cell;
+
+    // mssql simple query rows may wrap values as objects like:
+    // { displayValue: 'dbo', ... } or { value: 'dbo', ... }
+    if (typeof value === "object") {
+        if ("displayValue" in value) {
+            return (value as any).displayValue;
+        }
+        if ("value" in value) {
+            return (value as any).value;
+        }
+    }
+
+    return value;
+}
+
+function normalizeText(value: any): string | undefined {
+    const raw = normalizeCellValue(value);
+    if (raw == null) {
+        return undefined;
+    }
+    if (typeof raw === "string") {
+        return raw;
+    }
+    if (typeof raw === "number" || typeof raw === "boolean") {
+        return String(raw);
+    }
+    return undefined;
 }
 
 function mapRowsToSchemaSnapshot(rows: any[]): TableInfo[] {
     const tableMap = new Map<string, TableInfo>();
 
     for (const row of rows) {
-        const schema = getCellValue(row.schema_name);
-        const table = getCellValue(row.table_name);
+        const schema = normalizeText(row.schema_name);
+        const table = normalizeText(row.table_name);
         if (!schema || !table) {
             continue;
         }
@@ -135,19 +162,23 @@ function mapRowsToSchemaSnapshot(rows: any[]): TableInfo[] {
             });
         }
 
+        const columnName = normalizeText(row.column_name);
+        if (!columnName) {
+            continue;
+        }
+
+        const maxLengthRaw = normalizeCellValue(row.max_length);
+        const isNullableRaw = normalizeCellValue(row.is_nullable);
+        const isPrimaryKeyRaw = normalizeCellValue(row.is_primary_key);
+
         tableMap.get(key)!.columns.push({
-            name: getCellValue(row.column_name),
-            dataType: getCellValue(row.data_type),
+            name: columnName,
+            dataType: normalizeText(row.data_type) ?? "unknown",
             maxLength:
-                typeof getCellValue(row.max_length) === "number"
-                    ? getCellValue(row.max_length)
-                    : null,
-            isNullable:
-                getCellValue(row.is_nullable) === true ||
-                getCellValue(row.is_nullable) === 1,
+                typeof maxLengthRaw === "number" ? maxLengthRaw : null,
+            isNullable: isNullableRaw === true || isNullableRaw === 1,
             isPrimaryKey:
-                getCellValue(row.is_primary_key) === true ||
-                getCellValue(row.is_primary_key) === 1,
+                isPrimaryKeyRaw === true || isPrimaryKeyRaw === 1,
         });
     }
 
@@ -158,9 +189,9 @@ function mapRowsToForeignKeys(rows: any[]): ForeignKeyInfo[] {
     const fkMap = new Map<string, ForeignKeyInfo>();
 
     for (const row of rows) {
-        const parentSchema = getCellValue(row.parent_schema);
-        const parentTable = getCellValue(row.parent_table);
-        const fkName = getCellValue(row.fk_name);
+        const parentSchema = normalizeText(row.parent_schema);
+        const parentTable = normalizeText(row.parent_table);
+        const fkName = normalizeText(row.fk_name);
 
         if (!parentSchema || !parentTable || !fkName) {
             continue;
@@ -172,15 +203,21 @@ function mapRowsToForeignKeys(rows: any[]): ForeignKeyInfo[] {
                 name: fkName,
                 parentSchema,
                 parentTable,
-                referencedSchema: getCellValue(row.referenced_schema),
-                referencedTable: getCellValue(row.referenced_table),
+                referencedSchema: normalizeText(row.referenced_schema) ?? "",
+                referencedTable: normalizeText(row.referenced_table) ?? "",
                 mappings: [],
             });
         }
 
+        const parentColumn = normalizeText(row.parent_column);
+        const referencedColumn = normalizeText(row.referenced_column);
+        if (!parentColumn || !referencedColumn) {
+            continue;
+        }
+
         fkMap.get(fkKey)!.mappings.push({
-            column: getCellValue(row.parent_column),
-            referencedColumn: getCellValue(row.referenced_column),
+            column: parentColumn,
+            referencedColumn,
         });
     }
 
