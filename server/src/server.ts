@@ -52,46 +52,7 @@ connection.onInitialize((params: InitializeParams) => {
   return result;
 });
 
-const onInitializedHandler = async () => {
-// Auto-connect on startup using legacy settings (backwards compat)
-  await connectFromSettings();
-};
 
-connection.onInitialized(onInitializedHandler);
-
-async function connectFromSettings() {
-  try {
-    const config = await connection.workspace.getConfiguration("sqlPrompt");
-    const connConfig = config?.connection;
-    if (connConfig && connConfig.server && connConfig.database) {
-      connection.sendNotification("sqlPrompt/schemaLoadingStarted", {
-        server: connConfig.server,
-        database: connConfig.database,
-      });
-      schemaLoader = new SchemaLoader(connConfig);
-      await schemaLoader.connect();
-      [tables, routines] = await Promise.all([
-        schemaLoader.loadSchema(),
-        schemaLoader.loadRoutines().catch(() => emptyRoutineSnapshot()),
-      ]);
-      connection.console.info(
-        `SQL Prompt: connected to ${connConfig.server}/${connConfig.database}. Loaded ${tables.length} tables, ${routines.scalarFunctions.length} scalar function(s), ${routines.tableValuedFunctions.length} table-valued function(s), ${routines.storedProcedures.length} procedure(s).`,
-      );
-      connection.sendNotification("sqlPrompt/schemaLoadingCompleted", {
-        server: connConfig.server,
-        database: connConfig.database,
-        tableCount: tables.length,
-      });
-    }
-  } catch (err: any) {
-    connection.console.error(
-      `SQL Prompt: connection failed — ${err.message}`,
-    );
-    connection.sendNotification("sqlPrompt/schemaLoadingFailed", {
-      error: err.message,
-    });
-  }
-}
 
 // ── New request: connect via mssql connection string ──────────────────────────
 connection.onRequest(
@@ -172,11 +133,7 @@ connection.onRequest(
   },
 );
 
-// Custom request: connect (legacy – uses settings)
-connection.onRequest("sqlPrompt/connect", async () => {
-  await connectFromSettings();
-  return { success: true, tableCount: tables.length };
-});
+
 
 // Custom request: disconnect
 connection.onRequest("sqlPrompt/disconnect", async () => {

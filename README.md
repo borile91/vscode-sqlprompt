@@ -63,23 +63,6 @@ Example:
 
 If changes do not apply immediately, run `Developer: Reload Window` from the Command Palette.
 
-## Optional fallback connection setting
-
-If ms-mssql is not connected, SQL Prompt can use `sqlPrompt.connection` from your settings:
-
-```json
-{
-  "sqlPrompt.connection": {
-    "server": "localhost",
-    "database": "MyDatabase",
-    "user": "sa",
-    "password": "YourPassword",
-    "port": 1433,
-    "trustServerCertificate": true
-  }
-}
-```
-
 ## Packaging and local install (VSIX)
 
 ```bash

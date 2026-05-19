@@ -38,44 +38,6 @@
             "type": "object",
             "title": "SQL Prompt Configuration",
             "properties": {
-                "sqlPrompt.connection": {
-                    "type": "object",
-                    "default": {
-                        "server": "localhost",
-                        "database": "master",
-                        "user": "",
-                        "password": "",
-                        "port": 1433,
-                        "trustServerCertificate": true
-                    },
-                    "description": "SQL Server connection settings",
-                    "properties": {
-                        "server": {
-                            "type": "string",
-                            "description": "SQL Server hostname"
-                        },
-                        "database": {
-                            "type": "string",
-                            "description": "Database name"
-                        },
-                        "user": {
-                            "type": "string",
-                            "description": "Username"
-                        },
-                        "password": {
-                            "type": "string",
-                            "description": "Password"
-                        },
-                        "port": {
-                            "type": "number",
-                            "description": "Port number"
-                        },
-                        "trustServerCertificate": {
-                            "type": "boolean",
-                            "description": "Trust server certificate"
-                        }
-                    }
-                },
                 "sqlPrompt.trace.server": {
                     "scope": "window",
                     "type": "string",
