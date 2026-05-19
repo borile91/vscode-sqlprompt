@@ -584,59 +584,67 @@ async function syncMssqlConnection(showNotification = false): Promise<boolean> {
         return false;
     }
 
-    const schemaSnapshot = await loadSchemaViaConnectionSharing(ownerUri);
-    if (!schemaSnapshot) {
-        return false;
-    }
-
-    // Keep a local copy for Go to Definition (CREATE TABLE generation for tables)
-    lastOwnerUri = ownerUri;
-    lastTablesSnapshot = schemaSnapshot.tables;
-
-    try {
-        const objectCount = getSchemaObjectCount(schemaSnapshot);
-
-        const result = await client.sendRequest<{
-            success: boolean;
-            tableCount: number;
-        }>("sqlPrompt/updateSchemaSnapshot", {
-            tables: schemaSnapshot.tables,
-            scalarFunctions: schemaSnapshot.scalarFunctions,
-            tableValuedFunctions: schemaSnapshot.tableValuedFunctions,
-            storedProcedures: schemaSnapshot.storedProcedures,
-        });
-
-        if (!result?.success) {
-            return false;
-        }
-
-        await suppressMssqlIntellisense();
-
-        window.setStatusBarMessage(
-            `SQL Prompt: schema loaded — ${objectCount} object(s)`,
-            5000,
-        );
-
-        if (showNotification) {
-            let dbDetail = "";
-            try {
-                const db: string | undefined =
-                    await api.connectionSharing.getActiveDatabase?.(EXTENSION_ID);
-                if (db) {
-                    dbDetail = ` · ${db}`;
-                }
-            } catch {
-                /* permission not yet granted or no active connection */
+    // Show progress while loading schema
+    const result = await window.withProgress(
+        { location: 15, title: "SQL Prompt: Loading schema..." }, // 15 = ProgressLocation.Notification
+        async () => {
+            const schemaSnapshot = await loadSchemaViaConnectionSharing(ownerUri);
+            if (!schemaSnapshot) {
+                return null;
             }
-            window.showInformationMessage(
-                `SQL Prompt: connected${dbDetail} — ${objectCount} object(s) loaded`,
-            );
-        }
 
-        return true;
-    } catch {
-        return false;
-    }
+            // Keep a local copy for Go to Definition (CREATE TABLE generation for tables)
+            lastOwnerUri = ownerUri;
+            lastTablesSnapshot = schemaSnapshot.tables;
+
+            try {
+                const objectCount = getSchemaObjectCount(schemaSnapshot);
+
+                const updateResult = await client!.sendRequest<{
+                    success: boolean;
+                    tableCount: number;
+                }>("sqlPrompt/updateSchemaSnapshot", {
+                    tables: schemaSnapshot.tables,
+                    scalarFunctions: schemaSnapshot.scalarFunctions,
+                    tableValuedFunctions: schemaSnapshot.tableValuedFunctions,
+                    storedProcedures: schemaSnapshot.storedProcedures,
+                });
+
+                if (!updateResult?.success) {
+                    return null;
+                }
+
+                await suppressMssqlIntellisense();
+
+                window.setStatusBarMessage(
+                    `SQL Prompt: schema loaded — ${objectCount} object(s)`,
+                    5000,
+                );
+
+                if (showNotification) {
+                    let dbDetail = "";
+                    try {
+                        const db: string | undefined =
+                            await api.connectionSharing.getActiveDatabase?.(EXTENSION_ID);
+                        if (db) {
+                            dbDetail = ` · ${db}`;
+                        }
+                    } catch {
+                        /* permission not yet granted or no active connection */
+                    }
+                    window.showInformationMessage(
+                        `SQL Prompt: connected${dbDetail} — ${objectCount} object(s) loaded`,
+                    );
+                }
+
+                return true;
+            } catch {
+                return null;
+            }
+        }
+    );
+
+    return result === true;
 }
 
 /**
@@ -853,8 +861,8 @@ export async function activate(context: ExtensionContext) {
 
     // ── Schema Loading Notifications ──────────────────────────────────────────
     client.onNotification("sqlPrompt/schemaLoadingStarted", (params: any) => {
-        const message = params.message || `Loading schema from ${params.server}/${params.database}...`;
-        window.showInformationMessage(message);
+        const message = params.message || "Loading schema...";
+        window.setStatusBarMessage(message);
     });
 
     client.onNotification("sqlPrompt/schemaLoadingCompleted", (params: any) => {
@@ -863,7 +871,7 @@ export async function activate(context: ExtensionContext) {
         const tableValuedFunctionCount = params.tableValuedFunctionCount ?? 0;
         const storedProcedureCount = params.storedProcedureCount ?? 0;
         const message = `Schema loaded: ${tableCount} tables, ${scalarFunctionCount} scalar functions, ${tableValuedFunctionCount} table-valued functions, ${storedProcedureCount} stored procedures.`;
-        window.showInformationMessage(message);
+        window.setStatusBarMessage(message, 5000);
     });
 
     client.onNotification("sqlPrompt/schemaLoadingFailed", (params: any) => {
