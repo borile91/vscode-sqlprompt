@@ -1,304 +1,94 @@
 # SQL Prompt for VS Code
 
-SQL Server IntelliSense extension (LSP-based) — schema-aware autocomplete simile a Redgate SQL Prompt.
+SQL Prompt is a SQL Server IntelliSense extension for VS Code. It provides schema-aware table completion and automatically adds aliases, inspired by tools like Redgate SQL Prompt.
 
-## Prerequisiti
+## What this extension does
 
-- Node.js >= 18
-- VS Code >= 1.75
-- Estensione **ms-mssql.mssql** (SQL Server for VS Code) — viene installata automaticamente come dipendenza
+- Uses your active ms-mssql connection for the current SQL file
+- Suggests schema-qualified table names after `FROM` and `JOIN`
+- Inserts automatic aliases, for example `dbo.OrderDetails AS od`
+- Reloads schema context when you switch to another `.sql` file with a different active connection
 
-## Integrazione con ms-mssql
+## Requirements
 
-SQL Prompt usa la **connessione attiva nel file corrente** gestita dall'estensione ms-mssql, senza richiedere credenziali separate.
+- VS Code 1.75+
+- SQL Server for VS Code extension (`ms-mssql.mssql`)
+- A reachable SQL Server database
 
-### Workflow
+Note: `ms-mssql.mssql` is an extension dependency and is installed automatically when needed.
 
-1. Apri un file `.sql`
-2. Connettiti al database tramite il tasto nella status bar di ms-mssql (o `Ctrl+Shift+P` → **MS SQL: Connect**)
-3. SQL Prompt rileva automaticamente la connessione e carica lo schema
-4. L'IntelliSense con alias è subito disponibile
+## First-time setup
 
-Ogni volta che porti il focus su un file `.sql` diverso con una connessione ms-mssql diversa, lo schema si aggiorna automaticamente.
+1. Open a `.sql` file in VS Code.
+2. Connect to your database using ms-mssql:
+   - Status bar button, or
+   - Command Palette > `MS SQL: Connect`
+3. Wait a moment for SQL Prompt to detect the active connection and load schema metadata.
+4. Start typing a query and trigger completion after `FROM` or `JOIN`.
 
-### Comandi disponibili
-
-| Comando | Descrizione |
-|---------|-------------|
-| `SQL Prompt: Connect to Database` | Apre il dialog di connessione ms-mssql per il file corrente |
-| `SQL Prompt: Disconnect` | Disconnette il Language Server |
-| `SQL Prompt: Reload Schema` | Forza il ricaricamento dello schema |
-
----
-
-## ⚠️ Disabilitare l'IntelliSense di ms-mssql
-
-L'estensione ms-mssql fornisce il proprio IntelliSense per i file `.sql`. Se entrambe le estensioni sono attive, l'elenco di completamento mostra voci doppie: quelle di ms-mssql (senza alias) e quelle di SQL Prompt (con alias `AS od`).
-
-Per evitare i duplicati e garantire che vengano inseriti gli alias, **disabilita l'IntelliSense di ms-mssql**:
-
-### Opzione A — Workspace settings (consigliato)
-
-Aggiungi in `.vscode/settings.json` del progetto:
-
-```json
-{
-  "mssql.intelliSense.enableIntellisense": false
-}
-```
-
-### Opzione B — User settings (globale)
-
-Apri `Ctrl+,` → cerca `mssql intellisense` → disabilita **Mssql: Enable Intellisense**.
-
-Oppure aggiungi in `settings.json` utente:
-
-```json
-{
-  "mssql.intelliSense.enableIntellisense": false
-}
-```
-
-> Dopo aver modificato il setting, potrebbe essere necessario ricaricare la finestra (`Ctrl+Shift+P` → **Developer: Reload Window**).
-
----
-
-## Come funziona l'IntelliSense
-
-Quando scrivi in un file `.sql`:
+Example:
 
 ```sql
-SELECT * FROM |
+SELECT *
+FROM |
 ```
 
-Dopo `FROM` (o `JOIN`), l'estensione propone tutte le tabelle con schema prefix e alias automatico:
+Typical suggestions:
 
 - `dbo.PRESTITI_DETTAGLIO AS od`
 - `dbo.OrderDetails AS od`
 - `dbo.Orders AS o`
 
-**Logica alias:**
-- `PRESTITI_DETTAGLIO` → `od` (prima lettera di ogni parola separata da `_`)
-- `OrderDetails` → `od` (lettere maiuscole in PascalCase)
-- `Orders` → `o` (parola singola → prima lettera)
+## Commands
 
-L'alias viene inserito anche quando si digita la parte iniziale del nome (es. `FROM dbo.Ord` → selezionando la voce si ottiene `dbo.Orders AS o`).
+| Command | Description |
+|---|---|
+| `SQL Prompt: Connect to Database` | Opens the ms-mssql connection flow for the current file |
+| `SQL Prompt: Disconnect` | Disconnects the SQL Prompt language server |
+| `SQL Prompt: Reload Schema` | Forces a schema reload |
 
----
+## Recommended setting (avoid duplicate completion items)
 
-## Architettura
+Because ms-mssql also provides IntelliSense for `.sql` files, you may see duplicate suggestions if both engines are active.
 
-```
-vscode-sqlprompt/
-├── package.json              # Extension manifest
-├── tsconfig.json             # Root TS project references
-├── client/                   # Language Client (VS Code extension)
-│   ├── package.json
-│   ├── tsconfig.json
-│   └── src/
-│       └── extension.ts      # Entry point: avvia il Language Server
-├── server/                   # Language Server (processo separato)
-│   ├── package.json
-│   ├── tsconfig.json
-│   └── src/
-│       ├── server.ts         # LSP server: gestisce completion
-│       └── schemaLoader.ts   # Connessione SQL Server e caricamento schema
-└── .vscode/
-    ├── launch.json           # Debug configurations
-    └── tasks.json            # Build tasks
+To use SQL Prompt completion only, disable ms-mssql IntelliSense:
+
+```json
+{
+  "mssql.intelliSense.enableIntellisense": false
+}
 ```
 
-## Flusso
+You can set this in workspace settings (`.vscode/settings.json`) or user settings.
 
-```
-┌─────────────────────┐                          ┌──────────────────────┐
-│   VS Code (Client)  │ ◄── LSP / IPC ─────────► │   Language Server    │
-│                     │                          │                      │
-│  extension.ts       │  sqlPrompt/updateConnection  server.ts          │
-│  - legge connessione│ ──────────────────────►  │  - riconnette        │
-│    da ms-mssql API  │                          │  - ricarica schema   │
-│  - watch editor     │  onCompletion request    │                      │
-│    focus            │ ──────────────────────►  │  schemaLoader.ts     │
-│                     │  CompletionItem[]        │  - sql.connect(str)  │
-│                     │ ◄──────────────────────  │  - query sys.tables  │
-└─────────────────────┘                          └──────────────────────┘
-         │
-         │  ms-mssql API
-         ▼
-┌─────────────────────┐
-│  ms-mssql extension │
-│  (connessione file) │
-└─────────────────────┘
-```
+If changes do not apply immediately, run `Developer: Reload Window` from the Command Palette.
 
-## Setup sviluppo
+## Optional fallback connection setting
 
-```bash
-cd ~/Development/vscode-sqlprompt
-npm install   # installa root + client + server
-npx tsc -b    # compila
-```
-
-Premi **F5** in VS Code per avviare l'Extension Development Host.
-
-## Fallback: connessione manuale via settings
-
-Se ms-mssql non è connesso, il Language Server tenta di usare `sqlPrompt.connection` da `settings.json` (comportamento precedente):
+If ms-mssql is not connected, SQL Prompt can use `sqlPrompt.connection` from your settings:
 
 ```json
 {
   "sqlPrompt.connection": {
     "server": "localhost",
-    "database": "MioDatabase",
+    "database": "MyDatabase",
     "user": "sa",
-    "password": "LatuaPassword123",
+    "password": "YourPassword",
     "port": 1433,
     "trustServerCertificate": true
   }
 }
 ```
 
-## Prossimi sviluppi
-
-- [ ] Completamento colonne dopo alias (es. `od.` → colonne di PRESTITI_DETTAGLIO)
-- [ ] Snippet per INSERT, UPDATE, DELETE
-- [ ] Supporto multi-database
-- [ ] Stored procedures e views nell'IntelliSense
-- [ ] Hover con info colonna
-- [ ] Go to Definition su tabelle
-
-```
-vscode-sqlprompt/
-├── package.json              # Extension manifest
-├── tsconfig.json             # Root TS project references
-├── client/                   # Language Client (VS Code extension)
-│   ├── package.json
-│   ├── tsconfig.json
-│   └── src/
-│       └── extension.ts      # Entry point: avvia il Language Server
-├── server/                   # Language Server (processo separato)
-│   ├── package.json
-│   ├── tsconfig.json
-│   └── src/
-│       ├── server.ts         # LSP server: gestisce completion
-│       └── schemaLoader.ts   # Connessione SQL Server e caricamento schema
-└── .vscode/
-    ├── launch.json           # Debug configurations
-    └── tasks.json            # Build tasks
-```
-
-## Flusso LSP
-
-```
-┌─────────────────────┐         LSP/IPC          ┌──────────────────────┐
-│   VS Code (Client)  │ ◄──────────────────────► │   Language Server    │
-│                     │                          │                      │
-│  extension.ts       │   onCompletion request   │  server.ts           │
-│  - avvia server     │ ──────────────────────►  │  - analizza contesto │
-│  - comandi utente   │                          │  - propone tabelle   │
-│                     │   CompletionItem[]       │                      │
-│                     │ ◄──────────────────────  │  schemaLoader.ts     │
-│                     │                          │  - connessione MSSQL │
-└─────────────────────┘                          │  - query sys.tables  │
-                                                 └──────────────────────┘
-```
-
-## Installazione e Primo Avvio
-
-### Prerequisiti
-
-- Node.js >= 18
-- VS Code >= 1.75
-- Un'istanza SQL Server raggiungibile
-
-### Setup
+## Packaging and local install (VSIX)
 
 ```bash
-cd ~/Development/vscode-sqlprompt
-
-# Installa dipendenze (root + client + server)
-npm install
-
-# Compila
-npx tsc -b
-```
-
-### Esecuzione in Development Mode
-
-1. Apri la cartella `vscode-sqlprompt` in VS Code
-2. Premi **F5** (o Run > Start Debugging)
-3. Si apre una nuova finestra VS Code (Extension Development Host)
-4. In quella finestra, apri un file `.sql`
-
-### Configurazione Connessione
-
-Aggiungi in `settings.json` (User o Workspace):
-
-```json
-{
-  "sqlPrompt.connection": {
-    "server": "localhost",
-    "database": "MioDatabase",
-    "user": "sa",
-    "password": "LatuaPassword123",
-    "port": 1433,
-    "trustServerCertificate": true
-  }
-}
-```
-
-Oppure usa il comando **SQL Prompt: Connect to Database** (Ctrl+Shift+P) che ti guida interattivamente.
-
-### Comandi Disponibili
-
-| Comando | Descrizione |
-|---------|-------------|
-| `SQL Prompt: Connect to Database` | Connetti al database |
-| `SQL Prompt: Disconnect` | Disconnetti |
-| `SQL Prompt: Reload Schema` | Ricarica lo schema |
-
-## Come Funziona l'IntelliSense
-
-Quando scrivi in un file `.sql`:
-
-```sql
-SELECT * FROM |
-```
-
-Dopo `FROM` (o `JOIN`), l'estensione propone tutte le tabelle con:
-- Schema prefix: `dbo.PRESTITI_DETTAGLIO`
-- Alias automatico: `AS od`
-
-**Logica alias:**
-- `PRESTITI_DETTAGLIO` → `od` (prima lettera di ogni parola separata da `_`)
-- `OrderDetails` → `od` (lettere maiuscole in PascalCase)
-- `Orders` → `o` (parola singola → prima lettera)
-
-Il completion inserisce: `dbo.PRESTITI_DETTAGLIO AS od`
-
-## Installazione come VSIX (pacchetto)
-
-Per installare l'estensione permanentemente:
-
-```bash
-# Installa vsce (tool di packaging)
 npm install -g @vscode/vsce
-
-# Crea il pacchetto
-cd ~/Development/vscode-sqlprompt
 vsce package
-
-# Installa il .vsix generato
 code --install-extension vscode-sqlprompt-0.1.0.vsix
 ```
 
-## Prossimi Sviluppi
+## Additional documentation
 
-- [ ] Join propone tabelle correlate (FK) e ON clause precompilata
-- [ ] Completamento colonne dopo alias (es. `od.` → colonne di PRESTITI_DETTAGLIO)
-- [ ] Snippet per INSERT, UPDATE, DELETE
-- [ ] Stored procedures e views nell'IntelliSense
-- [ ] Hover con info colonna
-- [ ] Go to Definition su tabelle
-- [ ] Formattazione con stili redgate
-- [ ] Supporto multi-database
+- Development documentation: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)
+- Planned next work: [docs/ROADMAP.md](docs/ROADMAP.md)
