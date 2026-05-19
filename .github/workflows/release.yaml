@@ -1,23 +1,20 @@
 name: Release Extension
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - client/**
+      - server/**
   workflow_dispatch:
-    inputs:
-      release_type:
-        description: Version bump for this release
-        required: true
-        default: patch
-        type: choice
-        options:
-          - patch
-          - minor
-          - major
 
 permissions:
   contents: write
 
 jobs:
   release:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
 
     steps:
@@ -37,10 +34,8 @@ jobs:
 
       - name: Bump extension version
         id: version
-        env:
-          RELEASE_TYPE: ${{ inputs.release_type }}
         run: |
-          npm version "${RELEASE_TYPE}" --no-git-tag-version
+          npm version patch --no-git-tag-version
           VERSION="$(node -p "require('./package.json').version")"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
