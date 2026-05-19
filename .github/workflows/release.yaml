@@ -58,6 +58,11 @@ jobs:
       - name: Package VSIX
         run: printf 'y\n' | npx @vscode/vsce package --out vscode-sqlprompt.vsix
 
+      - name: Publish to Visual Studio Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx @vscode/vsce publish --packagePath vscode-sqlprompt.vsix -p "$VSCE_PAT"
+
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@v4
         with:
