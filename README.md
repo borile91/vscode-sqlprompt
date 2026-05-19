@@ -92,3 +92,5 @@ code --install-extension vscode-sqlprompt-0.1.0.vsix
 
 - Development documentation: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)
 - Planned next work: [docs/ROADMAP.md](docs/ROADMAP.md)
+- Commit guidelines: [docs/COMMIT_GUIDELINES.md](docs/COMMIT_GUIDELINES.md)
+- Copilot instructions: [.github/copilot-instructions.md](.github/copilot-instructions.md)

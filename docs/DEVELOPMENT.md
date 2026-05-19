@@ -60,6 +60,12 @@ npm run compile
 - Watch mode: `npm run watch`
 - Unit tests are under `server/src/__tests__/`
 
+## Contribution language and commits
+
+- Keep repository artifacts in English.
+- Follow commit message rules in [COMMIT_GUIDELINES.md](COMMIT_GUIDELINES.md).
+- Copilot behavior and language policy are defined in [../.github/copilot-instructions.md](../.github/copilot-instructions.md).
+
 ## LSP flow (high level)
 
 1. Client starts the language server.
