@@ -437,7 +437,7 @@ export async function activate(context: ExtensionContext) {
     setupMssqlApiLifetime(context);
 
     const serverModule = context.asAbsolutePath(
-        path.join("server", "out", "server.js"),
+        path.join("server", "dist", "server.js"),
     );
 
     const debugOptions = { execArgv: ["--nolazy", "--inspect-brk=6009"] };

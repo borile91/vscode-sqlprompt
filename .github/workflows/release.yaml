@@ -34,19 +34,26 @@ jobs:
 
       - name: Bump extension version
         id: version
+        env:
+          RUN_NUMBER: ${{ github.run_number }}
         run: |
-          npm version patch --no-git-tag-version
+          CURRENT_VERSION="$(node -p "require('./package.json').version")"
+          if [ -n "$RUN_NUMBER" ]; then
+            TARGET_VERSION="0.1.${RUN_NUMBER}"
+          else
+            TARGET_VERSION="$CURRENT_VERSION"
+          fi
+
+          if [ "$CURRENT_VERSION" != "$TARGET_VERSION" ]; then
+            npm version "$TARGET_VERSION" --no-git-tag-version
+          fi
+
           VERSION="$(node -p "require('./package.json').version")"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Build extension
         run: npm run compile
-
-      - name: Prune dev dependencies
-        run: |
-          npm --prefix client prune --omit=dev
-          npm --prefix server prune --omit=dev
 
       - name: Package VSIX
         run: printf 'y\n' | npx @vscode/vsce package --out vscode-sqlprompt.vsix

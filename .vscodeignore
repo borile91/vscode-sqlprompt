@@ -1,9 +1,11 @@
 .github/**
 .vscode/**
 docs/**
+**/node_modules/**
 client/src/**
+client/out/**
 server/src/**
-server/out/__tests__/**
+server/out/**
 **/package-lock.json
 **/.package-lock.json
 client/tsconfig.json
@@ -12,3 +14,4 @@ server/tsconfig.json
 **/*.tsbuildinfo
 tsconfig.json
 .gitignore
+webpack.config.js

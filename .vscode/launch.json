@@ -2,17 +2,15 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Launch Extension",
-      "type": "extensionHost",
-      "request": "launch",
-      "args": [
-        "--extensionDevelopmentPath=${workspaceFolder}"
-      ],
-      "outFiles": [
-        "${workspaceFolder}/client/out/**/*.js",
-        "${workspaceFolder}/server/out/**/*.js"
-      ],
-      "preLaunchTask": "npm: compile"
+        "name": "Launch Extension",
+        "type": "extensionHost",
+        "request": "launch",
+        "args": ["--extensionDevelopmentPath=${workspaceFolder}"],
+        "outFiles": [
+            "${workspaceFolder}/client/dist/**/*.js",
+            "${workspaceFolder}/server/dist/**/*.js"
+        ],
+        "preLaunchTask": "webpack:dev"
     },
     {
         "name": "Attach to Server",
@@ -29,7 +27,7 @@
             "${workspaceFolder}/**",
             "!**/node_modules/**"
         ],
-        "outFiles": ["${workspaceFolder}/server/out/**/*.js"]
+        "outFiles": ["${workspaceFolder}/server/dist/**/*.js"]
     }
   ],
   "compounds": [

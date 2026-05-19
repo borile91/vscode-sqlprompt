@@ -20,7 +20,7 @@
     "activationEvents": [
         "onLanguage:sql"
     ],
-    "main": "./client/out/extension",
+    "main": "./client/dist/extension",
     "contributes": {
         "languages": [
             {
@@ -105,13 +105,18 @@
         ]
     },
     "scripts": {
-        "vscode:prepublish": "npm run compile",
+        "vscode:prepublish": "npm run webpack",
+        "webpack": "webpack --mode production",
+        "webpack:dev": "webpack --mode development",
         "compile": "tsc -b",
         "watch": "tsc -b -w",
         "postinstall": "cd client && npm install && cd ../server && npm install"
     },
     "devDependencies": {
         "@types/node": "^20.11.0",
-        "typescript": "^5.3.3"
+        "ts-loader": "^9.5.7",
+        "typescript": "^5.3.3",
+        "webpack": "^5.106.2",
+        "webpack-cli": "^7.0.2"
     }
 }
