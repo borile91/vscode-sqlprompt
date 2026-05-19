@@ -50,7 +50,7 @@ function buildSnippetCompletions(clause: string, position: Position): Completion
       insertText: 'OUTER APPLY ',
       insertTextFormat: InsertTextFormat.PlainText,
       detail: 'OUTER APPLY',
-      sortText: '70_outer',
+      sortText: '01_outer',
       textEdit: TextEdit.replace(
         Range.create(position.line, position.character, position.line, position.character),
         'OUTER APPLY ',
@@ -63,7 +63,7 @@ function buildSnippetCompletions(clause: string, position: Position): Completion
       insertText: 'CROSS APPLY ',
       insertTextFormat: InsertTextFormat.PlainText,
       detail: 'CROSS APPLY',
-      sortText: '70_cross',
+      sortText: '01_cross',
       textEdit: TextEdit.replace(
         Range.create(position.line, position.character, position.line, position.character),
         'CROSS APPLY ',
@@ -149,7 +149,7 @@ export function buildCompletions(
               filterText: table.name,
               textEdit: TextEdit.replace(replaceRange, `${table.name} AS ${alias}`),
               insertTextFormat: InsertTextFormat.PlainText,
-              sortText: `0${table.name}`,
+              sortText: `01_table_${table.name}`,
               data: { type: 'table', index: tables.indexOf(table) },
             });
           });
@@ -168,7 +168,7 @@ export function buildCompletions(
                 `${buildFunctionCallText(fn.name, fn.parameters)} AS ${alias}`,
               ),
               insertTextFormat: InsertTextFormat.Snippet,
-              sortText: `2${fn.name}`,
+              sortText: `02_tvf_${fn.name}`,
             });
           });
       } else {
@@ -183,7 +183,7 @@ export function buildCompletions(
             filterText: fullName,
             textEdit: TextEdit.replace(replaceRange, `${fullName} AS ${alias}`),
             insertTextFormat: InsertTextFormat.PlainText,
-            sortText: `0${table.name}`,
+            sortText: `01_table_${table.name}`,
             data: { type: 'table', index: idx },
           });
         });
@@ -201,7 +201,7 @@ export function buildCompletions(
               `${buildFunctionCallText(fullName, fn.parameters)} AS ${alias}`,
             ),
             insertTextFormat: InsertTextFormat.Snippet,
-            sortText: `2${fn.name}`,
+            sortText: `02_tvf_${fn.name}`,
           });
         });
 
@@ -215,7 +215,7 @@ export function buildCompletions(
             filterText: cteName,
             textEdit: TextEdit.replace(replaceRange, `${cteName} AS ${alias}`),
             insertTextFormat: InsertTextFormat.PlainText,
-            sortText: `1_cte_${cteIdx}`,
+            sortText: `01_cte_${cteIdx.toString().padStart(3, '0')}`,
           });
         });
       }
@@ -271,7 +271,7 @@ export function buildCompletions(
         insertText: 'SELECT * FROM ',
         insertTextFormat: InsertTextFormat.PlainText,
         detail: 'SELECT * FROM',
-        sortText: '70_ssf',
+        sortText: '01_snippet_ssf',
         textEdit: TextEdit.replace(
           Range.create(position.line, position.character, position.line, position.character),
           'SELECT * FROM ',
@@ -293,7 +293,7 @@ export function buildCompletions(
               filterText: fullName,
               insertText: fullName,
               insertTextFormat: InsertTextFormat.PlainText,
-              sortText: `9${table.name}`,
+              sortText: `01_table_${table.name}`,
               data: { type: 'table', index: idx },
             });
           });
@@ -349,7 +349,7 @@ function buildDotCompletions(
       insertText: col,
       insertTextFormat: InsertTextFormat.PlainText,
       textEdit: TextEdit.replace(replaceRange, col),
-      sortText: `10_${qualifier}_${col}`,
+      sortText: `02_col_${qualifier}_${col}`,
     }));
 
     // Also offer "Expand alias.*" when there are many columns.
@@ -372,7 +372,7 @@ function buildDotCompletions(
           insertText: expansion,
           insertTextFormat: InsertTextFormat.PlainText,
           textEdit: TextEdit.replace(Range.create(qualDotStart, position), expansion),
-          sortText: `09_expand_${qualifier}`,
+          sortText: `00_expand_${qualifier}`,
         });
       }
     }
@@ -393,7 +393,7 @@ function buildDotCompletions(
         insertText: col,
         insertTextFormat: InsertTextFormat.PlainText,
         textEdit: TextEdit.replace(replaceRange, col),
-        sortText: `10_${qualifier}_${col}`,
+        sortText: `02_col_${qualifier}_${col}`,
       }));
     }
     return [];
@@ -425,7 +425,7 @@ function buildDotCompletions(
         filterText: table.name,
         textEdit: TextEdit.replace(replaceRange, `${table.name} AS ${alias}`),
         insertTextFormat: InsertTextFormat.PlainText,
-        sortText: `0${table.name}`,
+        sortText: `01_table_${table.name}`,
         data: { type: 'table', index: tables.indexOf(table) },
       };
     });
@@ -442,7 +442,7 @@ function buildDotCompletions(
           `${buildFunctionCallText(fn.name, fn.parameters)} AS ${alias}`,
         ),
         insertTextFormat: InsertTextFormat.Snippet,
-        sortText: `2${fn.name}`,
+        sortText: `02_tvf_${fn.name}`,
       };
     });
 
@@ -456,7 +456,7 @@ function buildDotCompletions(
         buildProcedureCallText(proc.name, proc.parameters),
       ),
       insertTextFormat: InsertTextFormat.Snippet,
-      sortText: `2${proc.name}`,
+      sortText: `02_proc_${proc.name}`,
     }));
 
     return [...tableItems, ...tvfItems, ...procedureItems];
@@ -472,7 +472,7 @@ function buildDotCompletions(
       insertText: col.name,
       insertTextFormat: InsertTextFormat.PlainText,
       textEdit: TextEdit.replace(replaceRange, col.name),
-      sortText: `10_${col.name}`,
+      sortText: `02_col_${col.name}`,
     }));
   }
 
@@ -647,7 +647,7 @@ function buildColumnCompletionsForRefs(
         documentation: { kind: 'markdown', value: `Inserts: \`${insertValue}\`` },
         insertText: insertValue,
         insertTextFormat: InsertTextFormat.PlainText,
-        sortText: `10_${qualifier}_${colName}`,
+        sortText: `02_col_${qualifier}_${colName}`,
       }];
     }),
   );
@@ -677,7 +677,7 @@ function buildColumnCompletionsForSources(sources: VisibleSource[]): CompletionI
           documentation: { kind: 'markdown', value: `Inserts: \`${insertValue}\`` },
           insertText: insertValue,
           insertTextFormat: InsertTextFormat.PlainText,
-          sortText: `10_${alias}_${colName}`,
+          sortText: `02_col_${alias}_${colName}`,
         }];
       }),
     );
@@ -811,7 +811,7 @@ function buildScalarFunctionCompletions(functions: ScalarFunctionInfo[]): Comple
       filterText: `${fn.name} ${fullName}`,
       insertText: buildFunctionCallText(fullName, fn.parameters),
       insertTextFormat: InsertTextFormat.Snippet,
-      sortText: `20_${fn.schema}_${fn.name}`,
+      sortText: `03_scalar_${fn.schema}_${fn.name}`,
     };
   });
 }
@@ -829,7 +829,7 @@ function buildStoredProcedureCompletions(procedures: StoredProcedureInfo[]): Com
       filterText: `${proc.name} ${fullName}`,
       insertText: buildProcedureCallText(fullName, proc.parameters),
       insertTextFormat: InsertTextFormat.Snippet,
-      sortText: `20_${proc.schema}_${proc.name}`,
+      sortText: `03_proc_${proc.schema}_${proc.name}`,
     };
   });
 }
@@ -979,7 +979,7 @@ function buildWherePredicateCompletions(refs: ResolvedRef[], position: Position)
       Range.create(position.line, position.character, position.line, position.character),
       `${s.insertText} `,
     ),
-    sortText: `05_${s.sortKey}`,
+    sortText: `03_${s.sortKey}`,
   }));
 }
 
@@ -1003,7 +1003,7 @@ function buildSqlKeywordCompletions(position: Position): CompletionItem[] {
       Range.create(position.line, position.character, position.line, position.character),
       `${kw} `,
     ),
-    sortText: `80_${idx.toString().padStart(2, '0')}`,
+    sortText: `04_${idx.toString().padStart(2, '0')}`,
   }));
 }
 

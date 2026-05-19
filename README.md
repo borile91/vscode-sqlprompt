@@ -47,19 +47,19 @@ Typical suggestions:
 | `SQL Prompt: Disconnect` | Disconnects the SQL Prompt language server |
 | `SQL Prompt: Reload Schema` | Forces a schema reload |
 
-## Recommended setting (avoid duplicate completion items)
+## IntelliSense behavior and automatic suppression
 
-Because ms-mssql also provides IntelliSense for `.sql` files, you may see duplicate suggestions if both engines are active.
+SQL Prompt can automatically suppress the ms-mssql extension's IntelliSense so that SQL Prompt completions appear first while you are connected. This suppression only affects completion suggestions — other ms-mssql features (Script As, Alter/Modify Procedure, Execute Query, connection sharing, etc.) remain available.
 
-To use SQL Prompt completion only, disable ms-mssql IntelliSense:
+Control this behaviour with the `sqlPrompt.suppressMssqlIntellisense` setting (default: `true`). When enabled, SQL Prompt will set a workspace-level override to disable ms-mssql's suggestion provider while SQL Prompt is connected. Set it to `false` to let both providers coexist (you may see duplicate suggestions).
+
+Example:
 
 ```json
 {
-  "mssql.intelliSense.enableIntellisense": false
+  "sqlPrompt.suppressMssqlIntellisense": true
 }
 ```
-
-You can set this in workspace settings (`.vscode/settings.json`) or user settings.
 
 If changes do not apply immediately, run `Developer: Reload Window` from the Command Palette.
 

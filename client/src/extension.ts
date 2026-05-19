@@ -6,6 +6,13 @@ import {
     window,
     extensions,
     Uri,
+    workspace,
+    ConfigurationTarget,
+    languages,
+    Location,
+    Range,
+    EventEmitter,
+    TextDocumentContentProvider,
 } from "vscode";
 
 import {
@@ -19,6 +26,13 @@ import {
 let client: LanguageClient | undefined;
 let connectionSyncDebounce: ReturnType<typeof setTimeout> | undefined;
 let mssqlApiPromise: Promise<any | undefined> | undefined;
+let mssqlIntellisenseSuppressed = false;
+
+// ── Go to Definition state ────────────────────────────────────────────────────
+let lastOwnerUri: string | undefined;
+let lastTablesSnapshot: TableInfo[] = [];
+const definitionScriptCache = new Map<string, string>();
+const onDefinitionContentChange = new EventEmitter<Uri>();
 
 type ColumnInfo = {
     name: string;
@@ -380,26 +394,36 @@ async function loadSchemaViaConnectionSharing(ownerUri: string): Promise<SchemaS
     }
 
     const schemaQuery = `
-      SELECT
-        s.name AS schema_name,
-        t.name AS table_name,
-        c.name AS column_name,
-        ty.name AS data_type,
-        c.max_length,
-        c.is_nullable,
-        CASE WHEN pk.column_id IS NOT NULL THEN 1 ELSE 0 END AS is_primary_key
-      FROM sys.tables t
-      INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
-      INNER JOIN sys.columns c ON t.object_id = c.object_id
-      INNER JOIN sys.types ty ON c.user_type_id = ty.user_type_id
-      LEFT JOIN (
-        SELECT ic.object_id, ic.column_id
-        FROM sys.index_columns ic
-        INNER JOIN sys.indexes i ON ic.object_id = i.object_id AND ic.index_id = i.index_id
-        WHERE i.is_primary_key = 1
-      ) pk ON c.object_id = pk.object_id AND c.column_id = pk.column_id
-      ORDER BY s.name, t.name, c.column_id
-    `;
+            WITH schema_objects AS (
+                SELECT
+                    o.object_id,
+                    o.schema_id,
+                    o.name,
+                    o.type
+                FROM sys.objects o
+                WHERE o.type IN ('U', 'V')
+                    AND o.is_ms_shipped = 0
+            )
+            SELECT
+                s.name AS schema_name,
+                so.name AS table_name,
+                c.name AS column_name,
+                ty.name AS data_type,
+                c.max_length,
+                c.is_nullable,
+                CASE WHEN so.type = 'U' AND pk.column_id IS NOT NULL THEN 1 ELSE 0 END AS is_primary_key
+            FROM schema_objects so
+            INNER JOIN sys.schemas s ON so.schema_id = s.schema_id
+            INNER JOIN sys.columns c ON so.object_id = c.object_id
+            INNER JOIN sys.types ty ON c.user_type_id = ty.user_type_id
+            LEFT JOIN (
+                SELECT ic.object_id, ic.column_id
+                FROM sys.index_columns ic
+                INNER JOIN sys.indexes i ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+                WHERE i.is_primary_key = 1
+            ) pk ON so.object_id = pk.object_id AND c.column_id = pk.column_id
+            ORDER BY s.name, so.name, c.column_id
+        `;
 
         const foreignKeysQuery = `
             SELECT
@@ -493,6 +517,44 @@ async function loadSchemaViaConnectionSharing(ownerUri: string): Promise<SchemaS
  * When showNotification is true (connection just changed), also pops an
  * information message including the active database name.
  */
+async function suppressMssqlIntellisense(): Promise<void> {
+    if (mssqlIntellisenseSuppressed) {
+        return;
+    }
+    const sqlPromptConfig = workspace.getConfiguration("sqlPrompt");
+    const shouldSuppress = sqlPromptConfig.get<boolean>("suppressMssqlIntellisense", true);
+    if (!shouldSuppress) {
+        return;
+    }
+    try {
+        await workspace.getConfiguration("mssql").update(
+            "intelliSense.enableSuggestions",
+            false,
+            ConfigurationTarget.Workspace,
+        );
+        mssqlIntellisenseSuppressed = true;
+    } catch {
+        // Setting may not exist in older versions of the mssql extension — ignore
+    }
+}
+
+async function restoreMssqlIntellisense(): Promise<void> {
+    if (!mssqlIntellisenseSuppressed) {
+        return;
+    }
+    try {
+        // Removing the workspace-level override restores the user/default value
+        await workspace.getConfiguration("mssql").update(
+            "intelliSense.enable",
+            undefined,
+            ConfigurationTarget.Workspace,
+        );
+        mssqlIntellisenseSuppressed = false;
+    } catch {
+        // Ignore
+    }
+}
+
 async function syncMssqlConnection(showNotification = false): Promise<boolean> {
     if (!client) {
         console.log("SQL Prompt: syncMssqlConnection — client not ready");
@@ -527,6 +589,10 @@ async function syncMssqlConnection(showNotification = false): Promise<boolean> {
         return false;
     }
 
+    // Keep a local copy for Go to Definition (CREATE TABLE generation for tables)
+    lastOwnerUri = ownerUri;
+    lastTablesSnapshot = schemaSnapshot.tables;
+
     try {
         const objectCount = getSchemaObjectCount(schemaSnapshot);
 
@@ -543,6 +609,8 @@ async function syncMssqlConnection(showNotification = false): Promise<boolean> {
         if (!result?.success) {
             return false;
         }
+
+        await suppressMssqlIntellisense();
 
         window.setStatusBarMessage(
             `SQL Prompt: schema loaded — ${objectCount} object(s)`,
@@ -608,6 +676,70 @@ function setupMssqlApiLifetime(context: ExtensionContext): void {
             mssqlApiPromise = undefined;
         },
     });
+}
+
+// ── Go to Definition helpers ──────────────────────────────────────────────────
+
+function formatColumnDataType(dataType: string, maxLength: number | null): string {
+    const dt = dataType.toLowerCase();
+    const varLenTypes = ['varchar', 'nvarchar', 'char', 'nchar', 'varbinary', 'binary'];
+    if (varLenTypes.includes(dt) && maxLength !== null) {
+        if (maxLength === -1) {
+            return `${dataType}(MAX)`;
+        }
+        // nvarchar/nchar store max_length in bytes (2 bytes per Unicode char)
+        const charLen = (dt === 'nvarchar' || dt === 'nchar') ? maxLength / 2 : maxLength;
+        return `${dataType}(${charLen})`;
+    }
+    return dataType;
+}
+
+function generateCreateTableScript(table: TableInfo): string {
+    const colDefs = table.columns.map(c => {
+        const typeDef = formatColumnDataType(c.dataType, c.maxLength);
+        const nullability = c.isNullable ? 'NULL' : 'NOT NULL';
+        return `    [${c.name}] ${typeDef} ${nullability}`;
+    });
+
+    const pkCols = table.columns.filter(c => c.isPrimaryKey);
+    if (pkCols.length > 0) {
+        colDefs.push(
+            `    CONSTRAINT [PK_${table.name}] PRIMARY KEY (${pkCols.map(c => `[${c.name}]`).join(', ')})`,
+        );
+    }
+
+    return `CREATE TABLE [${table.schema}].[${table.name}] (\n${colDefs.join(',\n')}\n);`;
+}
+
+/**
+ * Resolves the qualified SQL identifier (e.g. `dbo.MyTable`, `[MyTable]`)
+ * at the given cursor column in a line of text.
+ * Returns `{ name, schema? }` or null if no identifier is found.
+ */
+function resolveIdentifierAtColumn(
+    line: string,
+    col: number,
+): { name: string; schema?: string } | null {
+    // Regex matches: optional [schema]. or schema. prefix, then [name] or name
+    const pattern = /(?:(\[[\w\s]+\]|\w+)\.)?(\[[\w\s]+\]|\w+)/g;
+    let match: RegExpExecArray | null;
+
+    while ((match = pattern.exec(line)) !== null) {
+        const start = match.index;
+        const end = start + match[0].length;
+        if (col >= start && col <= end) {
+            const rawSchema = match[1];
+            const rawName = match[2];
+            const name = rawName.replace(/^\[|\]$/g, '');
+            const schema = rawSchema ? rawSchema.replace(/^\[|\]$/g, '') : undefined;
+            // Skip pure schema-only token (when cursor is on the schema part)
+            if (rawSchema && col < start + rawSchema.length) {
+                return null;
+            }
+            return { name, schema };
+        }
+    }
+    return null;
 }
 
 export async function activate(context: ExtensionContext) {
@@ -684,6 +816,7 @@ export async function activate(context: ExtensionContext) {
         commands.registerCommand("sqlPrompt.disconnect", async () => {
             if (client) {
                 await client.sendRequest("sqlPrompt/disconnect");
+                await restoreMssqlIntellisense();
                 window.showInformationMessage("SQL Prompt: disconnected.");
             }
         }),
@@ -718,6 +851,161 @@ export async function activate(context: ExtensionContext) {
     await client.start();
     console.log("SQL Prompt: language server started.");
 
+    // ── Schema Loading Notifications ──────────────────────────────────────────
+    client.onNotification("sqlPrompt/schemaLoadingStarted", (params: any) => {
+        const message = params.message || `Loading schema from ${params.server}/${params.database}...`;
+        window.showInformationMessage(message);
+    });
+
+    client.onNotification("sqlPrompt/schemaLoadingCompleted", (params: any) => {
+        const tableCount = params.tableCount ?? 0;
+        const scalarFunctionCount = params.scalarFunctionCount ?? 0;
+        const tableValuedFunctionCount = params.tableValuedFunctionCount ?? 0;
+        const storedProcedureCount = params.storedProcedureCount ?? 0;
+        const message = `Schema loaded: ${tableCount} tables, ${scalarFunctionCount} scalar functions, ${tableValuedFunctionCount} table-valued functions, ${storedProcedureCount} stored procedures.`;
+        window.showInformationMessage(message);
+    });
+
+    client.onNotification("sqlPrompt/schemaLoadingFailed", (params: any) => {
+        window.showErrorMessage(`SQL Prompt: schema loading failed — ${params.error}`);
+    });
+
+    // ── Go to Definition ──────────────────────────────────────────────────────
+
+    // Virtual document provider for object definition scripts
+    const defContentProvider: TextDocumentContentProvider = {
+        onDidChange: onDefinitionContentChange.event,
+        provideTextDocumentContent(uri: Uri): string {
+            return definitionScriptCache.get(uri.toString()) ?? '-- Script not available';
+        },
+    };
+    context.subscriptions.push(
+        workspace.registerTextDocumentContentProvider('sqlprompt-def', defContentProvider),
+    );
+
+    // DefinitionProvider: F12 on tables, views, procedures, functions
+    const sqlDocumentSelector = [
+        { scheme: 'file', language: 'sql' },
+        { scheme: 'untitled', language: 'sql' },
+    ];
+    context.subscriptions.push(
+        languages.registerDefinitionProvider(sqlDocumentSelector, {
+            async provideDefinition(document, position) {
+                if (!client) { return null; }
+
+                const line = document.lineAt(position.line).text;
+                const col = position.character;
+                const ident = resolveIdentifierAtColumn(line, col);
+                if (!ident) { return null; }
+
+                type ResolvedObject = {
+                    schema: string;
+                    name: string;
+                    kind: 'tableOrView' | 'procedure' | 'scalarFunction' | 'tableValuedFunction';
+                    columns?: Array<{
+                        name: string;
+                        dataType: string;
+                        maxLength: number | null;
+                        isNullable: boolean;
+                        isPrimaryKey: boolean;
+                    }>;
+                };
+
+                let resolved: ResolvedObject | null = null;
+                try {
+                    resolved = await client.sendRequest<ResolvedObject | null>(
+                        'sqlPrompt/resolveObject',
+                        { name: ident.name, schema: ident.schema },
+                    );
+                } catch {
+                    return null;
+                }
+                if (!resolved) { return null; }
+
+                let script: string | null = null;
+
+                // Primary path: fetch script via mssql connectionSharing
+                const ownerUri = lastOwnerUri ?? document.uri.toString();
+                const api = await getMssqlApi();
+                if (api?.connectionSharing) {
+                    try {
+                        const schemaEsc = resolved.schema.replace(/'/g, "''");
+                        const nameEsc = resolved.name.replace(/'/g, "''");
+                        const scriptQuery = `
+                            SELECT sm.definition
+                            FROM sys.sql_modules sm
+                            INNER JOIN sys.objects o ON sm.object_id = o.object_id
+                            INNER JOIN sys.schemas s ON o.schema_id = s.schema_id
+                            WHERE s.name = N'${schemaEsc}' AND o.name = N'${nameEsc}'
+                        `;
+                        const result = await api.connectionSharing.executeSimpleQuery?.(
+                            ownerUri,
+                            scriptQuery,
+                        );
+                        const rows = extractRowsFromSimpleQueryResult(result);
+                        if (rows.length > 0) {
+                            script = normalizeText(rows[0].definition) ?? null;
+                        }
+                    } catch {
+                        // fallthrough to other strategies
+                    }
+                }
+
+                // Secondary path: ask the server (works in direct-connection mode)
+                if (script === null) {
+                    try {
+                        const res = await client.sendRequest<{ script: string | null }>(
+                            'sqlPrompt/getObjectScript',
+                            { schema: resolved.schema, name: resolved.name },
+                        );
+                        script = res?.script ?? null;
+                    } catch {
+                        // ignore
+                    }
+                }
+
+                // For tables (no sql_modules entry): generate CREATE TABLE from snapshot
+                if (script === null && resolved.kind === 'tableOrView') {
+                    // Prefer server-returned columns; fall back to local snapshot
+                    const columns = resolved.columns ?? lastTablesSnapshot.find(
+                        t => t.schema.toLowerCase() === resolved!.schema.toLowerCase() &&
+                             t.name.toLowerCase() === resolved!.name.toLowerCase(),
+                    )?.columns;
+
+                    if (columns) {
+                        const tableInfo: TableInfo = {
+                            schema: resolved.schema,
+                            name: resolved.name,
+                            columns,
+                            foreignKeys: [],
+                        };
+                        script = generateCreateTableScript(tableInfo);
+                    }
+                }
+
+                if (!script) {
+                    window.showWarningMessage(
+                        `SQL Prompt: definition not available for [${resolved.schema}].[${resolved.name}].`,
+                    );
+                    return null;
+                }
+
+                // Store script in cache and return a Location pointing to the virtual doc
+                const virtualUri = Uri.from({
+                    scheme: 'sqlprompt-def',
+                    authority: 'definition',
+                    path: `/${encodeURIComponent(resolved.schema)}/${encodeURIComponent(resolved.name)}.sql`,
+                });
+                definitionScriptCache.set(virtualUri.toString(), script);
+                onDefinitionContentChange.fire(virtualUri);
+
+                return new Location(virtualUri, new Range(0, 0, 0, 0));
+            },
+        }),
+    );
+
+    // ─────────────────────────────────────────────────────────────────────────
+
     // Subscribe to mssql connection changes so the schema reloads automatically
     // whenever the user connects/disconnects/switches connection in mssql.
     await setupMssqlConnectionListener(context);
@@ -728,6 +1016,7 @@ export async function activate(context: ExtensionContext) {
 
 export async function deactivate() {
     mssqlApiPromise = undefined;
+    await restoreMssqlIntellisense();
     if (client) {
         await client.stop();
         client = undefined;

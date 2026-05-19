@@ -64,6 +64,10 @@ async function connectFromSettings() {
     const config = await connection.workspace.getConfiguration("sqlPrompt");
     const connConfig = config?.connection;
     if (connConfig && connConfig.server && connConfig.database) {
+      connection.sendNotification("sqlPrompt/schemaLoadingStarted", {
+        server: connConfig.server,
+        database: connConfig.database,
+      });
       schemaLoader = new SchemaLoader(connConfig);
       await schemaLoader.connect();
       [tables, routines] = await Promise.all([
@@ -73,11 +77,19 @@ async function connectFromSettings() {
       connection.console.info(
         `SQL Prompt: connected to ${connConfig.server}/${connConfig.database}. Loaded ${tables.length} tables, ${routines.scalarFunctions.length} scalar function(s), ${routines.tableValuedFunctions.length} table-valued function(s), ${routines.storedProcedures.length} procedure(s).`,
       );
+      connection.sendNotification("sqlPrompt/schemaLoadingCompleted", {
+        server: connConfig.server,
+        database: connConfig.database,
+        tableCount: tables.length,
+      });
     }
   } catch (err: any) {
     connection.console.error(
       `SQL Prompt: connection failed — ${err.message}`,
     );
+    connection.sendNotification("sqlPrompt/schemaLoadingFailed", {
+      error: err.message,
+    });
   }
 }
 
@@ -99,6 +111,9 @@ connection.onRequest(
         '$1=***'
       );
       connection.console.info(`SQL Prompt: connecting with — ${masked}`);
+      connection.sendNotification("sqlPrompt/schemaLoadingStarted", {
+        message: "Loading schema...",
+      });
 
       schemaLoader = new SchemaLoader(params.connectionString);
       await schemaLoader.connect();
@@ -109,11 +124,20 @@ connection.onRequest(
       connection.console.info(
         `SQL Prompt: schema updated via mssql connection. Loaded ${tables.length} tables, ${routines.scalarFunctions.length} scalar function(s), ${routines.tableValuedFunctions.length} table-valued function(s), ${routines.storedProcedures.length} procedure(s).`,
       );
+      connection.sendNotification("sqlPrompt/schemaLoadingCompleted", {
+        tableCount: tables.length,
+        scalarFunctionCount: routines.scalarFunctions.length,
+        tableValuedFunctionCount: routines.tableValuedFunctions.length,
+        storedProcedureCount: routines.storedProcedures.length,
+      });
       return { success: true, tableCount: tables.length };
     } catch (err: any) {
       connection.console.error(
         `SQL Prompt: updateConnection failed — ${err.message}`,
       );
+      connection.sendNotification("sqlPrompt/schemaLoadingFailed", {
+        error: err.message,
+      });
       return { success: false, message: err.message };
     }
   },
@@ -168,14 +192,107 @@ connection.onRequest("sqlPrompt/disconnect", async () => {
 // Custom request: reload schema
 connection.onRequest("sqlPrompt/reloadSchema", async () => {
   if (schemaLoader) {
-    [tables, routines] = await Promise.all([
-      schemaLoader.loadSchema(),
-      schemaLoader.loadRoutines().catch(() => emptyRoutineSnapshot()),
-    ]);
-    return { success: true, tableCount: tables.length };
+    connection.sendNotification("sqlPrompt/schemaLoadingStarted", {
+      message: "Reloading schema...",
+    });
+    try {
+      [tables, routines] = await Promise.all([
+        schemaLoader.loadSchema(),
+        schemaLoader.loadRoutines().catch(() => emptyRoutineSnapshot()),
+      ]);
+      connection.sendNotification("sqlPrompt/schemaLoadingCompleted", {
+        tableCount: tables.length,
+        scalarFunctionCount: routines.scalarFunctions.length,
+        tableValuedFunctionCount: routines.tableValuedFunctions.length,
+        storedProcedureCount: routines.storedProcedures.length,
+      });
+      return { success: true, tableCount: tables.length };
+    } catch (err: any) {
+      connection.sendNotification("sqlPrompt/schemaLoadingFailed", {
+        error: err.message,
+      });
+      throw err;
+    }
   }
   return { success: false, message: "Not connected" };
 });
+
+// ── Go to Definition ──────────────────────────────────────────────────────────
+
+interface ResolvedObjectInfo {
+  schema: string;
+  name: string;
+  kind: 'tableOrView' | 'procedure' | 'scalarFunction' | 'tableValuedFunction';
+  /** Column metadata — present for tableOrView so the client can generate CREATE TABLE. */
+  columns?: Array<{
+    name: string;
+    dataType: string;
+    maxLength: number | null;
+    isNullable: boolean;
+    isPrimaryKey: boolean;
+  }>;
+}
+
+// Resolve a SQL identifier to a known schema object (tables, views, routines).
+connection.onRequest(
+  "sqlPrompt/resolveObject",
+  (params: { name: string; schema?: string }): ResolvedObjectInfo | null => {
+    const nameLower = params.name.toLowerCase();
+    const schemaLower = params.schema?.toLowerCase();
+
+    for (const t of tables) {
+      if (
+        t.name.toLowerCase() === nameLower &&
+        (!schemaLower || t.schema.toLowerCase() === schemaLower)
+      ) {
+        return { schema: t.schema, name: t.name, kind: 'tableOrView', columns: t.columns };
+      }
+    }
+    for (const p of routines.storedProcedures) {
+      if (
+        p.name.toLowerCase() === nameLower &&
+        (!schemaLower || p.schema.toLowerCase() === schemaLower)
+      ) {
+        return { schema: p.schema, name: p.name, kind: 'procedure' };
+      }
+    }
+    for (const f of routines.scalarFunctions) {
+      if (
+        f.name.toLowerCase() === nameLower &&
+        (!schemaLower || f.schema.toLowerCase() === schemaLower)
+      ) {
+        return { schema: f.schema, name: f.name, kind: 'scalarFunction' };
+      }
+    }
+    for (const f of routines.tableValuedFunctions) {
+      if (
+        f.name.toLowerCase() === nameLower &&
+        (!schemaLower || f.schema.toLowerCase() === schemaLower)
+      ) {
+        return { schema: f.schema, name: f.name, kind: 'tableValuedFunction' };
+      }
+    }
+    return null;
+  },
+);
+
+// Fetch the T-SQL script for an object via the direct SchemaLoader connection.
+// Only available when the extension was configured via settings (not connectionSharing).
+connection.onRequest(
+  "sqlPrompt/getObjectScript",
+  async (params: { schema: string; name: string }): Promise<{ script: string | null }> => {
+    if (!schemaLoader) {
+      return { script: null };
+    }
+    try {
+      const script = await schemaLoader.getObjectScript(params.schema, params.name);
+      return { script };
+    } catch (err: any) {
+      connection.console.error(`SQL Prompt: getObjectScript failed — ${err.message}`);
+      return { script: null };
+    }
+  },
+);
 
 // ── Completion (new pipeline) ─────────────────────────────────────────────────
 //

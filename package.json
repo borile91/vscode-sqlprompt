@@ -86,6 +86,12 @@
                     ],
                     "default": "off",
                     "description": "Traces the communication between VS Code and the language server."
+                },
+                "sqlPrompt.suppressMssqlIntellisense": {
+                    "scope": "window",
+                    "type": "boolean",
+                    "default": true,
+                    "description": "When connected, automatically disable the mssql extension's IntelliSense so that SQL Prompt completions appear exclusively. Connection features (Script As, Alter Procedure, etc.) are unaffected. Set to false to let both providers coexist."
                 }
             }
         },

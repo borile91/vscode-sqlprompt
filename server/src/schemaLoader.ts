@@ -150,26 +150,36 @@ export class SchemaLoader {
         }
 
         const result = await this.pool.request().query(`
-      SELECT 
-        s.name AS schema_name,
-        t.name AS table_name,
-        c.name AS column_name,
-        ty.name AS data_type,
-        c.max_length,
-        c.is_nullable,
-        CASE WHEN pk.column_id IS NOT NULL THEN 1 ELSE 0 END AS is_primary_key
-      FROM sys.tables t
-      INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
-      INNER JOIN sys.columns c ON t.object_id = c.object_id
-      INNER JOIN sys.types ty ON c.user_type_id = ty.user_type_id
-      LEFT JOIN (
-        SELECT ic.object_id, ic.column_id
-        FROM sys.index_columns ic
-        INNER JOIN sys.indexes i ON ic.object_id = i.object_id AND ic.index_id = i.index_id
-        WHERE i.is_primary_key = 1
-      ) pk ON c.object_id = pk.object_id AND c.column_id = pk.column_id
-      ORDER BY s.name, t.name, c.column_id
-    `);
+            WITH schema_objects AS (
+                SELECT
+                    o.object_id,
+                    o.schema_id,
+                    o.name,
+                    o.type
+                FROM sys.objects o
+                WHERE o.type IN ('U', 'V')
+                    AND o.is_ms_shipped = 0
+            )
+            SELECT
+                s.name AS schema_name,
+                so.name AS table_name,
+                c.name AS column_name,
+                ty.name AS data_type,
+                c.max_length,
+                c.is_nullable,
+                CASE WHEN so.type = 'U' AND pk.column_id IS NOT NULL THEN 1 ELSE 0 END AS is_primary_key
+            FROM schema_objects so
+            INNER JOIN sys.schemas s ON so.schema_id = s.schema_id
+            INNER JOIN sys.columns c ON so.object_id = c.object_id
+            INNER JOIN sys.types ty ON c.user_type_id = ty.user_type_id
+            LEFT JOIN (
+                SELECT ic.object_id, ic.column_id
+                FROM sys.index_columns ic
+                INNER JOIN sys.indexes i ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+                WHERE i.is_primary_key = 1
+            ) pk ON so.object_id = pk.object_id AND c.column_id = pk.column_id
+            ORDER BY s.name, so.name, c.column_id
+        `);
 
         const tableMap = new Map<string, TableInfo>();
 
@@ -351,5 +361,31 @@ export class SchemaLoader {
         }
 
         return { scalarFunctions, tableValuedFunctions, storedProcedures };
+    }
+
+    /**
+     * Returns the T-SQL definition for views, stored procedures, and functions
+     * from sys.sql_modules. Returns null for user tables (which have no sql_modules entry).
+     */
+    async getObjectScript(schema: string, name: string): Promise<string | null> {
+        if (!this.pool) {
+            throw new Error("Not connected to database");
+        }
+
+        const result = await this.pool.request()
+            .input('schema', sql.NVarChar, schema)
+            .input('name', sql.NVarChar, name)
+            .query(`
+                SELECT sm.definition
+                FROM sys.sql_modules sm
+                INNER JOIN sys.objects o ON sm.object_id = o.object_id
+                INNER JOIN sys.schemas s ON o.schema_id = s.schema_id
+                WHERE s.name = @schema AND o.name = @name
+            `);
+
+        if (result.recordset.length > 0) {
+            return result.recordset[0].definition as string;
+        }
+        return null;
     }
 }

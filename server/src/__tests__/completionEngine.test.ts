@@ -17,6 +17,15 @@ const tables: TableInfo[] = [
     ],
     foreignKeys: [],
   },
+  {
+    schema: 'dbo',
+    name: 'OrderSummaryView',
+    columns: [
+      { name: 'OrderId', dataType: 'int', maxLength: null, isNullable: false, isPrimaryKey: false },
+      { name: 'CustomerId', dataType: 'int', maxLength: null, isNullable: false, isPrimaryKey: false },
+    ],
+    foreignKeys: [],
+  },
 ];
 
 const routines: RoutineSnapshot = {
@@ -114,6 +123,15 @@ describe('completionEngine — routines by clause', () => {
     assert.ok(tvf, 'Expected table-valued function completion in FROM clause');
     const newText = typeof tvf?.textEdit === 'object' ? (tvf?.textEdit as any).newText : '';
     assert.match(String(newText), /dbo\.fn_OpenOrders\(\$\{1:0\}\) AS /);
+  });
+
+  it('FROM proposes views', () => {
+    const items = getItems('SELECT * FROM ');
+    const view = items.find((i) => i.label === 'dbo.OrderSummaryView');
+
+    assert.ok(view, 'Expected view completion in FROM clause');
+    const newText = typeof view?.textEdit === 'object' ? (view?.textEdit as any).newText : '';
+    assert.match(String(newText), /dbo\.OrderSummaryView AS /);
   });
 
   it('EXEC proposes stored procedures with named parameter placeholders', () => {
