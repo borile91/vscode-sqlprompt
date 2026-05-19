@@ -125,6 +125,9 @@ function resolveStatementKind(sig: Token[]): StatementKind {
     switch (tok.text.toUpperCase()) {
       case 'WITH':   return 'cte';    // CTE preamble
       case 'SELECT': return 'select';
+      case 'EXEC':
+      case 'EXECUTE':
+        return 'exec';
       case 'INSERT': return 'insert';
       case 'UPDATE': return 'update';
       case 'DELETE': return 'delete';
@@ -172,6 +175,10 @@ function resolveClause(sig: Token[], statementKind: StatementKind): ClauseKind {
         break;
       case 'JOIN':
         frame.clause = 'join';
+        break;
+      case 'EXEC':
+      case 'EXECUTE':
+        frame.clause = 'exec';
         break;
       case 'ON':
         frame.clause = 'on';
@@ -394,6 +401,8 @@ function resolveExpectedKinds(
       return ['table', 'view', 'schema', 'function', 'keyword'];
     case 'join':
       return ['table', 'view', 'schema', 'keyword'];
+    case 'exec':
+      return ['procedure', 'parameter', 'snippet', 'keyword'];
     case 'on':
       return ['column', 'operator', 'expression', 'keyword'];
     case 'where':

@@ -3,5 +3,6 @@
         {
             "text": "Always write commit messages in English. Use Conventional Commits format: <type>(<scope>): <summary>. Keep the subject imperative, concise, and focused on one logical change. Do not use emojis, non-English text, or trailing punctuation in the subject. Optionally include a short English body with bullet points when additional context is useful."
         }
-    ]
+    ],
+    "mssql.intelliSense.enableIntelliSense": false
 }

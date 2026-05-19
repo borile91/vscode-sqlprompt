@@ -27,9 +27,15 @@ import {
 import { TextDocument } from 'vscode-languageserver-textdocument';
 
 import { QueryContext, VisibleSource } from './types';
-import { TableInfo } from './schemaLoader';
+import {
+  TableInfo,
+  RoutineSnapshot,
+  RoutineParameterInfo,
+  ScalarFunctionInfo,
+  StoredProcedureInfo,
+} from './schemaLoader';
 import { StatementRange } from './documentTextService';
-import { generateAlias, stripIdentifierDelimiters } from './utils';
+import { generateAlias } from './utils';
 
 // ── Snippet completions ───────────────────────────────────────────────────────
 
@@ -73,13 +79,14 @@ function buildSnippetCompletions(clause: string, position: Position): Completion
 export function buildCompletions(
   context: QueryContext,
   tables: TableInfo[],
+  routines: RoutineSnapshot,
   document: TextDocument,
   position: Position,
   statementRange: StatementRange,
 ): CompletionItem[] {
   // ── 1. Dot-qualified completions ─────────────────────────────────────────
   if (context.isAfterDot && context.qualifierChain?.length) {
-    return buildDotCompletions(context, tables, position);
+    return buildDotCompletions(context, tables, routines, position);
   }
 
   const items: CompletionItem[] = [];
@@ -88,6 +95,10 @@ export function buildCompletions(
     start: { line: position.line, character: 0 },
     end: position,
   });
+
+  if (context.isInFunctionCall) {
+    items.push(...buildFunctionParameterCompletions(context, routines));
+  }
 
   // ── 2. Star expansion (highest priority in SELECT) ───────────────────────
   if (context.clause === 'select' && (refs.length || context.visibleSources.length)) {
@@ -106,6 +117,7 @@ export function buildCompletions(
       items.push(...buildSnippetCompletions('select', position));
       items.push(...buildColumnCompletionsForRefs(refs, true, false));
       items.push(...buildColumnCompletionsForSources(context.visibleSources));
+      items.push(...buildScalarFunctionCompletions(routines.scalarFunctions));
       // Always offer an "expand all columns" item when there are visible sources
       items.push(...buildExpandAllColumnsItem(context, refs, document, statementRange, position));
       break;
@@ -141,6 +153,24 @@ export function buildCompletions(
               data: { type: 'table', index: tables.indexOf(table) },
             });
           });
+
+        routines.tableValuedFunctions
+          .filter((fn) => fn.schema.toLowerCase() === schemaName.toLowerCase())
+          .forEach((fn) => {
+            const alias = generateAlias(fn.name, new Set(usedAliases));
+            items.push({
+              label: fn.name,
+              kind: CompletionItemKind.Function,
+              detail: `Table-valued function — alias: ${alias}`,
+              filterText: fn.name,
+              textEdit: TextEdit.replace(
+                replaceRange,
+                `${buildFunctionCallText(fn.name, fn.parameters)} AS ${alias}`,
+              ),
+              insertTextFormat: InsertTextFormat.Snippet,
+              sortText: `2${fn.name}`,
+            });
+          });
       } else {
         const replaceRange = replaceRangeWordOnly(lineText, position);
         tables.forEach((table, idx) => {
@@ -155,6 +185,23 @@ export function buildCompletions(
             insertTextFormat: InsertTextFormat.PlainText,
             sortText: `0${table.name}`,
             data: { type: 'table', index: idx },
+          });
+        });
+
+        routines.tableValuedFunctions.forEach((fn) => {
+          const alias = generateAlias(fn.name, new Set(usedAliases));
+          const fullName = `${fn.schema}.${fn.name}`;
+          items.push({
+            label: fullName,
+            kind: CompletionItemKind.Function,
+            detail: `Table-valued function (${fn.schema}) — alias: ${alias}`,
+            filterText: fullName,
+            textEdit: TextEdit.replace(
+              replaceRange,
+              `${buildFunctionCallText(fullName, fn.parameters)} AS ${alias}`,
+            ),
+            insertTextFormat: InsertTextFormat.Snippet,
+            sortText: `2${fn.name}`,
           });
         });
 
@@ -180,6 +227,10 @@ export function buildCompletions(
       break;
     }
 
+    case 'exec':
+      items.push(...buildStoredProcedureCompletions(routines.storedProcedures));
+      break;
+
     case 'on': {
       const usedPredicates = extractUsedOnPredicates(
         statementRange.text,
@@ -195,6 +246,7 @@ export function buildCompletions(
       items.push(...buildWherePredicateCompletions(refs, position));
       items.push(...buildColumnCompletionsForRefs(refs, true, false));
       items.push(...buildColumnCompletionsForSources(context.visibleSources));
+      items.push(...buildScalarFunctionCompletions(routines.scalarFunctions));
       break;
     }
 
@@ -203,6 +255,7 @@ export function buildCompletions(
     case 'orderBy':
       items.push(...buildColumnCompletionsForRefs(refs, true, false));
       items.push(...buildColumnCompletionsForSources(context.visibleSources));
+      items.push(...buildScalarFunctionCompletions(routines.scalarFunctions));
       break;
 
     case 'updateSet':
@@ -227,6 +280,9 @@ export function buildCompletions(
       // General SQL context: keywords + tables when in a recognisable DML statement.
       if (context.statementKind !== 'unknown') {
         items.push(...buildSqlKeywordCompletions(position));
+        if (context.statementKind === 'exec') {
+          items.push(...buildStoredProcedureCompletions(routines.storedProcedures));
+        }
         if (tables.length > 0) {
           tables.forEach((table, idx) => {
             const fullName = `${table.schema}.${table.name}`;
@@ -274,6 +330,7 @@ export function resolveTableCompletionItem(item: CompletionItem, tables: TableIn
 function buildDotCompletions(
   context: QueryContext,
   tables: TableInfo[],
+  routines: RoutineSnapshot,
   position: Position,
 ): CompletionItem[] {
   const chain = context.qualifierChain!;
@@ -345,13 +402,21 @@ function buildDotCompletions(
   // Is it a schema name?
   const schemaLower = qualifier.toLowerCase();
   const schemaMatches = tables.filter((t) => t.schema.toLowerCase() === schemaLower);
-  if (schemaMatches.length) {
+  const schemaRoutineMatches = routines.tableValuedFunctions.filter(
+    (fn) => fn.schema.toLowerCase() === schemaLower,
+  );
+  const schemaProcedureMatches =
+    context.statementKind === 'exec' || context.clause === 'exec'
+      ? routines.storedProcedures.filter((proc) => proc.schema.toLowerCase() === schemaLower)
+      : [];
+
+  if (schemaMatches.length || schemaRoutineMatches.length || schemaProcedureMatches.length) {
     const usedAliases = new Set(
       context.visibleSources
         .map((s) => s.alias)
         .filter((a): a is string => a !== undefined),
     );
-    return schemaMatches.map((table) => {
+    const tableItems = schemaMatches.map((table) => {
       const alias = generateAlias(table.name, new Set(usedAliases));
       return {
         label: table.name,
@@ -364,6 +429,37 @@ function buildDotCompletions(
         data: { type: 'table', index: tables.indexOf(table) },
       };
     });
+
+    const tvfItems = schemaRoutineMatches.map((fn) => {
+      const alias = generateAlias(fn.name, new Set(usedAliases));
+      return {
+        label: fn.name,
+        kind: CompletionItemKind.Function,
+        detail: `Table-valued function (${fn.schema}) — alias: ${alias}`,
+        filterText: `${fn.name} ${fn.schema}.${fn.name}`,
+        textEdit: TextEdit.replace(
+          replaceRange,
+          `${buildFunctionCallText(fn.name, fn.parameters)} AS ${alias}`,
+        ),
+        insertTextFormat: InsertTextFormat.Snippet,
+        sortText: `2${fn.name}`,
+      };
+    });
+
+    const procedureItems = schemaProcedureMatches.map((proc) => ({
+      label: proc.name,
+      kind: CompletionItemKind.Method,
+      detail: `Stored procedure (${proc.schema})`,
+      filterText: `${proc.name} ${proc.schema}.${proc.name}`,
+      textEdit: TextEdit.replace(
+        replaceRange,
+        buildProcedureCallText(proc.name, proc.parameters),
+      ),
+      insertTextFormat: InsertTextFormat.Snippet,
+      sortText: `2${proc.name}`,
+    }));
+
+    return [...tableItems, ...tvfItems, ...procedureItems];
   }
 
   // Is it a table name? → offer columns
@@ -599,6 +695,145 @@ function normalizeColumnName(raw: unknown): string | undefined {
   return undefined;
 }
 
+// ── Routine completions ──────────────────────────────────────────────────────
+
+function buildFunctionCallText(functionName: string, parameters: RoutineParameterInfo[]): string {
+  if (parameters.length === 0) return `${functionName}()`;
+
+  const args = parameters
+    .map((p, idx) => {
+      const defaultValue = defaultValueForParameter(p);
+      return '${' + (idx + 1) + ':' + defaultValue + '}';
+    })
+    .join(', ');
+
+  return `${functionName}(${args})`;
+}
+
+function buildFunctionParameterCompletions(
+  context: QueryContext,
+  routines: RoutineSnapshot,
+): CompletionItem[] {
+  if (!context.functionName) return [];
+
+  const routineName = context.functionName.toLowerCase();
+  const matches = [
+    ...routines.scalarFunctions,
+    ...routines.tableValuedFunctions,
+    ...routines.storedProcedures,
+  ].filter((routine) => routine.name.toLowerCase() === routineName);
+
+  if (!matches.length) return [];
+
+  return matches.flatMap((routine) =>
+    routine.parameters.map((parameter, index) => {
+      const defaultValue = defaultValueForParameter(parameter);
+      const parameterName = normalizeParameterName(parameter.name);
+
+      return {
+        label: parameterName,
+        kind: CompletionItemKind.Variable,
+        detail: `${routine.schema}.${routine.name} — ${parameter.dataType}${parameter.isOutput ? ' OUTPUT' : ''}`,
+        documentation: {
+          kind: 'markdown',
+          value:
+            `**${parameterName}**\n\n` +
+            `Default: \`${defaultValue}\``,
+        },
+        insertText: defaultValue,
+        insertTextFormat: InsertTextFormat.PlainText,
+        sortText: `00_${index.toString().padStart(2, '0')}_${parameterName}`,
+      };
+    }),
+  );
+}
+
+function buildProcedureCallText(
+  procedureName: string,
+  parameters: RoutineParameterInfo[],
+): string {
+  if (parameters.length === 0) return procedureName;
+
+  const args = parameters
+    .map((p, idx) => {
+      const cleanName = normalizeParameterName(p.name);
+      const defaultValue = defaultValueForParameter(p);
+      const outputSuffix = p.isOutput ? ' OUTPUT' : '';
+      return `${cleanName} = ` + '${' + (idx + 1) + ':' + defaultValue + '}' + outputSuffix;
+    })
+    .join(', ');
+
+  return `${procedureName} ${args}`;
+}
+
+function normalizeParameterName(name: string): string {
+  return name.startsWith('@') ? name : `@${name}`;
+}
+
+function defaultValueForParameter(parameter: RoutineParameterInfo): string {
+  if (parameter.hasDefaultValue) return 'DEFAULT';
+
+  const typeName = parameter.dataType.toLowerCase();
+
+  if (typeName === 'bit') return '0';
+  if (NUMERIC_TYPES.has(typeName)) return '0';
+  if (STRING_TYPES.has(typeName)) return "''";
+  if (DATE_TYPES.has(typeName)) return "'1900-01-01'";
+  if (TIME_TYPES.has(typeName)) return "'00:00:00'";
+  if (DATETIME_TYPES.has(typeName)) return 'SYSDATETIME()';
+  if (BINARY_TYPES.has(typeName)) return '0x';
+  if (typeName === 'uniqueidentifier') return 'NEWID()';
+
+  return 'NULL';
+}
+
+const NUMERIC_TYPES = new Set([
+  'tinyint', 'smallint', 'int', 'bigint',
+  'decimal', 'numeric', 'float', 'real', 'money', 'smallmoney',
+]);
+
+const STRING_TYPES = new Set([
+  'char', 'nchar', 'varchar', 'nvarchar', 'text', 'ntext', 'xml',
+]);
+
+const DATE_TYPES = new Set(['date']);
+const TIME_TYPES = new Set(['time']);
+const DATETIME_TYPES = new Set(['datetime', 'smalldatetime', 'datetime2', 'datetimeoffset']);
+const BINARY_TYPES = new Set(['binary', 'varbinary', 'image', 'rowversion', 'timestamp']);
+
+function buildScalarFunctionCompletions(functions: ScalarFunctionInfo[]): CompletionItem[] {
+  return functions.map((fn) => {
+    const fullName = `${fn.schema}.${fn.name}`;
+    return {
+      label: fullName,
+      kind: CompletionItemKind.Function,
+      detail: 'Scalar function',
+      filterText: `${fn.name} ${fullName}`,
+      insertText: buildFunctionCallText(fullName, fn.parameters),
+      insertTextFormat: InsertTextFormat.Snippet,
+      sortText: `20_${fn.schema}_${fn.name}`,
+    };
+  });
+}
+
+function buildStoredProcedureCompletions(procedures: StoredProcedureInfo[]): CompletionItem[] {
+  return procedures.map((proc) => {
+    const fullName = `${proc.schema}.${proc.name}`;
+    const paramList = proc.parameters.length > 0
+      ? ` (${proc.parameters.map((p) => normalizeParameterName(p.name)).join(', ')})`
+      : '';
+    return {
+      label: fullName,
+      kind: CompletionItemKind.Method,
+      detail: `Stored procedure${paramList}`,
+      filterText: `${proc.name} ${fullName}`,
+      insertText: buildProcedureCallText(fullName, proc.parameters),
+      insertTextFormat: InsertTextFormat.Snippet,
+      sortText: `20_${proc.schema}_${proc.name}`,
+    };
+  });
+}
+
 // ── FK predicate completions ──────────────────────────────────────────────────
 
 type PredicateSuggestion = {
@@ -755,7 +990,7 @@ const SQL_KEYWORDS_LIST = [
   'FULL JOIN', 'CROSS JOIN', 'CROSS APPLY', 'OUTER APPLY',
   'ON', 'WHERE', 'AND', 'OR', 'EXISTS',
   'GROUP BY', 'ORDER BY', 'HAVING', 'UNION', 'UNION ALL',
-  'INSERT INTO', 'UPDATE', 'SET', 'DELETE FROM',
+  'INSERT INTO', 'UPDATE', 'SET', 'DELETE FROM', 'EXEC',
 ];
 
 function buildSqlKeywordCompletions(position: Position): CompletionItem[] {

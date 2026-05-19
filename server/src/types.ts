@@ -30,6 +30,7 @@ export interface Token {
 
 export type StatementKind =
   | 'select'
+  | 'exec'
   | 'insert'
   | 'update'
   | 'delete'
@@ -41,6 +42,7 @@ export type ClauseKind =
   | 'select'
   | 'from'
   | 'join'
+  | 'exec'
   | 'on'
   | 'where'
   | 'groupBy'

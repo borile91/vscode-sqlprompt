@@ -10,7 +10,15 @@ import {
 } from "vscode-languageserver/node";
 
 import { TextDocument } from "vscode-languageserver-textdocument";
-import { SchemaLoader, TableInfo } from "./schemaLoader";
+import {
+  SchemaLoader,
+  TableInfo,
+  RoutineSnapshot,
+  ScalarFunctionInfo,
+  TableValuedFunctionInfo,
+  StoredProcedureInfo,
+  RoutineParameterInfo,
+} from "./schemaLoader";
 import { extractStatementAtOffset } from "./documentTextService";
 import { resolveContext } from "./cursorContextResolver";
 import { buildCompletions, resolveTableCompletionItem } from "./completionEngine";
@@ -20,6 +28,7 @@ const documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument);
 
 let schemaLoader: SchemaLoader | null = null;
 let tables: TableInfo[] = [];
+let routines: RoutineSnapshot = emptyRoutineSnapshot();
 let hasConfigurationCapability = false;
 
 connection.onInitialize((params: InitializeParams) => {
@@ -57,9 +66,12 @@ async function connectFromSettings() {
     if (connConfig && connConfig.server && connConfig.database) {
       schemaLoader = new SchemaLoader(connConfig);
       await schemaLoader.connect();
-      tables = await schemaLoader.loadSchema();
+      [tables, routines] = await Promise.all([
+        schemaLoader.loadSchema(),
+        schemaLoader.loadRoutines().catch(() => emptyRoutineSnapshot()),
+      ]);
       connection.console.info(
-        `SQL Prompt: connected to ${connConfig.server}/${connConfig.database}. Loaded ${tables.length} tables.`,
+        `SQL Prompt: connected to ${connConfig.server}/${connConfig.database}. Loaded ${tables.length} tables, ${routines.scalarFunctions.length} scalar function(s), ${routines.tableValuedFunctions.length} table-valued function(s), ${routines.storedProcedures.length} procedure(s).`,
       );
     }
   } catch (err: any) {
@@ -78,6 +90,7 @@ connection.onRequest(
         await schemaLoader.disconnect();
         schemaLoader = null;
         tables = [];
+        routines = emptyRoutineSnapshot();
       }
 
       // Log the connection string with password masked for debugging
@@ -89,9 +102,12 @@ connection.onRequest(
 
       schemaLoader = new SchemaLoader(params.connectionString);
       await schemaLoader.connect();
-      tables = await schemaLoader.loadSchema();
+      [tables, routines] = await Promise.all([
+        schemaLoader.loadSchema(),
+        schemaLoader.loadRoutines().catch(() => emptyRoutineSnapshot()),
+      ]);
       connection.console.info(
-        `SQL Prompt: schema updated via mssql connection. Loaded ${tables.length} tables.`,
+        `SQL Prompt: schema updated via mssql connection. Loaded ${tables.length} tables, ${routines.scalarFunctions.length} scalar function(s), ${routines.tableValuedFunctions.length} table-valued function(s), ${routines.storedProcedures.length} procedure(s).`,
       );
       return { success: true, tableCount: tables.length };
     } catch (err: any) {
@@ -105,7 +121,12 @@ connection.onRequest(
 
 connection.onRequest(
   "sqlPrompt/updateSchemaSnapshot",
-  async (params: { tables: TableInfo[] }) => {
+  async (params: {
+    tables: TableInfo[];
+    scalarFunctions?: ScalarFunctionInfo[];
+    tableValuedFunctions?: TableValuedFunctionInfo[];
+    storedProcedures?: StoredProcedureInfo[];
+  }) => {
     try {
       if (schemaLoader) {
         await schemaLoader.disconnect();
@@ -113,8 +134,9 @@ connection.onRequest(
       }
 
       tables = sanitizeTableSnapshot(Array.isArray(params?.tables) ? params.tables : []);
+      routines = sanitizeRoutineSnapshot(params);
       connection.console.info(
-        `SQL Prompt: schema updated via connectionSharing snapshot. Loaded ${tables.length} tables.`,
+        `SQL Prompt: schema updated via connectionSharing snapshot. Loaded ${tables.length} tables, ${routines.scalarFunctions.length} scalar function(s), ${routines.tableValuedFunctions.length} table-valued function(s), ${routines.storedProcedures.length} procedure(s).`,
       );
       return { success: true, tableCount: tables.length };
     } catch (err: any) {
@@ -138,6 +160,7 @@ connection.onRequest("sqlPrompt/disconnect", async () => {
     await schemaLoader.disconnect();
     schemaLoader = null;
     tables = [];
+    routines = emptyRoutineSnapshot();
   }
   return { success: true };
 });
@@ -145,7 +168,10 @@ connection.onRequest("sqlPrompt/disconnect", async () => {
 // Custom request: reload schema
 connection.onRequest("sqlPrompt/reloadSchema", async () => {
   if (schemaLoader) {
-    tables = await schemaLoader.loadSchema();
+    [tables, routines] = await Promise.all([
+      schemaLoader.loadSchema(),
+      schemaLoader.loadRoutines().catch(() => emptyRoutineSnapshot()),
+    ]);
     return { success: true, tableCount: tables.length };
   }
   return { success: false, message: "Not connected" };
@@ -161,7 +187,10 @@ connection.onRequest("sqlPrompt/reloadSchema", async () => {
 connection.onCompletion(
   (params: TextDocumentPositionParams): CompletionItem[] => {
     connection.console.info(
-      `SQL Prompt: onCompletion called, tables loaded: ${tables.length}`,
+      `SQL Prompt: onCompletion called, tables loaded: ${tables.length}, ` +
+      `procedures loaded: ${routines.storedProcedures.length}, ` +
+      `scalar functions: ${routines.scalarFunctions.length}, ` +
+      `table-valued functions: ${routines.tableValuedFunctions.length}`,
     );
 
     const document = documents.get(params.textDocument.uri);
@@ -193,7 +222,7 @@ connection.onCompletion(
       `isAfterDot=${context.isAfterDot} sources=${context.visibleSources.length}`,
     );
 
-    return buildCompletions(context, tables, document, position, statementRange);
+    return buildCompletions(context, tables, routines, document, position, statementRange);
   },
 );
 
@@ -273,6 +302,69 @@ function sanitizeTableSnapshot(raw: TableInfo[]): TableInfo[] {
   }
 
   return result;
+}
+
+function emptyRoutineSnapshot(): RoutineSnapshot {
+  return {
+    scalarFunctions: [],
+    tableValuedFunctions: [],
+    storedProcedures: [],
+  };
+}
+
+function sanitizeRoutineParameters(raw: unknown): RoutineParameterInfo[] {
+  if (!Array.isArray(raw)) return [];
+
+  return raw
+    .map((param) => {
+      const p = param as Record<string, unknown>;
+      const name = unwrapCellValue(p?.name);
+      if (!name) return null;
+
+      return {
+        name,
+        dataType: unwrapCellValue(p?.dataType) ?? 'unknown',
+        maxLength: typeof p?.maxLength === 'number' ? p.maxLength : null,
+        precision: typeof p?.precision === 'number' ? p.precision : null,
+        scale: typeof p?.scale === 'number' ? p.scale : null,
+        isOutput: !!p?.isOutput,
+        hasDefaultValue: !!p?.hasDefaultValue,
+      };
+    })
+    .filter((p): p is NonNullable<typeof p> => p !== null);
+}
+
+function sanitizeRoutineList<T extends { schema: string; name: string; parameters: RoutineParameterInfo[] }>(
+  raw: unknown,
+): T[] {
+  if (!Array.isArray(raw)) return [];
+
+  return raw
+    .map((entry) => {
+      const e = entry as Record<string, unknown>;
+      const schema = unwrapCellValue(e?.schema);
+      const name = unwrapCellValue(e?.name);
+      if (!schema || !name) return null;
+
+      return {
+        schema,
+        name,
+        parameters: sanitizeRoutineParameters(e?.parameters),
+      } as T;
+    })
+    .filter((item): item is T => item !== null);
+}
+
+function sanitizeRoutineSnapshot(raw: {
+  scalarFunctions?: unknown;
+  tableValuedFunctions?: unknown;
+  storedProcedures?: unknown;
+}): RoutineSnapshot {
+  return {
+    scalarFunctions: sanitizeRoutineList<ScalarFunctionInfo>(raw?.scalarFunctions),
+    tableValuedFunctions: sanitizeRoutineList<TableValuedFunctionInfo>(raw?.tableValuedFunctions),
+    storedProcedures: sanitizeRoutineList<StoredProcedureInfo>(raw?.storedProcedures),
+  };
 }
 
 documents.listen(connection);

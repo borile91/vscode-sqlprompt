@@ -49,6 +49,50 @@ type ForeignKeyInfo = {
     mappings: ForeignKeyMapping[];
 };
 
+type RoutineParameterInfo = {
+    name: string;
+    dataType: string;
+    maxLength: number | null;
+    precision: number | null;
+    scale: number | null;
+    isOutput: boolean;
+    hasDefaultValue: boolean;
+};
+
+type ScalarFunctionInfo = {
+    schema: string;
+    name: string;
+    parameters: RoutineParameterInfo[];
+};
+
+type TableValuedFunctionInfo = {
+    schema: string;
+    name: string;
+    parameters: RoutineParameterInfo[];
+};
+
+type StoredProcedureInfo = {
+    schema: string;
+    name: string;
+    parameters: RoutineParameterInfo[];
+};
+
+type SchemaSnapshot = {
+    tables: TableInfo[];
+    scalarFunctions: ScalarFunctionInfo[];
+    tableValuedFunctions: TableValuedFunctionInfo[];
+    storedProcedures: StoredProcedureInfo[];
+};
+
+function getSchemaObjectCount(snapshot: SchemaSnapshot): number {
+    return (
+        snapshot.tables.length +
+        snapshot.scalarFunctions.length +
+        snapshot.tableValuedFunctions.length +
+        snapshot.storedProcedures.length
+    );
+}
+
 // Our extension's identifier as published — used by the mssql connectionSharing
 // API so the permission dialog shows "SQL Prompt" and the approval is persisted.
 const EXTENSION_ID = "giacomoborile.vscode-sqlprompt";
@@ -134,7 +178,7 @@ function normalizeText(value: any): string | undefined {
         return undefined;
     }
     if (typeof raw === "string") {
-        return raw;
+        return raw.trim();
     }
     if (typeof raw === "number" || typeof raw === "boolean") {
         return String(raw);
@@ -244,7 +288,92 @@ function attachForeignKeysToTables(
     return tables;
 }
 
-async function loadSchemaViaConnectionSharing(ownerUri: string): Promise<TableInfo[] | undefined> {
+function mapRowsToRoutineSnapshot(rows: any[]): Omit<SchemaSnapshot, "tables"> {
+    type RoutineEntry = {
+        schema: string;
+        name: string;
+        objectType: string;
+        parameters: RoutineParameterInfo[];
+    };
+
+    const routineMap = new Map<string, RoutineEntry>();
+
+    for (const row of rows) {
+        const schema = normalizeText(row.schema_name);
+        const name = normalizeText(row.routine_name);
+        const objectType = normalizeText(row.object_type);
+        if (!schema || !name || !objectType) {
+            continue;
+        }
+
+        const key = `${schema}.${name}::${objectType}`;
+        if (!routineMap.has(key)) {
+            routineMap.set(key, {
+                schema,
+                name,
+                objectType,
+                parameters: [],
+            });
+        }
+
+        const parameterName = normalizeText(row.parameter_name);
+        if (parameterName) {
+            const maxLengthRaw = normalizeCellValue(row.max_length);
+            const precisionRaw = normalizeCellValue(row.precision);
+            const scaleRaw = normalizeCellValue(row.scale);
+            const isOutputRaw = normalizeCellValue(row.is_output);
+            const hasDefaultRaw = normalizeCellValue(row.has_default_value);
+
+            routineMap.get(key)!.parameters.push({
+                name: parameterName,
+                dataType: normalizeText(row.data_type) ?? "unknown",
+                maxLength: typeof maxLengthRaw === "number" ? maxLengthRaw : null,
+                precision: typeof precisionRaw === "number" ? precisionRaw : null,
+                scale: typeof scaleRaw === "number" ? scaleRaw : null,
+                isOutput: isOutputRaw === true || isOutputRaw === 1,
+                hasDefaultValue: hasDefaultRaw === true || hasDefaultRaw === 1,
+            });
+        }
+    }
+
+    const scalarFunctions: ScalarFunctionInfo[] = [];
+    const tableValuedFunctions: TableValuedFunctionInfo[] = [];
+    const storedProcedures: StoredProcedureInfo[] = [];
+
+    for (const routine of routineMap.values()) {
+        if (routine.objectType === "FN" || routine.objectType === "FS" || routine.objectType === "FT") {
+            scalarFunctions.push({
+                schema: routine.schema,
+                name: routine.name,
+                parameters: routine.parameters,
+            });
+            continue;
+        }
+
+        if (routine.objectType === "IF" || routine.objectType === "TF") {
+            tableValuedFunctions.push({
+                schema: routine.schema,
+                name: routine.name,
+                parameters: routine.parameters,
+            });
+            continue;
+        }
+
+        if (routine.objectType === "P" || routine.objectType === "PC") {
+            storedProcedures.push({
+                schema: routine.schema,
+                name: routine.name,
+                parameters: routine.parameters,
+            });
+        }
+    }
+
+    console.log(`[SQL Prompt] Routines parsed: ${scalarFunctions.length} scalar, ${tableValuedFunctions.length} TVF, ${storedProcedures.length} procedures`);
+
+    return { scalarFunctions, tableValuedFunctions, storedProcedures };
+}
+
+async function loadSchemaViaConnectionSharing(ownerUri: string): Promise<SchemaSnapshot | undefined> {
     const api = await getMssqlApi();
     if (!api?.connectionSharing) {
         return undefined;
@@ -293,6 +422,28 @@ async function loadSchemaViaConnectionSharing(ownerUri: string): Promise<TableIn
             ORDER BY sch_parent.name, t_parent.name, fk.name, fkc.constraint_column_id
         `;
 
+    const routinesQuery = `
+                        SELECT
+                                s.name AS schema_name,
+                                o.name AS routine_name,
+                                o.type AS object_type,
+                                p.parameter_id,
+                                p.name AS parameter_name,
+                                ty.name AS data_type,
+                                p.max_length,
+                                p.precision,
+                                p.scale,
+                                p.is_output,
+                                p.has_default_value
+                        FROM sys.objects o
+                        INNER JOIN sys.schemas s ON o.schema_id = s.schema_id
+                        LEFT JOIN sys.parameters p ON o.object_id = p.object_id AND p.parameter_id > 0
+                        LEFT JOIN sys.types ty ON p.user_type_id = ty.user_type_id
+                        WHERE o.type IN ('FN', 'FS', 'FT', 'IF', 'TF', 'P', 'PC')
+                            AND o.is_ms_shipped = 0
+                        ORDER BY s.name, o.name, p.parameter_id
+                `;
+
     try {
         const result = await api.connectionSharing.executeSimpleQuery?.(
             ownerUri,
@@ -302,14 +453,34 @@ async function loadSchemaViaConnectionSharing(ownerUri: string): Promise<TableIn
             ownerUri,
             foreignKeysQuery,
         );
+        let routinesResult: any;
+        try {
+            routinesResult = await api.connectionSharing.executeSimpleQuery?.(
+                ownerUri,
+                routinesQuery,
+            );
+        } catch {
+            routinesResult = undefined;
+        }
 
         const rows = extractRowsFromSimpleQueryResult(result);
         const fkRows = extractRowsFromSimpleQueryResult(fkResult);
+        const routineRows = extractRowsFromSimpleQueryResult(routinesResult);
+
+        console.log(`[SQL Prompt] Schema rows: ${rows.length}, FK rows: ${fkRows.length}, Routine rows: ${routineRows.length}`);
 
         const schemaTables = mapRowsToSchemaSnapshot(rows);
         const foreignKeys = mapRowsToForeignKeys(fkRows);
+        const routineSnapshot = mapRowsToRoutineSnapshot(routineRows);
 
-        return attachForeignKeysToTables(schemaTables, foreignKeys);
+        console.log(`[SQL Prompt] Routines loaded: ${routineSnapshot.scalarFunctions.length} scalar, ${routineSnapshot.tableValuedFunctions.length} TVF, ${routineSnapshot.storedProcedures.length} procedures`);
+
+        return {
+            tables: attachForeignKeysToTables(schemaTables, foreignKeys),
+            scalarFunctions: routineSnapshot.scalarFunctions,
+            tableValuedFunctions: routineSnapshot.tableValuedFunctions,
+            storedProcedures: routineSnapshot.storedProcedures,
+        };
     } catch {
         return undefined;
     }
@@ -357,17 +528,24 @@ async function syncMssqlConnection(showNotification = false): Promise<boolean> {
     }
 
     try {
+        const objectCount = getSchemaObjectCount(schemaSnapshot);
+
         const result = await client.sendRequest<{
             success: boolean;
             tableCount: number;
-        }>("sqlPrompt/updateSchemaSnapshot", { tables: schemaSnapshot });
+        }>("sqlPrompt/updateSchemaSnapshot", {
+            tables: schemaSnapshot.tables,
+            scalarFunctions: schemaSnapshot.scalarFunctions,
+            tableValuedFunctions: schemaSnapshot.tableValuedFunctions,
+            storedProcedures: schemaSnapshot.storedProcedures,
+        });
 
         if (!result?.success) {
             return false;
         }
 
         window.setStatusBarMessage(
-            `SQL Prompt: schema loaded — ${result.tableCount} table(s)`,
+            `SQL Prompt: schema loaded — ${objectCount} object(s)`,
             5000,
         );
 
@@ -383,7 +561,7 @@ async function syncMssqlConnection(showNotification = false): Promise<boolean> {
                 /* permission not yet granted or no active connection */
             }
             window.showInformationMessage(
-                `SQL Prompt: connected${dbDetail} — ${result.tableCount} table(s) loaded`,
+                `SQL Prompt: connected${dbDetail} — ${objectCount} object(s) loaded`,
             );
         }
 

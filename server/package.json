@@ -4,7 +4,7 @@
     "private": true,
     "scripts": {
         "compile": "tsc -b",
-        "test": "tsc -b && node --test out/__tests__/sqlLexer.test.js out/__tests__/cursorContextResolver.test.js out/__tests__/scopeBuilder.test.js out/__tests__/documentTextService.test.js"
+        "test": "tsc -b && node --test out/__tests__/sqlLexer.test.js out/__tests__/cursorContextResolver.test.js out/__tests__/scopeBuilder.test.js out/__tests__/documentTextService.test.js out/__tests__/completionEngine.test.js out/__tests__/completionEngineExecDot.test.js"
     },
     "dependencies": {
         "mssql": "^11.0.1",

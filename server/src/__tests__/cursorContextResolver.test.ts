@@ -68,6 +68,10 @@ describe('resolveContext — statementKind', () => {
     assert.equal(ctx('DELETE FROM dbo.Orders').statementKind, 'delete');
   });
 
+  it('detects EXEC', () => {
+    assert.equal(ctx('EXEC dbo.usp_Run').statementKind, 'exec');
+  });
+
   it('detects CTE (WITH)', () => {
     assert.equal(ctx('WITH cte AS (SELECT 1)').statementKind, 'cte');
   });
@@ -98,6 +102,11 @@ describe('resolveContext — clause', () => {
   it('detects on clause', () => {
     const c = ctx('SELECT * FROM dbo.Orders o JOIN dbo.Customers c ON ');
     assert.equal(c.clause, 'on');
+  });
+
+  it('detects exec clause', () => {
+    const c = ctx('EXEC ');
+    assert.equal(c.clause, 'exec');
   });
 
   it('detects where clause', () => {
@@ -238,6 +247,11 @@ describe('resolveContext — expectedKinds', () => {
   it('from clause expects tables', () => {
     const c = ctx('SELECT * FROM ');
     assert.ok(c.expectedKinds.includes('table'));
+  });
+
+  it('exec clause expects procedures', () => {
+    const c = ctx('EXEC ');
+    assert.ok(c.expectedKinds.includes('procedure'));
   });
 
   it('after alias dot expects columns', () => {

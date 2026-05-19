@@ -38,6 +38,40 @@ export interface ConnectionConfig {
   trustServerCertificate?: boolean;
 }
 
+export interface RoutineParameterInfo {
+    name: string;
+    dataType: string;
+    maxLength: number | null;
+    precision: number | null;
+    scale: number | null;
+    isOutput: boolean;
+    hasDefaultValue: boolean;
+}
+
+export interface ScalarFunctionInfo {
+    schema: string;
+    name: string;
+    parameters: RoutineParameterInfo[];
+}
+
+export interface TableValuedFunctionInfo {
+    schema: string;
+    name: string;
+    parameters: RoutineParameterInfo[];
+}
+
+export interface StoredProcedureInfo {
+    schema: string;
+    name: string;
+    parameters: RoutineParameterInfo[];
+}
+
+export interface RoutineSnapshot {
+    scalarFunctions: ScalarFunctionInfo[];
+    tableValuedFunctions: TableValuedFunctionInfo[];
+    storedProcedures: StoredProcedureInfo[];
+}
+
 export class SchemaLoader {
     private pool: sql.ConnectionPool | null = null;
     private config: ConnectionConfig | null;
@@ -218,5 +252,104 @@ export class SchemaLoader {
         console.log(`Loaded schema: ${tableMap.size} tables`);
 
         return Array.from(tableMap.values());
+    }
+
+    async loadRoutines(): Promise<RoutineSnapshot> {
+        if (!this.pool) {
+            throw new Error("Not connected to database");
+        }
+
+        const result = await this.pool.request().query(`
+      SELECT
+        s.name AS schema_name,
+        o.name AS routine_name,
+        o.type AS object_type,
+        p.parameter_id,
+        p.name AS parameter_name,
+        ty.name AS data_type,
+        p.max_length,
+        p.precision,
+        p.scale,
+        p.is_output,
+        p.has_default_value
+      FROM sys.objects o
+      INNER JOIN sys.schemas s ON o.schema_id = s.schema_id
+      LEFT JOIN sys.parameters p ON o.object_id = p.object_id AND p.parameter_id > 0
+      LEFT JOIN sys.types ty ON p.user_type_id = ty.user_type_id
+      WHERE o.type IN ('FN', 'FS', 'FT', 'IF', 'TF', 'P', 'PC')
+        AND o.is_ms_shipped = 0
+      ORDER BY s.name, o.name, p.parameter_id
+    `);
+
+        type RoutineEntry = {
+            schema: string;
+            name: string;
+            objectType: string;
+            parameters: RoutineParameterInfo[];
+        };
+
+        const routineMap = new Map<string, RoutineEntry>();
+
+        for (const row of result.recordset) {
+            const schemaName = row.schema_name as string;
+            const routineName = row.routine_name as string;
+            const objectType = row.object_type as string;
+            const key = `${schemaName}.${routineName}::${objectType}`;
+
+            if (!routineMap.has(key)) {
+                routineMap.set(key, {
+                    schema: schemaName,
+                    name: routineName,
+                    objectType,
+                    parameters: [],
+                });
+            }
+
+            if (row.parameter_name) {
+                routineMap.get(key)!.parameters.push({
+                    name: row.parameter_name,
+                    dataType: row.data_type ?? 'unknown',
+                    maxLength: typeof row.max_length === 'number' ? row.max_length : null,
+                    precision: typeof row.precision === 'number' ? row.precision : null,
+                    scale: typeof row.scale === 'number' ? row.scale : null,
+                    isOutput: row.is_output === true || row.is_output === 1,
+                    hasDefaultValue: row.has_default_value === true || row.has_default_value === 1,
+                });
+            }
+        }
+
+        const scalarFunctions: ScalarFunctionInfo[] = [];
+        const tableValuedFunctions: TableValuedFunctionInfo[] = [];
+        const storedProcedures: StoredProcedureInfo[] = [];
+
+        for (const routine of routineMap.values()) {
+            if (routine.objectType === 'FN' || routine.objectType === 'FS' || routine.objectType === 'FT') {
+                scalarFunctions.push({
+                    schema: routine.schema,
+                    name: routine.name,
+                    parameters: routine.parameters,
+                });
+                continue;
+            }
+
+            if (routine.objectType === 'IF' || routine.objectType === 'TF') {
+                tableValuedFunctions.push({
+                    schema: routine.schema,
+                    name: routine.name,
+                    parameters: routine.parameters,
+                });
+                continue;
+            }
+
+            if (routine.objectType === 'P' || routine.objectType === 'PC') {
+                storedProcedures.push({
+                    schema: routine.schema,
+                    name: routine.name,
+                    parameters: routine.parameters,
+                });
+            }
+        }
+
+        return { scalarFunctions, tableValuedFunctions, storedProcedures };
     }
 }
