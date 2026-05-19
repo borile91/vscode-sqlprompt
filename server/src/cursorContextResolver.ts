@@ -132,6 +132,7 @@ function resolveStatementKind(sig: Token[]): StatementKind {
       case 'UPDATE': return 'update';
       case 'DELETE': return 'delete';
       case 'MERGE':  return 'merge';
+      case 'USE': return 'use';
     }
   }
   return 'unknown';
@@ -198,6 +199,9 @@ function resolveClause(sig: Token[], statementKind: StatementKind): ClauseKind {
       case 'WITH':
         // Only treat WITH as the CTE clause at the outermost depth.
         if (stack.length === 1) frame.clause = 'cte';
+        break;
+      case 'USE':
+        if (stack.length === 1) frame.clause = 'use';
         break;
       case 'BY':
         if (lastKeyword === 'GROUP') frame.clause = 'groupBy';

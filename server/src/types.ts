@@ -36,6 +36,7 @@ export type StatementKind =
   | 'delete'
   | 'merge'
   | 'cte'
+  | 'use'
   | 'unknown';
 
 export type ClauseKind =
@@ -53,6 +54,7 @@ export type ClauseKind =
   | 'updateSet'
   | 'cte'
   | 'functionArgs'
+  | 'use'
   | 'unknown';
 
 export type ExpectedKind =

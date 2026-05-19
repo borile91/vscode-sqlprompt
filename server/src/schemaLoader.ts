@@ -388,4 +388,19 @@ export class SchemaLoader {
         }
         return null;
     }
+
+    async loadDatabases(): Promise<string[]> {
+        if (!this.pool) {
+            throw new Error("Not connected to database");
+        }
+
+        const result = await this.pool.request().query(`
+            SELECT name
+            FROM sys.databases
+            WHERE state_desc = 'ONLINE'
+            ORDER BY name
+        `);
+
+        return result.recordset.map((row: { name: string }) => row.name);
+    }
 }

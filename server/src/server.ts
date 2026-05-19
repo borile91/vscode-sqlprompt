@@ -29,6 +29,7 @@ const documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument);
 let schemaLoader: SchemaLoader | null = null;
 let tables: TableInfo[] = [];
 let routines: RoutineSnapshot = emptyRoutineSnapshot();
+let databases: string[] = [];
 let hasConfigurationCapability = false;
 
 connection.onInitialize((params: InitializeParams) => {
@@ -64,6 +65,7 @@ connection.onRequest(
         schemaLoader = null;
         tables = [];
         routines = emptyRoutineSnapshot();
+        databases = [];
       }
 
       // Log the connection string with password masked for debugging
@@ -78,12 +80,16 @@ connection.onRequest(
 
       schemaLoader = new SchemaLoader(params.connectionString);
       await schemaLoader.connect();
-      [tables, routines] = await Promise.all([
+      [tables, routines, databases] = await Promise.all([
         schemaLoader.loadSchema(),
         schemaLoader.loadRoutines().catch(() => emptyRoutineSnapshot()),
+        schemaLoader.loadDatabases().catch((e) => {
+          connection.console.error(`SQL Prompt: loadDatabases failed — ${e?.message ?? e}`);
+          return [];
+        }),
       ]);
       connection.console.info(
-        `SQL Prompt: schema updated via mssql connection. Loaded ${tables.length} tables, ${routines.scalarFunctions.length} scalar function(s), ${routines.tableValuedFunctions.length} table-valued function(s), ${routines.storedProcedures.length} procedure(s).`,
+        `SQL Prompt: schema updated via mssql connection. Loaded ${tables.length} tables, ${routines.scalarFunctions.length} scalar function(s), ${routines.tableValuedFunctions.length} table-valued function(s), ${routines.storedProcedures.length} procedure(s), ${databases.length} database(s).`,
       );
       connection.sendNotification("sqlPrompt/schemaLoadingCompleted", {
         tableCount: tables.length,
@@ -111,6 +117,7 @@ connection.onRequest(
     scalarFunctions?: ScalarFunctionInfo[];
     tableValuedFunctions?: TableValuedFunctionInfo[];
     storedProcedures?: StoredProcedureInfo[];
+    databases?: string[];
   }) => {
     try {
       if (schemaLoader) {
@@ -120,8 +127,9 @@ connection.onRequest(
 
       tables = sanitizeTableSnapshot(Array.isArray(params?.tables) ? params.tables : []);
       routines = sanitizeRoutineSnapshot(params);
+      databases = Array.isArray(params?.databases) ? params.databases.filter((d) => typeof d === 'string' && d.length > 0) : [];
       connection.console.info(
-        `SQL Prompt: schema updated via connectionSharing snapshot. Loaded ${tables.length} tables, ${routines.scalarFunctions.length} scalar function(s), ${routines.tableValuedFunctions.length} table-valued function(s), ${routines.storedProcedures.length} procedure(s).`,
+        `SQL Prompt: schema updated via connectionSharing snapshot. Loaded ${tables.length} tables, ${routines.scalarFunctions.length} scalar function(s), ${routines.tableValuedFunctions.length} table-valued function(s), ${routines.storedProcedures.length} procedure(s), ${databases.length} database(s).`,
       );
       return { success: true, tableCount: tables.length };
     } catch (err: any) {
@@ -142,6 +150,7 @@ connection.onRequest("sqlPrompt/disconnect", async () => {
     schemaLoader = null;
     tables = [];
     routines = emptyRoutineSnapshot();
+    databases = [];
   }
   return { success: true };
 });
@@ -153,9 +162,13 @@ connection.onRequest("sqlPrompt/reloadSchema", async () => {
       message: "Reloading schema...",
     });
     try {
-      [tables, routines] = await Promise.all([
+      [tables, routines, databases] = await Promise.all([
         schemaLoader.loadSchema(),
         schemaLoader.loadRoutines().catch(() => emptyRoutineSnapshot()),
+        schemaLoader.loadDatabases().catch((e) => {
+          connection.console.error(`SQL Prompt: loadDatabases (reload) failed — ${e?.message ?? e}`);
+          return [];
+        }),
       ]);
       connection.sendNotification("sqlPrompt/schemaLoadingCompleted", {
         tableCount: tables.length,
@@ -296,7 +309,7 @@ connection.onCompletion(
       `isAfterDot=${context.isAfterDot} sources=${context.visibleSources.length}`,
     );
 
-    return buildCompletions(context, tables, routines, document, position, statementRange);
+    return buildCompletions(context, tables, routines, document, position, statementRange, databases);
   },
 );
 

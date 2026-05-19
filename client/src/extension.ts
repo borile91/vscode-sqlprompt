@@ -25,14 +25,27 @@ import {
 
 let client: LanguageClient | undefined;
 let connectionSyncDebounce: ReturnType<typeof setTimeout> | undefined;
+let databaseCheckDebounce: ReturnType<typeof setTimeout> | undefined;
 let mssqlApiPromise: Promise<any | undefined> | undefined;
 let mssqlIntellisenseSuppressed = false;
+const SCHEMA_CACHE_TTL_MS = 5 * 60 * 1000;
+
+/** Tracks the database that was active when the schema was last synced, keyed by ownerUri. */
+const lastSyncedDatabasePerUri = new Map<string, string>();
 
 // ── Go to Definition state ────────────────────────────────────────────────────
 let lastOwnerUri: string | undefined;
 let lastTablesSnapshot: TableInfo[] = [];
 const definitionScriptCache = new Map<string, string>();
 const onDefinitionContentChange = new EventEmitter<Uri>();
+const schemaSnapshotCache = new Map<
+    string,
+    {
+        snapshot: SchemaSnapshot;
+        cachedAt: number;
+    }
+>();
+const inFlightSchemaSyncs = new Map<string, Promise<boolean>>();
 
 type ColumnInfo = {
     name: string;
@@ -96,6 +109,7 @@ type SchemaSnapshot = {
     scalarFunctions: ScalarFunctionInfo[];
     tableValuedFunctions: TableValuedFunctionInfo[];
     storedProcedures: StoredProcedureInfo[];
+    databases?: string[];
 };
 
 function getSchemaObjectCount(snapshot: SchemaSnapshot): number {
@@ -105,6 +119,31 @@ function getSchemaObjectCount(snapshot: SchemaSnapshot): number {
         snapshot.tableValuedFunctions.length +
         snapshot.storedProcedures.length
     );
+}
+
+function buildSchemaCacheKey(connectionId: string, database: string | undefined): string {
+    return `${connectionId.toLowerCase()}::${(database ?? "").toLowerCase()}`;
+}
+
+function getCachedSchemaSnapshot(cacheKey: string): SchemaSnapshot | undefined {
+    const cachedEntry = schemaSnapshotCache.get(cacheKey);
+    if (!cachedEntry) {
+        return undefined;
+    }
+
+    if (Date.now() - cachedEntry.cachedAt > SCHEMA_CACHE_TTL_MS) {
+        schemaSnapshotCache.delete(cacheKey);
+        return undefined;
+    }
+
+    return cachedEntry.snapshot;
+}
+
+function setCachedSchemaSnapshot(cacheKey: string, snapshot: SchemaSnapshot): void {
+    schemaSnapshotCache.set(cacheKey, {
+        snapshot,
+        cachedAt: Date.now(),
+    });
 }
 
 // Our extension's identifier as published — used by the mssql connectionSharing
@@ -468,6 +507,13 @@ async function loadSchemaViaConnectionSharing(ownerUri: string): Promise<SchemaS
                         ORDER BY s.name, o.name, p.parameter_id
                 `;
 
+    const databasesQuery = `
+        SELECT name
+        FROM sys.databases
+        WHERE state_desc = 'ONLINE'
+        ORDER BY name
+    `;
+
     try {
         const result = await api.connectionSharing.executeSimpleQuery?.(
             ownerUri,
@@ -486,16 +532,32 @@ async function loadSchemaViaConnectionSharing(ownerUri: string): Promise<SchemaS
         } catch {
             routinesResult = undefined;
         }
+        let databasesResult: any;
+        try {
+            databasesResult = await api.connectionSharing.executeSimpleQuery?.(
+                ownerUri,
+                databasesQuery,
+            );
+        } catch {
+            databasesResult = undefined;
+        }
 
         const rows = extractRowsFromSimpleQueryResult(result);
         const fkRows = extractRowsFromSimpleQueryResult(fkResult);
         const routineRows = extractRowsFromSimpleQueryResult(routinesResult);
+        const dbRows = extractRowsFromSimpleQueryResult(databasesResult);
 
-        console.log(`[SQL Prompt] Schema rows: ${rows.length}, FK rows: ${fkRows.length}, Routine rows: ${routineRows.length}`);
+        console.log(`[SQL Prompt] Schema rows: ${rows.length}, FK rows: ${fkRows.length}, Routine rows: ${routineRows.length}, DB rows: ${dbRows.length}`);
 
         const schemaTables = mapRowsToSchemaSnapshot(rows);
         const foreignKeys = mapRowsToForeignKeys(fkRows);
         const routineSnapshot = mapRowsToRoutineSnapshot(routineRows);
+        const databases = dbRows
+            .map((r: any) => {
+                const v = r?.name ?? r?.Name;
+                return typeof v === 'string' ? v : typeof v === 'object' && v !== null ? (v.displayValue ?? v.value ?? '') : '';
+            })
+            .filter((n: string) => n.length > 0);
 
         console.log(`[SQL Prompt] Routines loaded: ${routineSnapshot.scalarFunctions.length} scalar, ${routineSnapshot.tableValuedFunctions.length} TVF, ${routineSnapshot.storedProcedures.length} procedures`);
 
@@ -504,6 +566,7 @@ async function loadSchemaViaConnectionSharing(ownerUri: string): Promise<SchemaS
             scalarFunctions: routineSnapshot.scalarFunctions,
             tableValuedFunctions: routineSnapshot.tableValuedFunctions,
             storedProcedures: routineSnapshot.storedProcedures,
+            databases,
         };
     } catch {
         return undefined;
@@ -555,6 +618,42 @@ async function restoreMssqlIntellisense(): Promise<void> {
     }
 }
 
+/**
+ * Polls the mssql extension for the currently active database.
+ * If it differs from the last synced database for the active SQL editor,
+ * triggers a full schema re-sync (e.g. after the user executes USE <db>).
+ */
+async function checkForDatabaseChange(): Promise<void> {
+    const editor = window.activeTextEditor;
+    if (!editor || editor.document.languageId !== 'sql') {
+        return;
+    }
+
+    const api = await getMssqlApi();
+    if (!api?.connectionSharing) {
+        return;
+    }
+
+    const ownerUri = editor.document.uri.toString();
+
+    try {
+        const isConnected = await api.connectionSharing.isConnected?.(ownerUri);
+        if (!isConnected) {
+            return;
+        }
+
+        const activeDatabase = await api.connectionSharing.getActiveDatabase?.(EXTENSION_ID);
+        const lastDatabase = lastSyncedDatabasePerUri.get(ownerUri);
+
+        if (activeDatabase && lastDatabase !== undefined && activeDatabase !== lastDatabase) {
+            console.log(`[SQL Prompt] Database changed: ${lastDatabase} → ${activeDatabase}, re-syncing schema.`);
+            await syncMssqlConnection(false);
+        }
+    } catch {
+        // API may be unavailable — ignore
+    }
+}
+
 async function syncMssqlConnection(showNotification = false): Promise<boolean> {
     if (!client) {
         console.log("SQL Prompt: syncMssqlConnection — client not ready");
@@ -574,77 +673,141 @@ async function syncMssqlConnection(showNotification = false): Promise<boolean> {
 
     const ownerUri = editor.document.uri.toString();
 
-    try {
-        const isConnected = await api.connectionSharing.isConnected?.(ownerUri);
-        if (!isConnected) {
-            console.log("SQL Prompt: syncMssqlConnection — active SQL file is not connected in mssql");
-            return false;
-        }
-    } catch {
-        return false;
+    const existingSync = inFlightSchemaSyncs.get(ownerUri);
+    if (existingSync) {
+        return existingSync;
     }
 
-    // Show progress while loading schema
-    const result = await window.withProgress(
-        { location: 15, title: "SQL Prompt: Loading schema..." }, // 15 = ProgressLocation.Notification
-        async () => {
-            const schemaSnapshot = await loadSchemaViaConnectionSharing(ownerUri);
-            if (!schemaSnapshot) {
-                return null;
+    let syncPromise!: Promise<boolean>;
+    syncPromise = (async (): Promise<boolean> => {
+        try {
+            const api = await getMssqlApi();
+            if (!api?.connectionSharing) {
+                return false;
             }
-
-            // Keep a local copy for Go to Definition (CREATE TABLE generation for tables)
-            lastOwnerUri = ownerUri;
-            lastTablesSnapshot = schemaSnapshot.tables;
 
             try {
-                const objectCount = getSchemaObjectCount(schemaSnapshot);
-
-                const updateResult = await client!.sendRequest<{
-                    success: boolean;
-                    tableCount: number;
-                }>("sqlPrompt/updateSchemaSnapshot", {
-                    tables: schemaSnapshot.tables,
-                    scalarFunctions: schemaSnapshot.scalarFunctions,
-                    tableValuedFunctions: schemaSnapshot.tableValuedFunctions,
-                    storedProcedures: schemaSnapshot.storedProcedures,
-                });
-
-                if (!updateResult?.success) {
-                    return null;
-                }
-
-                await suppressMssqlIntellisense();
-
-                window.setStatusBarMessage(
-                    `SQL Prompt: schema loaded — ${objectCount} object(s)`,
-                    5000,
-                );
-
-                if (showNotification) {
-                    let dbDetail = "";
-                    try {
-                        const db: string | undefined =
-                            await api.connectionSharing.getActiveDatabase?.(EXTENSION_ID);
-                        if (db) {
-                            dbDetail = ` · ${db}`;
-                        }
-                    } catch {
-                        /* permission not yet granted or no active connection */
-                    }
-                    window.showInformationMessage(
-                        `SQL Prompt: connected${dbDetail} — ${objectCount} object(s) loaded`,
+                const isConnected = await api.connectionSharing.isConnected?.(ownerUri);
+                if (!isConnected) {
+                    console.log(
+                        "SQL Prompt: syncMssqlConnection — active SQL file is not connected in mssql",
                     );
+                    return false;
                 }
-
-                return true;
             } catch {
-                return null;
+                return false;
+            }
+
+            let activeConnectionId: string | undefined;
+            let activeDatabase: string | undefined;
+            try {
+                activeConnectionId = await api.connectionSharing.getActiveEditorConnectionId?.(
+                    EXTENSION_ID,
+                );
+                if (activeConnectionId) {
+                    activeDatabase = await api.connectionSharing.getActiveDatabase?.(EXTENSION_ID);
+                    if (!activeDatabase) {
+                        activeDatabase = await api.connectionSharing.getDatabaseForConnectionId?.(
+                            EXTENSION_ID,
+                            activeConnectionId,
+                        );
+                    }
+                }
+            } catch {
+                activeConnectionId = undefined;
+                activeDatabase = undefined;
+            }
+
+            const cacheKey = activeConnectionId
+                ? buildSchemaCacheKey(activeConnectionId, activeDatabase)
+                : undefined;
+            const cachedSnapshot = cacheKey ? getCachedSchemaSnapshot(cacheKey) : undefined;
+
+            const publishSchemaSnapshot = async (
+                schemaSnapshot: SchemaSnapshot,
+                isCached: boolean,
+            ): Promise<boolean> => {
+                lastOwnerUri = ownerUri;
+                lastTablesSnapshot = schemaSnapshot.tables;
+
+                try {
+                    const objectCount = getSchemaObjectCount(schemaSnapshot);
+                    const updateResult = await client!.sendRequest<{
+                        success: boolean;
+                        tableCount: number;
+                    }>("sqlPrompt/updateSchemaSnapshot", {
+                        tables: schemaSnapshot.tables,
+                        scalarFunctions: schemaSnapshot.scalarFunctions,
+                        tableValuedFunctions: schemaSnapshot.tableValuedFunctions,
+                        storedProcedures: schemaSnapshot.storedProcedures,
+                        databases: schemaSnapshot.databases ?? [],
+                    });
+
+                    if (!updateResult?.success) {
+                        return false;
+                    }
+
+                    // Record the database that is now active for this URI so
+                    // checkForDatabaseChange() can detect future USE switches.
+                    if (activeDatabase !== undefined) {
+                        lastSyncedDatabasePerUri.set(ownerUri, activeDatabase);
+                    }
+
+                    await suppressMssqlIntellisense();
+
+                    const statusMessage = isCached
+                        ? `SQL Prompt: schema restored from cache — ${objectCount} object(s)`
+                        : `SQL Prompt: schema loaded — ${objectCount} object(s)`;
+                    window.setStatusBarMessage(statusMessage, 5000);
+
+                    if (showNotification) {
+                        let dbDetail = "";
+                        if (activeDatabase) {
+                            dbDetail = ` · ${activeDatabase}`;
+                        }
+                        window.showInformationMessage(
+                            `SQL Prompt: connected${dbDetail} — ${objectCount} object(s) loaded`,
+                        );
+                    }
+
+                    return true;
+                } catch {
+                    return false;
+                }
+            };
+
+            if (cachedSnapshot) {
+                return await publishSchemaSnapshot(cachedSnapshot, true);
+            }
+
+            const result = await window.withProgress(
+                { location: 15, title: "SQL Prompt: Loading schema..." },
+                async () => {
+                    const schemaSnapshot = await loadSchemaViaConnectionSharing(ownerUri);
+                    if (!schemaSnapshot) {
+                        return null;
+                    }
+
+                    const published = await publishSchemaSnapshot(schemaSnapshot, false);
+                    if (published && cacheKey) {
+                        setCachedSchemaSnapshot(cacheKey, schemaSnapshot);
+                    }
+
+                    return published;
+                },
+            );
+
+            return result === true;
+        } finally {
+            const currentSync = inFlightSchemaSyncs.get(ownerUri);
+            if (currentSync === syncPromise) {
+                inFlightSchemaSyncs.delete(ownerUri);
             }
         }
-    );
+    })();
 
-    return result === true;
+    inFlightSchemaSyncs.set(ownerUri, syncPromise);
+    return syncPromise;
 }
 
 /**
@@ -852,6 +1015,34 @@ export async function activate(context: ExtensionContext) {
         window.onDidChangeActiveTextEditor(async (editor) => {
             if (editor && editor.document.languageId === "sql") {
                 await syncMssqlConnection();
+            }
+        }),
+
+        // Detect USE <database> execution: debounce on text changes so that after
+        // the user runs a query the active database is checked and schema re-synced.
+        workspace.onDidChangeTextDocument((event) => {
+            if (event.document.languageId !== "sql") {
+                return;
+            }
+            if (databaseCheckDebounce) {
+                clearTimeout(databaseCheckDebounce);
+            }
+            databaseCheckDebounce = setTimeout(async () => {
+                databaseCheckDebounce = undefined;
+                await checkForDatabaseChange();
+            }, 2000);
+        }),
+
+        // Also check when VS Code window regains focus (user ran query and switched back).
+        window.onDidChangeWindowState((state) => {
+            if (state.focused) {
+                if (databaseCheckDebounce) {
+                    clearTimeout(databaseCheckDebounce);
+                }
+                databaseCheckDebounce = setTimeout(async () => {
+                    databaseCheckDebounce = undefined;
+                    await checkForDatabaseChange();
+                }, 500);
             }
         }),
     );

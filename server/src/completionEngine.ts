@@ -83,7 +83,13 @@ export function buildCompletions(
   document: TextDocument,
   position: Position,
   statementRange: StatementRange,
+  databases: string[] = [],
 ): CompletionItem[] {
+  // ── 0. USE <database> completions ────────────────────────────────────────
+  if (context.clause === 'use') {
+    return buildDatabaseCompletions(databases, document, position);
+  }
+
   // ── 1. Dot-qualified completions ─────────────────────────────────────────
   if (context.isAfterDot && context.qualifierChain?.length) {
     return buildDotCompletions(context, tables, routines, position);
@@ -1089,3 +1095,25 @@ function replaceRangeWordOnly(lineText: string, position: Position): Range {
 /** Regex: `FROM schema.` or `JOIN schema.` — schema-qualified table context. */
 const SCHEMA_DOT_PATTERN =
   /\b(?:FROM|JOIN|INNER\s+JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|CROSS\s+JOIN|LEFT\s+OUTER\s+JOIN|RIGHT\s+OUTER\s+JOIN|FULL\s+JOIN|FULL\s+OUTER\s+JOIN|APPLY|OUTER\s+APPLY|CROSS\s+APPLY)\s+(\w+)\.\s*\w*$/i;
+
+function buildDatabaseCompletions(
+  databases: string[],
+  document: TextDocument,
+  position: Position,
+): CompletionItem[] {
+  const lineText = document.getText({
+    start: { line: position.line, character: 0 },
+    end: position,
+  });
+  const replaceRange = replaceRangeWordOnly(lineText, position);
+
+  return databases.map((dbName) => ({
+    label: dbName,
+    kind: CompletionItemKind.Module,
+    detail: 'Database',
+    filterText: dbName,
+    textEdit: TextEdit.replace(replaceRange, dbName),
+    insertTextFormat: InsertTextFormat.PlainText,
+    sortText: `01_db_${dbName}`,
+  }));
+}
