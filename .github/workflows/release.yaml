@@ -48,6 +48,11 @@ jobs:
       - name: Build extension
         run: npm run compile
 
+      - name: Prune dev dependencies
+        run: |
+          npm --prefix client prune --omit=dev
+          npm --prefix server prune --omit=dev
+
       - name: Package VSIX
         run: printf 'y\n' | npx @vscode/vsce package --out vscode-sqlprompt.vsix
 

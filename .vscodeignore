@@ -1,12 +1,11 @@
 .github/**
 .vscode/**
 docs/**
-**/node_modules/**
 client/src/**
 server/src/**
 server/out/__tests__/**
-client/package-lock.json
-server/package-lock.json
+**/package-lock.json
+**/.package-lock.json
 client/tsconfig.json
 server/tsconfig.json
 *.vsix
