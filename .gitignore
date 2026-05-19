@@ -4,3 +4,4 @@ out/
 client/out/
 server/out/
 .vscode-test/
+*.tsbuildinfo
