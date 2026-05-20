@@ -269,8 +269,10 @@ export function buildCompletions(
       items.push(...buildColumnCompletionsForSources(context.visibleSources));
       break;
 
-    default:
-      // Always offer the SSF snippet at statement-level context.
+    default: {
+      // Always offer snippet completions at statement-level context.
+      const replaceRange = replaceRangeWordOnly(lineText, position);
+      
       items.push({
         label: 'ssf',
         kind: CompletionItemKind.Snippet,
@@ -278,10 +280,17 @@ export function buildCompletions(
         insertTextFormat: InsertTextFormat.PlainText,
         detail: 'SELECT * FROM',
         sortText: '01_snippet_ssf',
-        textEdit: TextEdit.replace(
-          Range.create(position.line, position.character, position.line, position.character),
-          'SELECT * FROM ',
-        ),
+        textEdit: TextEdit.replace(replaceRange, 'SELECT * FROM '),
+      });
+
+      items.push({
+        label: 'scf',
+        kind: CompletionItemKind.Snippet,
+        insertText: 'SELECT COUNT(*) FROM ',
+        insertTextFormat: InsertTextFormat.PlainText,
+        detail: 'SELECT COUNT(*) FROM',
+        sortText: '01_snippet_scf',
+        textEdit: TextEdit.replace(replaceRange, 'SELECT COUNT(*) FROM '),
       });
       // General SQL context: keywords + tables when in a recognisable DML statement.
       if (context.statementKind !== 'unknown') {
@@ -306,6 +315,7 @@ export function buildCompletions(
         }
       }
       break;
+    }
   }
 
   return items;
