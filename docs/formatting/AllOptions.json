@@ -1,0 +1,98 @@
+{
+  "metadata": {
+    "id": "2dc5cd9a-4556-44d8-9f41-6a1e0b6664a1",
+    "name": "AllOptions"
+  },
+  "whitespace": {
+    "numberOfSpacesInTabs": 4,
+    "wrapLinesLongerThan": 200,
+    "newLines": {
+      "preserveExistingEmptyLinesBetweenStatements": false,
+      "preserveExistingEmptyLinesAfterBatchSeparator": false,
+      "alignGroupOfSingleLineComments": false,
+      "alignMultilineCommentsMatchingPatterns": true,
+      "emptyLinesBetweenStatements": 1,
+      "emptyLinesAfterBatchSeparator": 1
+    }
+  },
+  "lists": {
+    "alignComments": true,
+    "placeCommasBeforeItems": true,
+    "addSpaceBeforeComma": true,
+    "placeSubsequentItemsOnNewLines": "never",
+    "alignSubsequentItemsWithFirstItem": true,
+    "alignItemsAcrossClauses": true,
+    "alignItemsToTabStops": true
+  },
+  "parentheses": {
+    "collapseParenthesesShorterThan": 78,
+    "addSpacesInsideParentheses": true
+  },
+  "casing": {
+    "reservedKeywords": "uppercase",
+    "builtInFunctions": "uppercase",
+    "builtInDataTypes": "uppercase",
+    "useObjectDefinitionCase": true
+  },
+  "dml": {
+    "collapseStatementsShorterThan": 75,
+    "collapseSubqueriesShorterThan": 15
+  },
+  "ddl": {
+    "parenthesisStyle": "expandedIndented",
+    "indentClauses": true,
+    "placeFirstProcedureParameterOnNewLine": "always",
+    "collapseStatementsShorterThan": 75
+  },
+  "controlFlow": {
+    "indentBeginAndEndKeywords": true,
+    "collapseStatementsShorterThan": 78
+  },
+  "cte": {
+    "asAlignment": "indented"
+  },
+  "variables": {
+    "placeAssignedValueOnNewLineIfLongerThanMaxLineLength": false
+  },
+  "joinStatements": {
+    "join": {
+      "keywordAlignment": "toTable",
+      "indentJoinTable": false
+    },
+    "on": {
+      "keywordAlignment": "indented",
+      "conditionAlignment": "toInner"
+    }
+  },
+  "insertStatements": {
+    "columns": {
+      "parenthesisStyle": "compactSimple",
+      "indentContents": false
+    },
+    "values": {
+      "parenthesisStyle": "compactSimple"
+    }
+  },
+  "functionCalls": {
+    "placeArgumentsOnNewLines": "never"
+  },
+  "caseExpressions": {
+    "placeExpressionOnNewLine": false,
+    "placeFirstWhenOnNewLine": "ifInputExpression",
+    "whenAlignment": "toFirstItem",
+    "collapseCaseExpressionsShorterThan": 75
+  },
+  "operators": {
+    "andOr": {
+      "alignment": "toFirstListItem"
+    },
+    "between": {
+      "placeOnNewLine": false
+    },
+    "in": {
+      "placeFirstValueOnNewLine": "never",
+      "placeSubsequentValuesOnNewLines": "never",
+      "addSpaceAroundInContents": true
+    }
+  }
+}

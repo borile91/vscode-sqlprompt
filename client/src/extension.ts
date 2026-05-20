@@ -1251,6 +1251,12 @@ export async function activate(context: ExtensionContext) {
             new SqlFormattingProvider(getActiveStyle),
         ),
         commands.registerCommand('sqlPrompt.selectFormattingStyle', async () => {
+            const stylesFolder = workspace
+                .getConfiguration('sqlPrompt.formatting')
+                .get<string>('stylesFolder', '');
+            if (stylesFolder) {
+                loadedStyles = await loadStylesFromFolder(stylesFolder);
+            }
             if (loadedStyles.length === 0) {
                 window.showWarningMessage(
                     'SQL Prompt: no style files found. Set sqlPrompt.formatting.stylesFolder to a folder containing .json style files.',

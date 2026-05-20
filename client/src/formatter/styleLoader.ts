@@ -16,7 +16,12 @@ export interface SqlPromptStyleJson {
         alignComments?: boolean;
         addSpaceBeforeComma?: boolean;
     };
+    parentheses?: {
+        collapseParenthesesShorterThan?: number;
+        addSpacesInsideParentheses?: boolean;
+    };
     whitespace?: {
+        numberOfSpacesInTabs?: number;
         wrapLinesLongerThan?: number;
         newLines?: {
             preserveExistingEmptyLinesBetweenStatements?: boolean;
@@ -30,6 +35,11 @@ export interface SqlPromptStyleJson {
         between?: {
             placeOnNewLine?: boolean;
         };
+        in?: {
+            placeFirstValueOnNewLine?: 'always' | 'never' | 'ifMultiple';
+            placeSubsequentValuesOnNewLines?: 'always' | 'never' | 'ifMultiple';
+            addSpaceAroundInContents?: boolean;
+        };
     };
     dml?: {
         collapseStatementsShorterThan?: number;
@@ -38,6 +48,19 @@ export interface SqlPromptStyleJson {
     ddl?: {
         parenthesisStyle?: string;
         indentClauses?: boolean;
+        placeFirstProcedureParameterOnNewLine?: 'always' | 'never' | 'ifMultiple';
+        collapseStatementsShorterThan?: number;
+    };
+    controlFlow?: {
+        indentBeginAndEndKeywords?: boolean;
+        indentContentsOfStatements?: boolean;
+        collapseStatementsShorterThan?: number;
+    };
+    cte?: {
+        asAlignment?: 'indented' | 'aligned';
+    };
+    variables?: {
+        placeAssignedValueOnNewLineIfLongerThanMaxLineLength?: boolean;
     };
     joinStatements?: {
         join?: {
@@ -48,6 +71,24 @@ export interface SqlPromptStyleJson {
             keywordAlignment?: string;
             conditionAlignment?: string;
         };
+    };
+    insertStatements?: {
+        columns?: {
+            parenthesisStyle?: string;
+            indentContents?: boolean;
+        };
+        values?: {
+            parenthesisStyle?: string;
+        };
+    };
+    functionCalls?: {
+        placeArgumentsOnNewLines?: 'always' | 'never' | 'ifLong';
+    };
+    caseExpressions?: {
+        placeExpressionOnNewLine?: boolean;
+        placeFirstWhenOnNewLine?: 'always' | 'never' | 'ifInputExpression';
+        whenAlignment?: string;
+        collapseCaseExpressionsShorterThan?: number;
     };
 }
 

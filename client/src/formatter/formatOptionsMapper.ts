@@ -10,7 +10,7 @@ function mapCasing(value: string | undefined): 'upper' | 'lower' | 'preserve' {
 export function mapToFormatterOptions(style: SqlPromptStyleJson): FormatOptionsWithLanguage {
     const opts: FormatOptionsWithLanguage = {
         language: 'tsql',
-        tabWidth: 4,
+        tabWidth: style.whitespace?.numberOfSpacesInTabs ?? 4,
         linesBetweenQueries: 1,
     };
 
@@ -22,6 +22,11 @@ export function mapToFormatterOptions(style: SqlPromptStyleJson): FormatOptionsW
 
     if (style.whitespace?.wrapLinesLongerThan !== undefined) {
         opts.expressionWidth = style.whitespace.wrapLinesLongerThan;
+    }
+
+    // "toTable" keyword alignment implies a tabular (vertical) indentation style
+    if (style.joinStatements?.join?.keywordAlignment === 'toTable') {
+        opts.indentStyle = 'tabularLeft';
     }
 
     if (style.operators?.andOr?.alignment) {

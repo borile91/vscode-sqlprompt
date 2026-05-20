@@ -1,0 +1,17 @@
+Actual:
+SELECT    TerritoryID,
+          Name,
+          [Group] -- nvarchar(50)
+,
+          SalesYTD AS YearToDate -- money
+,
+          SalesLastYear AS LastYear -- money
+FROM      Sales.SalesTerritory
+
+Expected:
+SELECT TerritoryID
+     , Name
+     , [Group]                   -- nvarchar(50)
+     , SalesYTD AS YearToDate    -- money
+     , SalesLastYear AS LastYear -- money
+FROM   Sales.SalesTerritory
