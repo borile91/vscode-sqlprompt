@@ -1,0 +1,179 @@
+/**
+ * Re-pads keyword spacing after sql-formatter's tabularLeft output.
+ *
+ * sql-formatter uses a fixed keyword column width of 10 for T-SQL (sized to fit
+ * ORDER BY + 2 spaces). SQL Prompt uses the minimum width needed for the keywords
+ * that actually appear in each query block (max_keyword_length + 1 space).
+ *
+ * This post-processor detects the keywords present in each blank-line-separated
+ * query block, computes the optimal width, and re-pads every keyword line and
+ * continuation line within the block.
+ *
+ * Must run BEFORE applyLeadingCommaFormat so that continuation-line widths are
+ * already correct when leading commas are placed.
+ */
+
+/** Fixed keyword column width produced by sql-formatter tabularLeft for T-SQL. */
+const SQL_FORMATTER_KW_WIDTH = 10;
+
+/**
+ * Keywords as they appear as the FIRST token on a line in sql-formatter tabularLeft
+ * T-SQL output, ordered longest-first to avoid prefix shadowing.
+ *
+ * Notes:
+ *  - "LEFT JOIN" (9) and "FULL JOIN" (9) are compound tokens recognised by
+ *    sql-formatter; "INNER JOIN", "RIGHT JOIN", "CROSS JOIN" etc. are not — they
+ *    appear as  "INNER     JOIN …", "RIGHT     JOIN …", "CROSS     JOIN …".
+ *  - "ORDER BY" (8) and "GROUP BY" (8) are also compound tokens.
+ */
+const KEYWORD_TOKENS: string[] = [
+    'INTERSECT',   // 9
+    'LEFT JOIN',   // 9
+    'FULL JOIN',   // 9
+    'ORDER BY',    // 8
+    'GROUP BY',    // 8
+    'EXECUTE',     // 7
+    'HAVING',      // 6
+    'SELECT',      // 6
+    'VALUES',      // 6
+    'OUTPUT',      // 6
+    'UPDATE',      // 6
+    'DELETE',      // 6
+    'INSERT',      // 6
+    'EXCEPT',      // 6
+    'INNER',       // 5  (appears before JOIN … as content)
+    'RIGHT',       // 5  (appears before JOIN … or OUTER JOIN …)
+    'CROSS',       // 5  (appears before JOIN …)
+    'UNION',       // 5
+    'WHERE',       // 5
+    'MERGE',       // 5
+    'PIVOT',       // 5
+    'PRINT',       // 5
+    'USING',       // 5
+    'FETCH',       // 5
+    'FROM',        // 4
+    'LEFT',        // 4  (appears before OUTER JOIN …)
+    'FULL',        // 4  (appears before OUTER JOIN …)
+    'INTO',        // 4
+    'EXEC',        // 4
+    'WITH',        // 4
+    'AND',         // 3
+    'SET',         // 3
+    'OR',          // 2
+    'ON',          // 2
+];
+
+interface DetectedKeyword {
+    /** Number of leading spaces before the keyword. */
+    indent: number;
+    /** The keyword token as found in the line (preserves case). */
+    token: string;
+    /** Length of the canonical keyword (from KEYWORD_TOKENS). */
+    canonicalLength: number;
+    /** Everything after the keyword + its trailing spaces (the "content"). */
+    content: string;
+}
+
+/** Regex cache for each keyword token. */
+const kwRegexCache = new Map<string, RegExp>();
+
+function getKwRegex(kw: string): RegExp {
+    let re = kwRegexCache.get(kw);
+    if (!re) {
+        // Escape spaces: "ORDER BY" → "ORDER\s+BY" to handle any whitespace between words
+        const pattern = kw.replace(/\s+/g, '\\s+');
+        re = new RegExp(`^(\\s*)(${pattern})[ \\t]+(.+)$`, 'i');
+        kwRegexCache.set(kw, re);
+    }
+    return re;
+}
+
+function detectKeyword(line: string): DetectedKeyword | null {
+    for (const kw of KEYWORD_TOKENS) {
+        const m = line.match(getKwRegex(kw));
+        if (m) {
+            return {
+                indent: m[1].length,
+                token: m[2],
+                canonicalLength: kw.length,
+                content: m[3],
+            };
+        }
+    }
+    return null;
+}
+
+/**
+ * Re-pads all lines in `block` (a blank-line-free fragment) from the
+ * sql-formatter fixed width to the minimal width needed.
+ *
+ * Groups keyword lines by indent level; computes one new width per indent level
+ * (max canonical keyword length at that level + 1 space minimum).
+ *
+ * Continuation lines (lines whose leading whitespace = indent + OLD_WIDTH) are
+ * re-padded to indent + new_width.
+ */
+function rePadBlock(block: string, oldWidth: number): string {
+    const lines = block.split('\n');
+
+    // Build indent → max keyword length map
+    const indentMaxLen = new Map<number, number>();
+    for (const line of lines) {
+        const kw = detectKeyword(line);
+        if (kw) {
+            const prev = indentMaxLen.get(kw.indent) ?? 0;
+            indentMaxLen.set(kw.indent, Math.max(prev, kw.canonicalLength));
+        }
+    }
+
+    if (indentMaxLen.size === 0) return block;
+
+    // New width for each indent level
+    const indentNewWidth = new Map<number, number>();
+    for (const [indent, maxLen] of indentMaxLen) {
+        const newWidth = maxLen + 1; // at least 1 space after keyword
+        indentNewWidth.set(indent, newWidth);
+    }
+
+    const newLines = lines.map(line => {
+        // 1. Keyword line — adjust spacing after the keyword token
+        const kw = detectKeyword(line);
+        if (kw) {
+            const newWidth = indentNewWidth.get(kw.indent)!;
+            if (newWidth === oldWidth) return line;
+            const padding = ' '.repeat(newWidth - kw.token.replace(/\s+/g, ' ').length);
+            return ' '.repeat(kw.indent) + kw.token + padding + kw.content;
+        }
+
+        // 2. Continuation line — its leading spaces = indent + oldWidth
+        for (const [indent, newWidth] of indentNewWidth) {
+            if (newWidth === oldWidth) continue;
+            const oldLeading = indent + oldWidth;
+            if (
+                line.length > oldLeading &&
+                line.slice(0, oldLeading) === ' '.repeat(oldLeading) &&
+                line[oldLeading] !== ' '
+            ) {
+                return ' '.repeat(indent + newWidth) + line.slice(oldLeading);
+            }
+        }
+
+        return line;
+    });
+
+    return newLines.join('\n');
+}
+
+/**
+ * Applies minimal keyword padding to sql-formatter tabularLeft output.
+ * Processes each blank-line-separated query block independently so that
+ * two-clause queries (SELECT/FROM only) get width 7, while queries with
+ * ORDER BY get width 9, etc.
+ */
+export function applyKeywordRePadding(sql: string): string {
+    // Split on blank lines, preserving the separators
+    const parts = sql.split(/(\n{2,})/);
+    return parts
+        .map(part => (/^\n+$/.test(part) ? part : rePadBlock(part, SQL_FORMATTER_KW_WIDTH)))
+        .join('');
+}

@@ -11,6 +11,8 @@ import { format } from 'sql-formatter';
 import type { LoadedStyle } from './styleLoader';
 import { mapToFormatterOptions } from './formatOptionsMapper';
 import { applyControlFlowIndentation } from './controlFlowFormatter';
+import { applyKeywordRePadding } from './keywordPaddingFormatter';
+import { applyLeadingCommaFormat } from './listFormatter';
 
 export class SqlFormattingProvider implements DocumentFormattingEditProvider {
     constructor(private readonly getStyle: () => LoadedStyle | undefined) {}
@@ -33,6 +35,8 @@ export class SqlFormattingProvider implements DocumentFormattingEditProvider {
         try {
             const tabWidth = style.options.whitespace?.numberOfSpacesInTabs ?? 4;
             formatted = format(text, mapToFormatterOptions(style.options));
+            formatted = applyKeywordRePadding(formatted);
+            formatted = applyLeadingCommaFormat(formatted, style.options);
             formatted = applyControlFlowIndentation(formatted, style.options, tabWidth);
         } catch {
             return [];
