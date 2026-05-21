@@ -1,0 +1,324 @@
+// SQL Prompt Style: "1 - MadLab Vertical"
+// Mapped from: 1 - MadLab Vertical.sqlpromptstylev2  (OptionsVersion 12)
+// Keys marked with (?) are uncertain — see mapping-doubts.md
+{
+  "metadata": {
+    "name": "1 - MadLab Vertical",
+    "version": 12                         // OptionsVersion
+  },
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // WHITESPACE
+  // ──────────────────────────────────────────────────────────────────────────
+  "whitespace": {
+    "numberOfSpacesInTabs": 4,            // NumberOfSpacesInTab
+    // "onlySpaces" | "onlyTabs" | "spacesAndTabs"
+    "spacesOrTabs": "onlySpaces",         // SpacesOrTabs: OnlySpaces
+    "wrapLinesLongerThan": 200,           // WrapColumn
+    "wrapLongLines": true,                // WrapLongLines
+    "newLines": {
+      "preserveExistingEmptyLinesBetweenStatements": false,  // PreserveLineSpacingBetweenStatements
+      "preserveExistingEmptyLinesWithinStatements": false,   // PreserveLineSpacingWithinStatements (?)
+      "emptyLinesBetweenStatements": 1,                      // NumberOfEmptyLinesBetweenStatements
+      "emptyLinesAfterBatchSeparator": 1                     // NumberOfEmptyLinesAfterBatchSeparator
+    }
+  },
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // LISTS
+  // ──────────────────────────────────────────────────────────────────────────
+  "lists": {
+    "alignComments": true,               // VerticallyAlignListItemComments
+    "placeCommasBeforeItems": true,       // PlaceCommasBeforeListItems
+    "addSpaceBeforeComma": true,          // SpacesAroundCommas.m_Before
+    "addSpaceAfterComma": true,           // SpacesAroundCommas.m_After
+    // "never" | "always" | "wrap" | "whenLong"
+    "placeFirstItemOnNewLines": "never",             // FirstListItemBreakType: Never
+    // "never" | "always" | "wrap" | "whenLong"
+    "placeSubsequentItemsOnNewLines": "always",      // SubsequentListItemsBreakType: ChopAlways
+    "alignSubsequentItemsWithFirstItem": true,       // VerticallyAlignListItems
+    "alignAliases": false,                           // VerticallyAlignAliases
+    "alignClauseItems": true,                        // VerticallyAlignClauseItems
+    "alignItemsAcrossClauses": true,                 // (no direct XML match — kept from AllOptions.json)
+    "alignItemsToTabStops": false,                   // AlignToTab
+    "indentItems": true,                             // IndentListItems (?)
+    // "toList" | "toStatement" | ...
+    "commaAlignment": "toList"                       // CommaAlignment: ToList (?)
+  },
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // PARENTHESES
+  // ──────────────────────────────────────────────────────────────────────────
+  "parentheses": {
+    "collapseParenthesesShorterThan": 78,            // CollapseIfShortParenthesesContentsCharacterCount
+    "collapseShortParentheses": false,               // CollapseShortParenthesesContents
+    // "compactSimple" | "expandedIndented"
+    "layout": "compactSimple",                       // ParenthesisLayout: CompactSimple
+    "addSpacesInsideParentheses": true,              // SpacesAroundParenthesesContents.m_Before/After
+    "addSpacesAroundParentheses": true,              // SpacesAroundParentheses.m_Before/After
+    "spaceInsideEmptyParentheses": false,            // SpaceInsideEmptyParentheses
+    "indentContents": false,                         // IndentParenthesisedExpression
+    "placeClosingOnNewLine": false,                  // PlaceClosingParenthesisOnNewLine
+    // "toStatement" | "toOpeningBracket" | "tabbed"
+    "openingAlignment": "toStatement",               // OpeningParenthesisAlignment: ToStatement
+    // "never" | "always" | "whenLong"
+    "openingBreakType": "never",                     // OpeningParenthesisBreakType: Never
+    // "tabbedFromOpeningBracket" | "toStatement" | "toOpeningBracket"
+    "contentsAlignment": "tabbedFromOpeningBracket", // ParenthesisedExpressionAlignment: TabbedFromOpeningBracket
+    // "never" | "always" | "whenLong"
+    "contentsBreakType": "never",                    // ParenthesisedExpressionBreakType: Never
+    // "toOpeningBracket" | "toStatement" | "tabbed"
+    "closingAlignment": "toOpeningBracket"           // ClosingParenthesisAlignment: ToOpeningBracket
+  },
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // CASING
+  // ──────────────────────────────────────────────────────────────────────────
+  "casing": {
+    // "uppercase" | "lowercase" | "preserve"
+    "reservedKeywords": "uppercase",                 // ReservedKeywordsCasing: Uppercase
+    "builtInFunctions": "uppercase",                 // BuiltInFunctionCasing: Uppercase
+    "builtInDataTypes": "uppercase",                 // BuiltInDataTypeCasing: Uppercase
+    // "uppercase" | "lowercase" | "preserve"
+    "globalVariables": "preserve",                   // GlobalVariablesCasing: LeaveAsIs
+    "useObjectDefinitionCase": true                  // UseObjectDefinitionCase
+  },
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // DML
+  // ──────────────────────────────────────────────────────────────────────────
+  "dml": {
+    "collapseStatementsShorterThan": 75,             // CollapseIfShortDmlCharacterCount
+    "collapseShortStatements": false,                // CollapseShortDmlStatements
+    "collapseSubqueriesShorterThan": 15,             // CollapseIfShortSubqueryCharacterCount
+    "collapseShortSubqueries": false                 // CollapseShortSubqueries
+  },
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // DDL
+  // ──────────────────────────────────────────────────────────────────────────
+  "ddl": {
+    // "expandedIndented" | "compactSimple"
+    "parenthesisStyle": "expandedIndented",                  // CreateAlterParenthesisLayout: ExpandedIndented
+    "overrideParenthesesForCreateAlter": true,               // OverrideParenthesesOptionsForCreateAlterStatements
+    "indentClauses": true,                                   // IndentDdlClauses
+    "indentContents": false,                                 // CreateAlterIndentParenthesisedExpression
+    "placeClosingParenthesisOnNewLine": true,                // CreateAlterPlaceClosingParenthesisOnNewLine
+    // "always" | "never" | "whenLong"
+    "placeFirstProcedureParameterOnNewLine": "always",       // FirstCreateProcedureParamBreakType: ChopAlways
+    // "always" | "never" | "whenLong"
+    "firstDefinitionBreakType": "always",                    // FirstCreateAlterDefintionBreakType: ChopAlways
+    "placeFirstDefinitionOnNewLine": true,                   // CreateTableBreakBeforeFirstListItem
+    "collapseStatementsShorterThan": 75,                     // CollapseIfShortDdlCharacterCount
+    "collapseShortStatements": false,                        // CollapseShortDdlStatements
+    "breakOnConstraints": false,                             // BreakOnConstraints
+    // "never" | "always" | "whenLong"
+    "constraintColumnsBreakType": "whenLong",                // ConstraintColumnsBreakType: ChopIfLong
+    "verticallyAlignColumnDefinitions": false,               // VerticallyAlignColumnDefinitions
+    "verticallyAlignDataTypes": true,                        // VerticallyAlignDataTypes
+    // "toOpeningBracket" | "toStatement" | "tabbed"
+    "closingParenthesisAlignment": "toOpeningBracket",       // CreateAlterClosingParenthesisAlignment: ToOpeningBracket
+    // "tabbed" | "toStatement" | "toOpeningBracket"
+    "openingParenthesisAlignment": "tabbed",                 // CreateAlterOpeningParenthesisAlignment: Tabbed
+    // "always" | "never" | "whenLong"
+    "openingParenthesisBreakType": "always",                 // CreateAlterOpeningParenthesisBreakType: ChopAlways
+    // "never" | "always" | "whenLong"
+    "contentsBreakType": "never"                             // CreateAlterParenthesisedExpressionBreakType: Never
+  },
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // CONTROL FLOW
+  // ──────────────────────────────────────────────────────────────────────────
+  "controlFlow": {
+    "indentBeginAndEndKeywords": true,               // IndentBeginEndKeywords
+    "indentBlockContents": true,                     // IndentBlockContents (?)
+    "placeBeginOnNewLine": true,                     // PlaceBeginOnNewLine
+    "collapseStatementsShorterThan": 78,             // CollapseIfShortControlFlowCharacterCount
+    "collapseShortStatements": false                 // CollapseShortControlFlowStatements
+  },
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // CTE
+  // ──────────────────────────────────────────────────────────────────────────
+  "cte": {
+    // "tabbed" | "indented" | "toStatement"
+    "asAlignment": "tabbed",                                 // CteAsAlignment: Tabbed
+    "indentContents": false,                                 // IndentCteContents
+    "indentName": false,                                     // IndentCteName
+    "preferBreakBeforeName": false,                          // PreferBreakBeforeCteName
+    // "toStatement" | "tabbed" | "toOpeningBracket"
+    "columnsOpeningParenthesisAlignment": "toStatement",     // CteColumnsOpeningParenthesisAlignment: ToStatement
+    // "never" | "always" | "whenLong"
+    "columnsOpeningParenthesisBreakType": "never",           // CteColumnsOpeningParenthesisBreakType: Never
+    // "toStatement" | "tabbed" | "toOpeningBracket"
+    "contentsOpeningParenthesisAlignment": "toStatement",    // CteContentsOpeningParenthesisAlignment: ToStatement
+    // "never" | "always" | "whenLong"
+    "contentsOpeningParenthesisBreakType": "never",          // CteContentsOpeningParenthesisBreakType: Never
+    // "compactSimple" | "expandedIndented"
+    "contentsParenthesisLayout": "compactSimple",            // CteContentsParenthesisLayout: CompactSimple
+    // "toStartOfOpeningBracket" | "toStatement" | "tabbed"
+    "contentsExpressionAlignment": "toStartOfOpeningBracket", // CteContentsParenthesisedExpressionAlignment
+    // "never" | "always" | "whenLong"
+    "contentsExpressionBreakType": "never"                   // CteContentsParenthesisedExpressionBreakType: Never
+  },
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // VARIABLES
+  // ──────────────────────────────────────────────────────────────────────────
+  "variables": {
+    "placeAssignedValueOnNewLineIfLongerThanMaxLineLength": false  // BreakAssignmentIfLong
+  },
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // JOIN STATEMENTS
+  // ──────────────────────────────────────────────────────────────────────────
+  "joinStatements": {
+    "insertEmptyLineBetweenJoins": false,            // InsertEmptyLineBetweenJoins
+    "join": {
+      // "toTable" | "asPartOfList" | "indented"  (?)
+      "keywordAlignment": "asPartOfList",            // JoinClauseAlignment: AsPartOfList
+      "indentJoinTable": false,                      // IndentJoinTable
+      "placeTableOnNewLine": false,                  // PlaceJoinTableOnNewLine
+      // "always" | "never" | "whenLong"
+      "breakType": "always"                          // JoinBreakType: ChopAlways
+    },
+    "on": {
+      "placeOnNewLine": true,                        // PlaceJoinOnKeywordOnANewLine
+      // "indented" | "tabbedFromJoin" | "toStatement"  (?)
+      "keywordAlignment": "tabbedFromJoin",          // JoinOnAlignment: TabbedFromJoin
+      // "never" | "always" | "whenLong"
+      "conditionBreakType": "never",                 // JoinConditionBreakType: Never
+      // "toInner" | "toJoin" | "toStatement"
+      "conditionAlignment": "toInner",               // JoinOnConditionAlignment: ToInner
+      "verticallyAlignWithJoinTable": false          // VerticallyAlignJoinConditionWithJoinTable
+    }
+  },
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // INSERT STATEMENTS
+  // ──────────────────────────────────────────────────────────────────────────
+  "insertStatements": {
+    "preferBreakBeforeTable": false,                 // PreferBreakBeforeInsertTable
+    "columns": {
+      // "compactSimple" | "expandedIndented"
+      "parenthesisStyle": "compactSimple",           // InsertColumnListParenthesisLayout: CompactSimple
+      "indentContents": false,                       // IndentInsertColumnListsParenthesisedExpression
+      // "always" | "never" | "wrap" | "whenLong"
+      "subsequentItemsBreakType": "always"           // SubsequentInsertColumnsListItemsBreakType: ChopAlways
+    },
+    "values": {
+      // "compactSimple" | "expandedIndented"
+      "parenthesisStyle": "compactSimple",           // InsertValuesListParenthesisLayout: CompactSimple
+      "indentContents": false,                       // IndentInsertValuesListsParenthesisedExpression
+      // "always" | "never" | "wrap" | "whenLong"
+      "subsequentItemsBreakType": "wrap"             // SubsequentInsertValuesListItemsBreakType: SimpleWrap
+    }
+  },
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // FUNCTION CALLS
+  // ──────────────────────────────────────────────────────────────────────────
+  "functionCalls": {
+    // "never" | "always" | "wrap" | "whenLong"
+    "placeArgumentsOnNewLines": "wrap",              // FunctionArgumentsBreakType: SimpleWrap
+    "addSpacesAroundArguments": false,               // SpacesAroundFunctionCallArguments.m_Before/After
+    "addSpacesAroundCall": false                     // SpacesAroundFunctionCalls.m_Before/After
+  },
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // CASE EXPRESSIONS
+  // ──────────────────────────────────────────────────────────────────────────
+  "caseExpressions": {
+    "placeExpressionOnNewLine": false,               // PlaceCaseExpressionOnNewLine
+    // "always" | "never" | "ifInputExpression"
+    "placeFirstWhenOnNewLine": "ifInputExpression",  // PlaceCaseFirstWhenOnNewLine: IfTheresAnInputExpression
+    // "toFirstItem" | "toCase" | "indented"
+    "whenAlignment": "toFirstItem",                  // CaseWhenElseAlignment: ToFirstItem
+    "alignElseToWhen": true,                         // AlignCaseElseToWhen
+    "placeElseOnNewLine": true,                      // PlaceCaseElseOnNewLine
+    "placeEndOnNewLine": true,                       // PlaceCaseEndOnNewLine
+    // "toCase" | "toFirstItem" | "indented"
+    "endAlignment": "toCase",                        // CaseEndAlignment: ToCase
+    // "tabbed" | "toFirstItem" | "toCase"
+    "expressionAlignment": "tabbed",                 // CaseExpressionAlignment: Tabbed
+    "placeThenOnNewLine": false,                     // PreferBreakBeforeThenKeyword: false
+    "collapseCaseExpressionsShorterThan": 75,        // CollapseCaseIfShortCharacterCount
+    "collapseShortCaseExpressions": false            // CollapseCaseExpressionIfShort
+  },
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // OPERATORS
+  // ──────────────────────────────────────────────────────────────────────────
+  "operators": {
+    "andOr": {
+      // "toFirstListItem" | "asPartOfList" | "indented"  (?) see mapping-doubts.md
+      "alignment": "asPartOfList",                   // BooleanOperatorAlignment: AsPartOfList
+      // "always" | "never" | "wrap" | "whenLong"
+      "breakType": "always"                          // BooleanOperatorBreakType: ChopAlways
+    },
+    "between": {
+      "placeOnNewLine": false,                       // PreferBreakBeforeBetweenKeyword: false
+      "placeAndOnNewLine": false,                    // PreferBreakBeforeBetweenAndKeyword: false
+      // "toBetween" | "toCondition"
+      "andAlignment": "toBetween"                    // BetweenAndAlignment: ToBetween
+    },
+    "in": {
+      // "never" | "always" | "wrap" | "whenLong"
+      "placeFirstValueOnNewLine": "wrap",            // InValuesFirstItemBreakType: SimpleWrap
+      // "never" | "always" | "wrap" | "whenLong"
+      "placeSubsequentValuesOnNewLines": "wrap",     // InValuesSubsequentListItemsBreakType: SimpleWrap
+      // "toStatement" | "tabbed"
+      "openingParenthesisAlignment": "toStatement",  // InValuesOpeningParenthesisAlignment: ToStatement
+      // "never" | "always" | "whenLong"
+      "openingParenthesisBreakType": "never",        // InValuesOpeningParenthesisBreakType: Never
+      "addSpaceAroundInContents": true               // SpacesAroundInPredicateContents.m_Before/After
+    },
+    "comparisonOperators": {
+      "spaceBefore": true,                           // SpacesAroundComparisonOperators.m_Before
+      "spaceAfter": true,                            // SpacesAroundComparisonOperators.m_After
+      "verticallyAlign": false                       // VerticallyAlignComparisonOperators
+    },
+    "arithmeticOperators": {
+      "spaceBefore": true,                           // SpacesAroundArithmeticOperators.m_Before
+      "spaceAfter": true                             // SpacesAroundArithmeticOperators.m_After
+    }
+  },
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // CLAUSES  (no direct match in AllOptions.json — new category)
+  // ──────────────────────────────────────────────────────────────────────────
+  "clauses": {
+    // "toStatement" | "asPartOfList" | "indented"  (?)
+    "clauseAlignment": "toStatement",               // ClauseAlignment: ToStatement
+    "clauseIndentation": 0,                          // ClauseIndentation
+    // "never" | "always" | "wrap" | "whenLong"
+    "fromFirstItemBreakType": "never",               // FromClauseFirstItemBreakType: Never
+    // "never" | "always" | "wrap" | "whenLong"
+    "whereFirstItemBreakType": "never",              // WhereClauseFirstItemBreakType: Never
+    // "never" | "always" | "wrap" | "whenLong"
+    "groupByOrderByFirstItemBreakType": "never"      // GroupByOrderByFirstItemBreakType: Never
+  },
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // SELECT / TOP  (no direct match in AllOptions.json — new category)
+  // ──────────────────────────────────────────────────────────────────────────
+  "select": {
+    "newLineBeforeTopRowFilter": false,              // NewLineBeforeTopRowFilter
+    "newLineAfterTopRowFilter": false,               // NewLineAfterTopRowFilter
+    "newLineForCorrelatedTableSource": false         // NewLineForCorrelatedTableSource
+  },
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // MISC  (options without a home in the other categories)
+  // ──────────────────────────────────────────────────────────────────────────
+  "misc": {
+    // "none" | "beforeSemicolon" | "afterSemicolon" | "newLine"
+    "semicolonWhitespace": "none",                   // SemicolonWhitespace: None
+    "spaceBeforeUnits": false,                       // SpaceBeforeUnits
+    "spaceBetweenDataTypeAndParameters": false,       // SpaceBetweenDataTypeAndParameters
+    "useGlobalListOptionsForDml": false,              // UseGlobalListOptionsForDmlStatements (?)
+    "preferBreakBeforeAsKeyword": true,               // PreferBreakBeforeAsKeyword (?)
+    "preferBreakBeforeConditionOperator": true,       // PreferBreakBeforeConditionOperator (?)
+    "preferBreakBeforeEquals": false                  // PreferBreakBeforeEquals (?)
+  }
+}
