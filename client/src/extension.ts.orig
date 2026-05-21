@@ -1051,26 +1051,12 @@ export async function activate(context: ExtensionContext) {
         const scalarFunctionCount = params.scalarFunctionCount ?? 0;
         const tableValuedFunctionCount = params.tableValuedFunctionCount ?? 0;
         const storedProcedureCount = params.storedProcedureCount ?? 0;
-        const message = params.message ?? `Schema loaded: ${tableCount} tables, ${scalarFunctionCount} scalar functions, ${tableValuedFunctionCount} table-valued functions, ${storedProcedureCount} stored procedures.`;
+        const message = `Schema loaded: ${tableCount} tables, ${scalarFunctionCount} scalar functions, ${tableValuedFunctionCount} table-valued functions, ${storedProcedureCount} stored procedures.`;
         window.setStatusBarMessage(message, 5000);
     });
 
     client.onNotification("sqlPrompt/schemaLoadingFailed", (params: any) => {
         window.showErrorMessage(`SQL Prompt: schema loading failed — ${params.error}`);
-    });
-
-    client.onRequest("sqlPrompt/loadCrossDatabaseSchema", async (params: { database: string }) => {
-        const ownerUri = window.activeTextEditor?.document.uri.toString();
-        if (!ownerUri) {
-            return { tables: [] };
-        }
-        try {
-            const snapshot = await loadSchemaForDatabaseViaConnectionSharing(ownerUri, params.database);
-            return { tables: snapshot?.tables ?? [] };
-        } catch (e: any) {
-            console.error(`[SQL Prompt] loadCrossDatabaseSchema failed: ${e.message}`);
-            return { tables: [] };
-        }
     });
 
     // ── Go to Definition ──────────────────────────────────────────────────────
@@ -1223,62 +1209,5 @@ export async function deactivate() {
     if (client) {
         await client.stop();
         client = undefined;
-    }
-}
-
-async function loadSchemaForDatabaseViaConnectionSharing(ownerUri: string, database: string): Promise<SchemaSnapshot | undefined> {
-    const api = await getMssqlApi();
-    if (!api?.connectionSharing) {
-        return undefined;
-    }
-
-    const dbBracketed = '[' + database.replace(/]/g, ']]') + ']';
-    
-    // We only load tables/views (and their columns) for cross-database. No routines/FKs.
-    const schemaQuery = `
-            SELECT
-                s.name AS schema_name,
-                so.name AS table_name,
-                c.name AS column_name,
-                ty.name AS data_type,
-                c.max_length,
-                c.is_nullable,
-                CASE WHEN so.type = 'U' AND pk.column_id IS NOT NULL THEN 1 ELSE 0 END AS is_primary_key
-            FROM ${dbBracketed}.sys.objects so
-            INNER JOIN ${dbBracketed}.sys.schemas s ON so.schema_id = s.schema_id
-            INNER JOIN ${dbBracketed}.sys.columns c ON so.object_id = c.object_id
-            INNER JOIN ${dbBracketed}.sys.types ty ON c.user_type_id = ty.user_type_id
-            LEFT JOIN (
-                SELECT ic.object_id, ic.column_id
-                FROM ${dbBracketed}.sys.index_columns ic
-                INNER JOIN ${dbBracketed}.sys.indexes i
-                    ON ic.object_id = i.object_id AND ic.index_id = i.index_id
-                WHERE i.is_primary_key = 1
-            ) pk ON so.object_id = pk.object_id AND c.column_id = pk.column_id
-            WHERE so.type IN ('U', 'V') AND so.is_ms_shipped = 0
-            ORDER BY s.name, so.name, c.column_id
-    `;
-
-    try {
-        const result = await api.connectionSharing.executeSimpleQuery?.(ownerUri, schemaQuery);
-        const rows = extractRowsFromSimpleQueryResult(result);
-        const schemaTables = mapRowsToSchemaSnapshot(rows);
-        
-        // Tag tables with the requested database name
-        for (const t of schemaTables) {
-            (t as any).database = database;
-        }
-
-        console.log(`[SQL Prompt] Cross-database schema loaded for [${database}]: ${schemaTables.length} tables`);
-        return {
-            tables: schemaTables,
-            scalarFunctions: [],
-            tableValuedFunctions: [],
-            storedProcedures: [],
-            databases: []
-        };
-    } catch (e: any) {
-        console.error(`[SQL Prompt] loadSchemaForDatabaseViaConnectionSharing failed for [${database}]: ${e.message}`);
-        return undefined;
     }
 }

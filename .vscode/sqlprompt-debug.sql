@@ -1,1 +1,1 @@
-SELECT * from ui.vwOrdini AS v
+SELECT * from EasyMexs_Master.

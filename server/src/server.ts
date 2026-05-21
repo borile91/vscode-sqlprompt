@@ -404,27 +404,52 @@ connection.onCompletion(
           message: `Loading schema for ${knownDb}...`,
         });
 
-        schemaLoader
-          .loadSchemaForDatabase(knownDb)
-          .then((extraTables) => {
-            tables = [...tables, ...extraTables];
-            loadedDatabaseNames.add(topLower);
-            loadingDatabaseNames.delete(topLower);
-            connection.console.info(
-              `SQL Prompt: demand-loaded ${extraTables.length} table(s) for [${knownDb}].`,
-            );
-            connection.sendNotification('sqlPrompt/schemaLoadingCompleted', {
-              tableCount: tables.length,
-              message: `Schema loaded for ${knownDb}: ${extraTables.length} table(s)`,
+        if (schemaLoader) {
+          schemaLoader
+            .loadSchemaForDatabase(knownDb)
+            .then((extraTables) => {
+              tables = [...tables, ...extraTables];
+              loadedDatabaseNames.add(topLower);
+              loadingDatabaseNames.delete(topLower);
+              connection.console.info(
+                `SQL Prompt: demand-loaded ${extraTables.length} table(s) for [${knownDb}].`,
+              );
+              connection.sendNotification('sqlPrompt/schemaLoadingCompleted', {
+                tableCount: tables.length,
+                message: `Schema loaded for ${knownDb}: ${extraTables.length} table(s)`,
+              });
+            })
+            .catch((err: any) => {
+              loadingDatabaseNames.delete(topLower);
+              loadedDatabaseNames.add(topLower); // avoid infinite retry on permission errors
+              connection.console.error(
+                `SQL Prompt: demand-load failed for [${knownDb}]: ${err?.message ?? err}`,
+              );
             });
-          })
-          .catch((err: any) => {
-            loadingDatabaseNames.delete(topLower);
-            loadedDatabaseNames.add(topLower); // avoid infinite retry on permission errors
-            connection.console.error(
-              `SQL Prompt: demand-load failed for [${knownDb}]: ${err?.message ?? err}`,
-            );
-          });
+        } else {
+          // Send request to client to use connectionSharing
+          connection.sendRequest<{ tables: TableInfo[] }>('sqlPrompt/loadCrossDatabaseSchema', { database: knownDb })
+            .then((result) => {
+              const extraTables = result.tables ?? [];
+              tables = [...tables, ...extraTables];
+              loadedDatabaseNames.add(topLower);
+              loadingDatabaseNames.delete(topLower);
+              connection.console.info(
+                `SQL Prompt: connectionSharing demand-loaded ${extraTables.length} table(s) for [${knownDb}].`,
+              );
+              connection.sendNotification('sqlPrompt/schemaLoadingCompleted', {
+                tableCount: tables.length,
+                message: `Schema loaded for ${knownDb}: ${extraTables.length} table(s)`,
+              });
+            })
+            .catch((err: any) => {
+              loadingDatabaseNames.delete(topLower);
+              loadedDatabaseNames.add(topLower);
+              connection.console.error(
+                `SQL Prompt: connectionSharing demand-load failed for [${knownDb}]: ${err?.message ?? err}`,
+              );
+            });
+        }
       } else if (knownDb && loadingDatabaseNames.has(topLower)) {
         connection.console.info(`SQL Prompt: schema for [${knownDb}] is already loading...`);
       }
