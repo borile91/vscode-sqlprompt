@@ -401,6 +401,7 @@ connection.onCompletion(
         loadingDatabaseNames.add(topLower);
         connection.console.info(`SQL Prompt: demand-loading schema for [${knownDb}]...`);
         connection.sendNotification('sqlPrompt/schemaLoadingStarted', {
+          database: knownDb,
           message: `Loading schema for ${knownDb}...`,
         });
 
@@ -415,6 +416,7 @@ connection.onCompletion(
                 `SQL Prompt: demand-loaded ${extraTables.length} table(s) for [${knownDb}].`,
               );
               connection.sendNotification('sqlPrompt/schemaLoadingCompleted', {
+                database: knownDb,
                 tableCount: tables.length,
                 message: `Schema loaded for ${knownDb}: ${extraTables.length} table(s)`,
               });
@@ -425,6 +427,10 @@ connection.onCompletion(
               connection.console.error(
                 `SQL Prompt: demand-load failed for [${knownDb}]: ${err?.message ?? err}`,
               );
+              connection.sendNotification('sqlPrompt/schemaLoadingFailed', {
+                database: knownDb,
+                error: err?.message ?? String(err),
+              });
             });
         } else {
           // Send request to client to use connectionSharing
@@ -438,6 +444,7 @@ connection.onCompletion(
                 `SQL Prompt: connectionSharing demand-loaded ${extraTables.length} table(s) for [${knownDb}].`,
               );
               connection.sendNotification('sqlPrompt/schemaLoadingCompleted', {
+                database: knownDb,
                 tableCount: tables.length,
                 message: `Schema loaded for ${knownDb}: ${extraTables.length} table(s)`,
               });
@@ -448,6 +455,10 @@ connection.onCompletion(
               connection.console.error(
                 `SQL Prompt: connectionSharing demand-load failed for [${knownDb}]: ${err?.message ?? err}`,
               );
+              connection.sendNotification('sqlPrompt/schemaLoadingFailed', {
+                database: knownDb,
+                error: err?.message ?? String(err),
+              });
             });
         }
       } else if (knownDb && loadingDatabaseNames.has(topLower)) {

@@ -1,1 +1,1 @@
-SELECT * FROM EasyMexs_Master.config.
+SELECT * FROM EasyMexs_MAS.config

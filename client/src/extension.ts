@@ -13,6 +13,7 @@ import {
     Range,
     EventEmitter,
     TextDocumentContentProvider,
+    ProgressLocation,
 } from "vscode";
 
 import {
@@ -1042,21 +1043,60 @@ export async function activate(context: ExtensionContext) {
     console.log("SQL Prompt: language server started.");
 
     // ── Schema Loading Notifications ──────────────────────────────────────────
+    // Pending progress resolvers for cross-DB demand loads (keyed by db name).
+    const pendingCrossDbProgress = new Map<string, () => void>();
+
     client.onNotification("sqlPrompt/schemaLoadingStarted", (params: any) => {
-        const message = params.message || "Loading schema...";
-        window.setStatusBarMessage(message);
+        if (params.database) {
+            // Cross-DB demand load: show notification progress bar that stays
+            // open until schemaLoadingCompleted (or Failed) resolves it.
+            window.withProgress(
+                {
+                    location: ProgressLocation.Notification,
+                    title: `SQL Prompt: Loading [${params.database}]…`,
+                    cancellable: false,
+                },
+                () =>
+                    new Promise<void>((resolve) => {
+                        pendingCrossDbProgress.set(
+                            params.database.toLowerCase(),
+                            resolve,
+                        );
+                    }),
+            );
+        } else {
+            // Initial schema load (direct connection): use status bar.
+            window.setStatusBarMessage(params.message || "Loading schema...");
+        }
     });
 
     client.onNotification("sqlPrompt/schemaLoadingCompleted", (params: any) => {
-        const tableCount = params.tableCount ?? 0;
-        const scalarFunctionCount = params.scalarFunctionCount ?? 0;
-        const tableValuedFunctionCount = params.tableValuedFunctionCount ?? 0;
-        const storedProcedureCount = params.storedProcedureCount ?? 0;
-        const message = params.message ?? `Schema loaded: ${tableCount} tables, ${scalarFunctionCount} scalar functions, ${tableValuedFunctionCount} table-valued functions, ${storedProcedureCount} stored procedures.`;
-        window.setStatusBarMessage(message, 5000);
+        if (params.database) {
+            // Resolve the pending progress bar for this database.
+            const key = params.database.toLowerCase();
+            pendingCrossDbProgress.get(key)?.();
+            pendingCrossDbProgress.delete(key);
+            const msg = params.message ?? `Schema loaded for ${params.database}`;
+            window.showInformationMessage(`SQL Prompt: ${msg}`);
+        } else {
+            // Initial schema load: keep existing status-bar behaviour.
+            const tableCount = params.tableCount ?? 0;
+            const scalarFunctionCount = params.scalarFunctionCount ?? 0;
+            const tableValuedFunctionCount = params.tableValuedFunctionCount ?? 0;
+            const storedProcedureCount = params.storedProcedureCount ?? 0;
+            const message =
+                params.message ??
+                `Schema loaded: ${tableCount} tables, ${scalarFunctionCount} scalar functions, ${tableValuedFunctionCount} table-valued functions, ${storedProcedureCount} stored procedures.`;
+            window.setStatusBarMessage(message, 5000);
+        }
     });
 
     client.onNotification("sqlPrompt/schemaLoadingFailed", (params: any) => {
+        if (params.database) {
+            const key = params.database.toLowerCase();
+            pendingCrossDbProgress.get(key)?.();
+            pendingCrossDbProgress.delete(key);
+        }
         window.showErrorMessage(`SQL Prompt: schema loading failed — ${params.error}`);
     });
 
