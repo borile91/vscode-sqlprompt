@@ -443,9 +443,13 @@ function buildDotCompletions(
   const schemaMatches = tables.filter(
     (t) =>
       t.schema.toLowerCase() === schemaLower &&
-      (dbFilter === undefined ||
-        t.database === undefined ||
-        t.database.toLowerCase() === dbFilter),
+      // When a database qualifier is active (e.g. "EasyMexs_Master.dbo."),
+      // only return tables that are explicitly tagged with that database.
+      // Tables without a database tag belong to the currently-connected DB
+      // and must NOT bleed through into cross-DB completions.
+      (dbFilter === undefined
+        ? true
+        : t.database?.toLowerCase() === dbFilter),
   );
   const schemaRoutineMatches =
     dbFilter === undefined

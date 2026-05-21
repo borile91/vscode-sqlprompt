@@ -60,6 +60,7 @@ type TableInfo = {
     name: string;
     columns: ColumnInfo[];
     foreignKeys: ForeignKeyInfo[];
+    database?: string;
 };
 
 type ForeignKeyMapping = {
@@ -1266,7 +1267,7 @@ async function loadSchemaForDatabaseViaConnectionSharing(ownerUri: string, datab
         
         // Tag tables with the requested database name
         for (const t of schemaTables) {
-            (t as any).database = database;
+            t.database = database;
         }
 
         console.log(`[SQL Prompt] Cross-database schema loaded for [${database}]: ${schemaTables.length} tables`);

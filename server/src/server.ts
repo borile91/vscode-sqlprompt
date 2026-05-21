@@ -392,7 +392,7 @@ connection.onCompletion(
     // database if it hasn't been loaded yet.  The current request returns
     // immediately (possibly with empty results); the next keystroke will have the
     // loaded schema available.
-    if (schemaLoader && context.isAfterDot && context.qualifierChain?.length) {
+    if (context.isAfterDot && context.qualifierChain?.length) {
       const topQualifier = context.qualifierChain[0];
       const topLower = topQualifier.toLowerCase();
       const knownDb = databases.find((d) => d.toLowerCase() === topLower);
