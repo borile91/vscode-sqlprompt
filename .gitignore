@@ -7,3 +7,4 @@ server/out/
 *.tsbuildinfo
 .DS_Store
 **/dist/**
+.vscode/sqlprompt-debug.sql
