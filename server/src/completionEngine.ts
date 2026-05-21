@@ -552,15 +552,13 @@ function buildDotCompletions(
         ];
       }
 
-      const schemasForDb = [
-        ...new Set(
-          tables
-            .filter((t) => (t.database ?? '').toLowerCase() === qualifierLower)
-            .map((t) => t.schema),
-        ),
-      ].sort();
+      const tablesForDb = tables.filter(
+        (t) => (t.database ?? '').toLowerCase() === qualifierLower,
+      );
 
-      return schemasForDb.map((schema) => ({
+      const schemasForDb = [...new Set(tablesForDb.map((t) => t.schema))].sort();
+
+      const schemaItems = schemasForDb.map((schema) => ({
         label: schema,
         kind: CompletionItemKind.Module,
         detail: `Schema in ${qualifier}`,
@@ -570,6 +568,27 @@ function buildDotCompletions(
         textEdit: TextEdit.replace(replaceRange, schema),
         sortText: `01_schema_${schema}`,
       }));
+
+      const usedAliases = new Set(
+        context.visibleSources
+          .map((s) => s.alias)
+          .filter((a): a is string => a !== undefined),
+      );
+      const tableItems = tablesForDb.map((table) => {
+        const alias = generateAlias(table.name, new Set(usedAliases));
+        const fullName = `${table.schema}.${table.name}`;
+        return {
+          label: fullName,
+          kind: CompletionItemKind.Class,
+          detail: `Table (${table.schema}) — alias: ${alias}`,
+          filterText: fullName,
+          textEdit: TextEdit.replace(replaceRange, `${fullName} AS ${alias}`),
+          insertTextFormat: InsertTextFormat.PlainText,
+          sortText: `02_table_${table.schema}_${table.name}`,
+        };
+      });
+
+      return [...schemaItems, ...tableItems];
     }
   }
 

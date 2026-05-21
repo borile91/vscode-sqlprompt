@@ -1,1 +1,1 @@
-SELECT * FROM EasyMexs_Master.dbo.
+SELECT * FROM EasyMexs_Master.config.
