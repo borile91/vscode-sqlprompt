@@ -1,40 +1,27 @@
 {
-  "version": "0.2.0",
-  "configurations": [
-    {
-        "name": "Launch Extension",
-        "type": "extensionHost",
-        "request": "launch",
-        "args": ["--extensionDevelopmentPath=${workspaceFolder}"],
-        "outFiles": [
-            "${workspaceFolder}/client/dist/**/*.js",
-            "${workspaceFolder}/server/dist/**/*.js"
-        ],
-        "preLaunchTask": "webpack:dev"
-    },
-    {
-        "name": "Attach to Server",
-        "type": "node",
-        "request": "attach",
-        "address": "localhost",
-        "port": 6009,
-        "restart": true,
-        "timeout": 60000,
-        "continueOnAttach": true,
-        "skipFiles": ["<node_internals>/**"],
-        "sourceMaps": true,
-        "resolveSourceMapLocations": [
-            "${workspaceFolder}/**",
-            "!**/node_modules/**"
-        ],
-        "outFiles": ["${workspaceFolder}/server/dist/**/*.js"]
-    }
-  ],
-  "compounds": [
-    {
-        "name": "Client + Server",
-        "configurations": ["Launch Extension", "Attach to Server"],
-        "stopAll": true
-    }
-  ]
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Launch Extension",
+            "type": "extensionHost",
+            "request": "launch",
+            "args": [
+                "--extensionDevelopmentPath=${workspaceFolder}",
+                "${workspaceFolder}/.vscode/sqlprompt-debug.sql"
+            ],
+            "outFiles": [
+                "${workspaceFolder}/client/dist/**/*.js",
+                "${workspaceFolder}/server/dist/**/*.js"
+            ],
+            "autoAttachChildProcesses": true,
+            "preLaunchTask": "webpack:dev"
+        }
+    ],
+    "compounds": [
+        // {
+        //     "name": "Client + Server",
+        //     "configurations": ["Launch Extension", "Attach to Server"],
+        //     "stopAll": true
+        // }
+    ]
 }

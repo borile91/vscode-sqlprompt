@@ -9,6 +9,8 @@ export interface ColumnInfo {
 }
 
 export interface TableInfo {
+    /** The database this table belongs to. Populated for cross-database schemas. */
+    database?: string;
   schema: string;
   name: string;
   columns: ColumnInfo[];
@@ -149,6 +151,9 @@ export class SchemaLoader {
             throw new Error("Not connected to database");
         }
 
+        const currentDbResult = await this.pool.request().query('SELECT DB_NAME() AS current_db');
+        const currentDatabase = currentDbResult.recordset[0]?.current_db as string | undefined;
+
         const result = await this.pool.request().query(`
             WITH schema_objects AS (
                 SELECT
@@ -187,6 +192,7 @@ export class SchemaLoader {
             const key = `${row.schema_name}.${row.table_name}`;
             if (!tableMap.has(key)) {
                 tableMap.set(key, {
+                    database: currentDatabase,
                     schema: row.schema_name,
                     name: row.table_name,
                     columns: [],
@@ -402,5 +408,100 @@ export class SchemaLoader {
         `);
 
         return result.recordset.map((row: { name: string }) => row.name);
+    }
+
+    /**
+     * Loads tables and columns for a specific database using cross-database
+     * sys catalog access (`[database].sys.objects` etc.).
+     * Foreign keys are not loaded for cross-database schemas.
+     */
+    async loadSchemaForDatabase(database: string): Promise<TableInfo[]> {
+        if (!this.pool) {
+            throw new Error("Not connected to database");
+        }
+
+        // Escape any existing ] in the database name to prevent injection.
+        const dbBracketed = '[' + database.replace(/]/g, ']]') + ']';
+
+        const result = await this.pool.request().query(`
+            SELECT
+                s.name AS schema_name,
+                so.name AS table_name,
+                c.name AS column_name,
+                ty.name AS data_type,
+                c.max_length,
+                c.is_nullable,
+                CASE WHEN so.type = 'U' AND pk.column_id IS NOT NULL THEN 1 ELSE 0 END AS is_primary_key
+            FROM ${dbBracketed}.sys.objects so
+            INNER JOIN ${dbBracketed}.sys.schemas s ON so.schema_id = s.schema_id
+            INNER JOIN ${dbBracketed}.sys.columns c ON so.object_id = c.object_id
+            INNER JOIN ${dbBracketed}.sys.types ty ON c.user_type_id = ty.user_type_id
+            LEFT JOIN (
+                SELECT ic.object_id, ic.column_id
+                FROM ${dbBracketed}.sys.index_columns ic
+                INNER JOIN ${dbBracketed}.sys.indexes i
+                    ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+                WHERE i.is_primary_key = 1
+            ) pk ON so.object_id = pk.object_id AND c.column_id = pk.column_id
+            WHERE so.type IN ('U', 'V') AND so.is_ms_shipped = 0
+            ORDER BY s.name, so.name, c.column_id
+        `);
+
+        const tableMap = new Map<string, TableInfo>();
+
+        for (const row of result.recordset) {
+            const key = `${row.schema_name}.${row.table_name}`;
+            if (!tableMap.has(key)) {
+                tableMap.set(key, {
+                    database,
+                    schema: row.schema_name,
+                    name: row.table_name,
+                    columns: [],
+                    foreignKeys: [],
+                });
+            }
+
+            tableMap.get(key)!.columns.push({
+                name: row.column_name,
+                dataType: row.data_type,
+                maxLength: row.max_length,
+                isNullable: row.is_nullable,
+                isPrimaryKey: row.is_primary_key === 1,
+            });
+        }
+
+        console.log(`Loaded schema for [${database}]: ${tableMap.size} table(s)`);
+        return Array.from(tableMap.values());
+    }
+
+    /**
+     * Loads tables for all specified databases (excluding the current database,
+     * which should already be loaded via `loadSchema` with full FK support).
+     * Databases that fail (e.g., no permission) are silently skipped.
+     */
+    async loadAllDatabaseSchemas(databases: string[]): Promise<TableInfo[]> {
+        console.log(`SQL Prompt: loading cross-database schemas for ${databases.length} database(s): ${databases.join(', ') || '(none)'}`);
+
+        const results = await Promise.allSettled(
+            databases.map((db) => this.loadSchemaForDatabase(db)),
+        );
+
+        const allTables: TableInfo[] = [];
+        for (let i = 0; i < results.length; i++) {
+            const r = results[i];
+            if (r.status === 'fulfilled') {
+                console.log(`SQL Prompt: loaded ${r.value.length} table(s) from [${databases[i]}]`);
+                allTables.push(...r.value);
+            } else {
+                console.error(
+                    `SQL Prompt: failed to load schema for [${databases[i]}]: ${(r.reason as Error)?.message ?? r.reason
+                    }`,
+                );
+            }
+        }
+
+        console.log(`SQL Prompt: completed cross-database schema load, ${allTables.length} table(s) added`);
+
+        return allTables;
     }
 }
