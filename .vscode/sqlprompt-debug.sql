@@ -1,0 +1,1 @@
+SELECT * from ui.vwOrdini AS v

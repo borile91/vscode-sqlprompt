@@ -464,7 +464,7 @@ async function loadSchemaViaConnectionSharing(ownerUri: string): Promise<SchemaS
             ORDER BY s.name, so.name, c.column_id
         `;
 
-        const foreignKeysQuery = `
+    const foreignKeysQuery = `
             SELECT
                 fk.name AS fk_name,
                 sch_parent.name AS parent_schema,
@@ -921,14 +921,11 @@ export async function activate(context: ExtensionContext) {
         path.join("server", "dist", "server.js"),
     );
 
-    const debugOptions = { execArgv: ["--nolazy", "--inspect-brk=6009"] };
-
     const serverOptions: ServerOptions = {
         run: { module: serverModule, transport: TransportKind.ipc },
         debug: {
             module: serverModule,
             transport: TransportKind.ipc,
-            options: debugOptions,
         },
     };
 
@@ -944,18 +941,11 @@ export async function activate(context: ExtensionContext) {
         revealOutputChannelOn: RevealOutputChannelOn.Info,
     };
 
-    // forceDebug: when running in development mode, always start the language
-    // server with --inspect=6009 regardless of process.execArgv. This is needed
-    // because modern VS Code may not expose --inspect-brk in the extension host's
-    // execArgv, which would otherwise prevent the debug server options from being
-    // used and make "Attach to Server" fail to find anything on port 6009.
-    const forceDebug = context.extensionMode === ExtensionMode.Development;
     client = new LanguageClient(
         "sqlPrompt",
         "SQL Prompt Language Server",
         serverOptions,
         clientOptions,
-        forceDebug,
     );
 
     context.subscriptions.push(
@@ -1168,7 +1158,7 @@ export async function activate(context: ExtensionContext) {
                     // Prefer server-returned columns; fall back to local snapshot
                     const columns = resolved.columns ?? lastTablesSnapshot.find(
                         t => t.schema.toLowerCase() === resolved!.schema.toLowerCase() &&
-                             t.name.toLowerCase() === resolved!.name.toLowerCase(),
+                            t.name.toLowerCase() === resolved!.name.toLowerCase(),
                     )?.columns;
 
                     if (columns) {
