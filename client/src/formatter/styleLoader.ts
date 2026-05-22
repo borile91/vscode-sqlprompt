@@ -14,7 +14,16 @@ export interface SqlPromptStyleJson {
     lists?: {
         placeCommasBeforeItems?: boolean;
         alignComments?: boolean;
+        alignAliases?: boolean;
         addSpaceBeforeComma?: boolean;
+        addSpaceAfterComma?: boolean;
+        placeFirstItemOnNewLines?: 'never' | 'always' | 'wrap' | 'whenLong';
+        placeSubsequentItemsOnNewLines?: 'never' | 'always' | 'wrap' | 'whenLong';
+        alignSubsequentItemsWithFirstItem?: boolean;
+        alignClauseItems?: boolean;
+        alignItemsAcrossClauses?: boolean;
+        alignItemsToTabStops?: boolean;
+        commaAlignment?: 'toStatement' | 'beforeItem' | 'toList';
     };
     parentheses?: {
         collapseParenthesesShorterThan?: number;
