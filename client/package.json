@@ -5,6 +5,10 @@
   "engines": {
     "vscode": "^1.75.0"
   },
+  "scripts": {
+    "compile": "tsc -b",
+    "test": "tsc -b && node --test out/formatter/__tests__/keywordPaddingFormatter.test.js out/formatter/__tests__/listFormatter.test.js out/formatter/__tests__/controlFlowFormatter.test.js"
+  },
   "dependencies": {
     "sql-formatter": "^15.0.0",
     "vscode-languageclient": "^9.0.1"
