@@ -24,22 +24,22 @@ describe('mapToFormatterOptions', () => {
         assert.equal(mapToFormatterOptions(style).useTabs, false);
     });
 
-    it('maps emptyLinesBetweenStatements=1 to linesBetweenQueries=2', () => {
+    it('maps emptyLinesBetweenStatements=1 to linesBetweenQueries=1', () => {
         const style: SqlPromptStyleJson = {
             whitespace: { newLines: { emptyLinesBetweenStatements: 1 } },
-        };
-        assert.equal(mapToFormatterOptions(style).linesBetweenQueries, 2);
-    });
-
-    it('maps emptyLinesBetweenStatements=0 to linesBetweenQueries=1', () => {
-        const style: SqlPromptStyleJson = {
-            whitespace: { newLines: { emptyLinesBetweenStatements: 0 } },
         };
         assert.equal(mapToFormatterOptions(style).linesBetweenQueries, 1);
     });
 
-    it('defaults linesBetweenQueries to 2 when not specified', () => {
-        assert.equal(mapToFormatterOptions({}).linesBetweenQueries, 2);
+    it('maps emptyLinesBetweenStatements=0 to linesBetweenQueries=0', () => {
+        const style: SqlPromptStyleJson = {
+            whitespace: { newLines: { emptyLinesBetweenStatements: 0 } },
+        };
+        assert.equal(mapToFormatterOptions(style).linesBetweenQueries, 0);
+    });
+
+    it('defaults linesBetweenQueries to 1 when not specified', () => {
+        assert.equal(mapToFormatterOptions({}).linesBetweenQueries, 1);
     });
 
     it('maps reservedKeywords uppercase', () => {

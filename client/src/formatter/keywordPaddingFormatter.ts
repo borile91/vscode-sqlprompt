@@ -13,6 +13,26 @@
  * already correct when leading commas are placed.
  */
 
+/**
+ * sql-formatter (standard mode) splits `SET SOMETHING ON` to
+ * `SET\n    SOMETHING ON` — treating SET as a clause keyword and the rest as
+ * clause content.  This applies to both session-option statements
+ * (`SET ANSI_NULLS ON`) and variable assignments (`SET @var = value`).
+ *
+ * This function rejoins them back onto a single line so that downstream
+ * processors (applyKeywordRePadding, applyLeadingCommaFormat, …) see the
+ * canonical `SET <content>` form.
+ *
+ * Must run BEFORE applyKeywordRePadding.
+ */
+export function applySetLineJoining(sql: string): string {
+    // Match: optional leading whitespace, SET, optional trailing spaces/tabs,
+    // a newline, then optional leading whitespace on the next line.
+    // Replace with the leading indent + "SET " (the next-line indent is dropped
+    // because sql-formatter adds an extra tabWidth indent for the "clause content").
+    return sql.replace(/^([ \t]*SET)[ \t]*\n[ \t]*/gm, '$1 ');
+}
+
 /** Fixed keyword column width produced by sql-formatter tabularLeft for T-SQL. */
 const SQL_FORMATTER_KW_WIDTH = 10;
 

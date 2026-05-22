@@ -1,13 +1,13 @@
 # config 1
   "whitespace": {
-    "numberOfSpacesInTabs": 6,
+    "numberOfSpacesInTabs": 4,
     "wrapLinesLongerThan": 200,
     "newLines": {
       "preserveExistingEmptyLinesBetweenStatements": false,
       "preserveExistingEmptyLinesAfterBatchSeparator": false,
       "alignMultilineCommentsMatchingPatterns": true,
-      "emptyLinesBetweenStatements": 2,
-      "emptyLinesAfterBatchSeparator": 2
+      "emptyLinesBetweenStatements": 1,
+      "emptyLinesAfterBatchSeparator": 1
     }
   }
 

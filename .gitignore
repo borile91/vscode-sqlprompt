@@ -8,3 +8,4 @@ server/out/
 .DS_Store
 **/dist/**
 .vscode/sqlprompt-debug.sql
+/docs/formatting/examples/

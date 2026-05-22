@@ -52,7 +52,10 @@
     "asAlignment": "indented"
   },
   "variables": {
-    "placeAssignedValueOnNewLineIfLongerThanMaxLineLength": false
+      "placeAssignedValueOnNewLineIfLongerThanMaxLineLength": false,
+      "alignDataTypesAndValues": true,
+      "addSpaceBetweenDataTypeAndPrecision": false,
+      "placeEqualsSignOnNewLine": false
   },
   "joinStatements": {
     "join": {

@@ -11,12 +11,13 @@ import { format } from 'sql-formatter';
 import type { LoadedStyle } from './styleLoader';
 import { mapToFormatterOptions } from './formatOptionsMapper';
 import { applyControlFlowIndentation } from './controlFlowFormatter';
-import { applyKeywordRePadding } from './keywordPaddingFormatter';
+import { applySetLineJoining, applyKeywordRePadding } from './keywordPaddingFormatter';
 import { applyLeadingCommaFormat } from './listFormatter';
 import { applySemicolonFormatting } from './semicolonFormatter';
 import { applyJoinOnFormatting } from './joinFormatter';
 import { applyCaseFormatting } from './caseFormatter';
-import { applyDdlFormatting } from './ddlFormatter';
+import { applyDdlFormatting, applyDdlProcFormatting, applyProcBodyIndentation } from './ddlFormatter';
+import { applyDeclareFormatting } from './declareFormatter';
 
 export class SqlFormattingProvider implements DocumentFormattingEditProvider {
     constructor(private readonly getStyle: () => LoadedStyle | undefined) {}
@@ -39,13 +40,17 @@ export class SqlFormattingProvider implements DocumentFormattingEditProvider {
         try {
             const tabWidth = style.options.whitespace?.numberOfSpacesInTabs ?? 4;
             formatted = format(text, mapToFormatterOptions(style.options));
+            formatted = applySetLineJoining(formatted);
             formatted = applyKeywordRePadding(formatted);
+            formatted = applyDeclareFormatting(formatted, style.options);
+            formatted = applyDdlProcFormatting(formatted, style.options, tabWidth);
             formatted = applyLeadingCommaFormat(formatted, style.options);
             formatted = applyJoinOnFormatting(formatted, style.options, tabWidth);
             formatted = applyCaseFormatting(formatted, style.options, tabWidth);
             formatted = applyDdlFormatting(formatted, style.options);
             formatted = applyControlFlowIndentation(formatted, style.options, tabWidth);
             formatted = applySemicolonFormatting(formatted, style.options);
+            formatted = applyProcBodyIndentation(formatted, style.options, tabWidth);
         } catch {
             return [];
         }

@@ -15,6 +15,232 @@ export function applyDdlFormatting(sql: string, style: SqlPromptStyleJson): stri
     return alignDdlDataTypes(sql);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Procedure body indentation  (ddl.indentClauses)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * When `ddl.indentClauses === true`, indents the entire body of a stored
+ * procedure/function by `tabWidth` spaces.
+ *
+ * The body begins on the line after a standalone `AS` that was emitted by
+ * `applyDdlProcFormatting` (i.e. `AS` alone on a line following the closing
+ * `)` of the parameter list).
+ *
+ * Must run AFTER `applyControlFlowIndentation` so that BEGIN/END keywords are
+ * already at their correct relative indentation; this pass simply prepends the
+ * base `tabWidth` spaces to every content line in the body.
+ */
+export function applyProcBodyIndentation(
+    sql: string,
+    style: SqlPromptStyleJson,
+    tabWidth: number,
+): string {
+    if (!style.ddl?.indentClauses) return sql;
+
+    const lines = sql.split('\n');
+    const result: string[] = [];
+    let inBody = false;
+    const pad = ' '.repeat(tabWidth);
+
+    for (const line of lines) {
+        if (!inBody) {
+            result.push(line);
+            // A standalone `AS` line signals the start of the procedure body.
+            // This is only produced by applyDdlProcFormatting for PROC/FUNC headers.
+            if (line.trim() === 'AS') {
+                inBody = true;
+            }
+            continue;
+        }
+        // Indent every line in the procedure body (blank lines stay blank)
+        result.push(line === '' ? '' : pad + line);
+    }
+
+    return result.join('\n');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CREATE PROCEDURE / FUNCTION parameter list formatting
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Matches the beginning of a CREATE PROCEDURE/FUNCTION/PROC line up to and
+ * including the opening `(` of the parameter list.
+ *
+ * Group 1 — everything before the `(` (including optional leading whitespace).
+ */
+const CREATE_PROC_RE =
+    /^([ \t]*CREATE\s+(?:OR\s+REPLACE\s+)?(?:PROCEDURE|FUNCTION|PROC)\s+\S+)\s*\(/i;
+
+/**
+ * Splits a parameter-list string (the text between the outer `(` and `)`) at
+ * top-level commas, respecting:
+ *   - Nested parentheses  e.g. `NUMERIC(12, 3)`, `VARCHAR(50)`
+ *   - Single-quoted string literals  e.g. `= 'XXXXX'`
+ *   - Line comments  e.g. `@p BIT -- some comment`
+ *     (the newline that terminates the comment resets the comment state; any
+ *      comma that falls on a standalone comma line is still treated as a
+ *      top-level separator)
+ */
+function splitParamList(s: string): string[] {
+    const params: string[] = [];
+    let depth = 0;
+    let start = 0;
+    let inLineComment = false;
+
+    for (let i = 0; i < s.length; i++) {
+        const ch = s[i];
+
+        // Line-comment: ignore everything from "--" to the next newline
+        if (!inLineComment && ch === '-' && s[i + 1] === '-') {
+            inLineComment = true;
+            i++; // skip second '-'
+            continue;
+        }
+        if (inLineComment) {
+            if (ch === '\n') inLineComment = false;
+            continue;
+        }
+
+        // Single-quoted string literal
+        if (ch === "'") {
+            i++;
+            while (i < s.length && s[i] !== "'") i++;
+            // i now points at the closing quote (or past the end)
+            continue;
+        }
+
+        if (ch === '(') {
+            depth++;
+        } else if (ch === ')') {
+            depth--;
+        } else if (ch === ',' && depth === 0) {
+            const param = s.slice(start, i).trim();
+            if (param.length > 0) params.push(param);
+            start = i + 1;
+        }
+    }
+
+    const last = s.slice(start).trim();
+    if (last.length > 0) params.push(last);
+    return params;
+}
+
+/**
+ * Post-processes sql-formatter output to reformat CREATE PROCEDURE / FUNCTION
+ * parameter lists when `ddl.placeFirstProcedureParameterOnNewLine === "always"`:
+ *
+ * Input (sql-formatter standard mode, single line or multi-line):
+ *   CREATE PROCEDURE rf.spLoadItem (@stab VARCHAR(3), @maga VARCHAR(3)) AS
+ *
+ * Output:
+ *   CREATE PROCEDURE rf.spLoadItem
+ *       (
+ *       @stab VARCHAR(3)
+ *     , @maga VARCHAR(3)
+ *       )
+ *   AS
+ *
+ * The indentation uses `tabWidth`.  Commas are placed at `tabWidth - 2` spaces
+ * so that the parameter name aligns with the first parameter (comma-first style).
+ */
+export function applyDdlProcFormatting(
+    sql: string,
+    style: SqlPromptStyleJson,
+    tabWidth: number,
+): string {
+    if (style.ddl?.placeFirstProcedureParameterOnNewLine !== 'always') return sql;
+
+    const lines = sql.split('\n');
+    const result: string[] = [];
+    let i = 0;
+
+    while (i < lines.length) {
+        const line = lines[i];
+        const procMatch = line.match(CREATE_PROC_RE);
+
+        if (!procMatch) {
+            result.push(line);
+            i++;
+            continue;
+        }
+
+        // Leading whitespace of the CREATE PROCEDURE line (for nested contexts)
+        const lineIndent = (procMatch[1].match(/^([ \t]*)/) ?? ['', ''])[1];
+        // Normalise the proc head (collapse internal whitespace, drop leading indent)
+        const procHead = procMatch[1].replace(/\s+/g, ' ').trimStart();
+
+        // Collect all text starting from the `(` to the matching `)`.
+        // sql-formatter may have split the params across multiple lines.
+        const openParenIdx = procMatch[0].length - 1; // index of `(` in `line`
+        let collected = line.slice(openParenIdx); // starts with `(`
+        let tempI = i + 1;
+
+        // Find the matching close paren (depth-tracking over the collected text)
+        const findClose = (text: string): number => {
+            let depth = 0;
+            for (let k = 0; k < text.length; k++) {
+                if (text[k] === '(') depth++;
+                else if (text[k] === ')') { depth--; if (depth === 0) return k; }
+            }
+            return -1;
+        };
+
+        let closeIdx = findClose(collected);
+        while (closeIdx === -1 && tempI < lines.length) {
+            collected += '\n' + lines[tempI];
+            tempI++;
+            closeIdx = findClose(collected);
+        }
+
+        if (closeIdx === -1) {
+            // Unbalanced — leave as-is
+            result.push(line);
+            i++;
+            continue;
+        }
+
+        const paramContent = collected.slice(1, closeIdx); // between ( and )
+        const afterClose = collected.slice(closeIdx + 1).trim(); // e.g. "AS"
+
+        const params = splitParamList(paramContent);
+
+        if (params.length === 0) {
+            // Empty param list — leave as-is
+            result.push(line);
+            i++;
+            continue;
+        }
+
+        const bodyIndent = ' '.repeat(tabWidth);
+        const commaIndent = ' '.repeat(Math.max(0, tabWidth - 2));
+
+        result.push(lineIndent + procHead);
+        result.push(lineIndent + bodyIndent + '(');
+
+        for (let p = 0; p < params.length; p++) {
+            const param = params[p];
+            if (p === 0) {
+                result.push(lineIndent + bodyIndent + param);
+            } else {
+                result.push(lineIndent + commaIndent + ', ' + param);
+            }
+        }
+
+        result.push(lineIndent + bodyIndent + ')');
+
+        if (afterClose) {
+            result.push(lineIndent + afterClose);
+        }
+
+        i = tempI;
+    }
+
+    return result.join('\n');
+}
+
+
 /**
  * Matches a CREATE or ALTER TABLE/PROCEDURE statement opening.
  * We only process CREATE TABLE / ALTER TABLE for column alignment.

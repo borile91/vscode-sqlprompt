@@ -1,0 +1,197 @@
+{
+  "metadata": {
+    "name": "Defaults"
+  },
+  "whitespace": {
+    "numberOfSpacesInTabs": 4,
+    "spacesOrTabs": "onlySpaces",
+    "wrapLinesLongerThan": 200,
+    "wrapLongLines": true,
+    "whiteSpaceBeforeSemiColon": "none",
+    "newLines": {
+      "preserveExistingEmptyLinesBetweenStatements": false,
+      "preserveExistingEmptyLinesWithinStatements": false,
+      "alignGroupOfSingleLineComments": false,
+      "alignMultilineCommentsMatchingPatterns": true,
+      "emptyLinesBetweenStatements": 1,
+      "emptyLinesAfterBatchSeparator": 1
+    }
+  },
+  "lists": {
+    "alignComments": true,
+    "placeCommasBeforeItems": false,
+    "addSpaceBeforeComma": true,
+    "addSpaceAfterComma": true,
+    "placeFirstItemOnNewLines": "never",
+    "placeSubsequentItemsOnNewLines": "never",
+    "alignSubsequentItemsWithFirstItem": true,
+    "alignAliases": false,
+    "alignClauseItems": true,
+    "alignItemsAcrossClauses": true,
+    "alignItemsToTabStops": false,
+    "commaAlignment": "beforeItem"
+  },
+  "parentheses": {
+    "collapseParenthesesShorterThan": 78,
+    "collapseShortParentheses": false,
+    "layout": "compactSimple",
+    "addSpacesInsideParentheses": true,
+    "addSpacesAroundParentheses": false,
+    "spaceInsideEmptyParentheses": false,
+    "indentContents": false,
+    "placeClosingOnNewLine": false,
+    "openingAlignment": "toStatement",
+    "openingBreakType": "never",
+    "contentsAlignment": "tabbedFromOpeningBracket",
+    "contentsBreakType": "never",
+    "closingAlignment": "toOpeningBracket"
+  },
+  "casing": {
+    "reservedKeywords": "uppercase",
+    "builtInFunctions": "uppercase",
+    "builtInDataTypes": "uppercase",
+    "globalVariables": "preserve",
+    "useObjectDefinitionCase": true
+  },
+  "dml": {
+    "placeInsertTableOnNewLine": false,
+    "placeDistinctAndTopClausesOnNewLine": false,
+    "addNewLineAfterDistinctAndTopClauses": false,
+    "collapseStatementsShorterThan": 75,
+    "collapseShortStatements": false,
+    "collapseSubqueriesShorterThan": 15,
+    "collapseShortSubqueries": false,
+    "clauses": {
+      "clauseAlignment": "toStatement",
+      "clauseIndentation": 0
+    },
+    "listItems": {
+      "placeFromTableOnNewLine": "never",
+      "placeWhereConditionOnNewLine": "never",
+      "placeGroupByAndOrderByOnNewLine": "never"
+    }
+  },
+  "ddl": {
+    "parenthesisStyle": "expandedIndented",
+    "overrideParenthesesForCreateAlter": true,
+    "indentClauses": true,
+    "indentContents": false,
+    "placeClosingParenthesisOnNewLine": true,
+    "placeFirstProcedureParameterOnNewLine": "always",
+    "firstDefinitionBreakType": "always",
+    "placeFirstDefinitionOnNewLine": true,
+    "collapseStatementsShorterThan": 75,
+    "collapseShortStatements": false,
+    "breakOnConstraints": false,
+    "constraintColumnsBreakType": "whenLong",
+    "verticallyAlignColumnDefinitions": false,
+    "verticallyAlignDataTypes": true,
+    "closingParenthesisAlignment": "toOpeningBracket",
+    "openingParenthesisAlignment": "tabbed",
+    "openingParenthesisBreakType": "always",
+    "contentsBreakType": "never"
+  },
+  "controlFlow": {
+    "indentBeginAndEndKeywords": false,
+    "indentContentsOfStatements": true,
+    "placeBeginOnNewLine": true,
+    "collapseStatementsShorterThan": 78,
+    "collapseShortStatements": false
+  },
+  "cte": {
+    "asAlignment": "leftAligned",
+    "indentContents": false,
+    "indentName": false,
+    "preferBreakBeforeName": false,
+    "columnsOpeningParenthesisAlignment": "toStatement",
+    "columnsOpeningParenthesisBreakType": "never",
+    "contentsOpeningParenthesisAlignment": "toStatement",
+    "contentsOpeningParenthesisBreakType": "never",
+    "contentsParenthesisLayout": "compactSimple",
+    "contentsExpressionAlignment": "toStartOfOpeningBracket",
+    "contentsExpressionBreakType": "never"
+  },
+  "variables": {
+    "placeAssignedValueOnNewLineIfLongerThanMaxLineLength": false,
+    "alignDataTypesAndValues": true,
+    "addSpaceBetweenDataTypeAndPrecision": false,
+    "placeEqualsSignOnNewLine": false
+  },
+  "joinStatements": {
+    "insertEmptyLineBetweenJoins": false,
+    "join": {
+      "keywordAlignment": "toFrom",
+      "indentJoinTable": false,
+      "placeTableOnNewLine": false,
+      "breakType": "always"
+    },
+    "on": {
+      "placeOnNewLine": true,
+      "keywordAlignment": "indented",
+      "conditionBreakType": "never",
+      "conditionAlignment": "toInner",
+      "verticallyAlignWithJoinTable": false
+    }
+  },
+  "insertStatements": {
+    "preferBreakBeforeTable": false,
+    "columns": {
+      "parenthesisStyle": "compactSimple",
+      "indentContents": false,
+      "subsequentItemsBreakType": "always"
+    },
+    "values": {
+      "parenthesisStyle": "compactSimple",
+      "indentContents": false,
+      "subsequentItemsBreakType": "wrap"
+    }
+  },
+  "functionCalls": {
+    "placeArgumentsOnNewLines": "wrap",
+    "addSpacesAroundParentheses": false,
+    "addSpacesAroundArgumentList": false,
+    "addSpaceBetweenEmptyParentheses": false,
+    "addSpaceAfterFunctionCalls": false
+  },
+  "caseExpressions": {
+    "placeExpressionOnNewLine": false,
+    "placeFirstWhenOnNewLine": "ifInputExpression",
+    "whenAlignment": "toFirstItem",
+    "alignElseToWhen": true,
+    "placeElseOnNewLine": true,
+    "placeEndOnNewLine": true,
+    "endAlignment": "toCase",
+    "expressionAlignment": "tabbed",
+    "placeThenOnNewLine": false,
+    "collapseCaseExpressionsShorterThan": 75,
+    "collapseShortCaseExpressions": false
+  },
+  "operators": {
+    "andOr": {
+      "alignment": "toFirstItem",
+      "breakType": "always",
+      "placeKeywordBeforeCondition": true
+    },
+    "between": {
+      "placeOnNewLine": false,
+      "placeAndOnNewLine": false,
+      "andAlignment": "toBetween"
+    },
+    "in": {
+      "placeFirstValueOnNewLine": "never",
+      "placeSubsequentValuesOnNewLines": "never",
+      "openingParenthesisAlignment": "toStatement",
+      "openingParenthesisBreakType": "never",
+      "addSpaceAroundInContents": true
+    },
+    "comparisonOperators": {
+      "spaceBefore": true,
+      "spaceAfter": true,
+      "verticallyAlign": false
+    },
+    "arithmeticOperators": {
+      "spaceBefore": true,
+      "spaceAfter": true
+    }
+  }
+}
