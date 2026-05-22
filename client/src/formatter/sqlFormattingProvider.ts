@@ -14,6 +14,7 @@ import { applyControlFlowIndentation } from './controlFlowFormatter';
 import { applyKeywordRePadding } from './keywordPaddingFormatter';
 import { applyLeadingCommaFormat } from './listFormatter';
 import { applySemicolonFormatting } from './semicolonFormatter';
+import { applyJoinOnFormatting } from './joinFormatter';
 
 export class SqlFormattingProvider implements DocumentFormattingEditProvider {
     constructor(private readonly getStyle: () => LoadedStyle | undefined) {}
@@ -38,6 +39,7 @@ export class SqlFormattingProvider implements DocumentFormattingEditProvider {
             formatted = format(text, mapToFormatterOptions(style.options));
             formatted = applyKeywordRePadding(formatted);
             formatted = applyLeadingCommaFormat(formatted, style.options);
+            formatted = applyJoinOnFormatting(formatted, style.options, tabWidth);
             formatted = applyControlFlowIndentation(formatted, style.options, tabWidth);
             formatted = applySemicolonFormatting(formatted, style.options);
         } catch {

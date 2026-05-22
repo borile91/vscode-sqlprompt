@@ -72,6 +72,7 @@ export interface SqlPromptStyleJson {
             indentJoinTable?: boolean;
         };
         on?: {
+            placeOnNewLine?: boolean;
             keywordAlignment?: string;
             conditionAlignment?: string;
         };
