@@ -8,10 +8,16 @@ function mapCasing(value: string | undefined): 'upper' | 'lower' | 'preserve' {
 }
 
 export function mapToFormatterOptions(style: SqlPromptStyleJson): FormatOptionsWithLanguage {
+    const tabWidth = style.whitespace?.numberOfSpacesInTabs ?? 4;
+    const useTabs = style.whitespace?.spacesOrTabs === 'onlyTabs';
+    const linesBetweenQueries =
+        (style.whitespace?.newLines?.emptyLinesBetweenStatements ?? 1) + 1;
+
     const opts: FormatOptionsWithLanguage = {
         language: 'tsql',
-        tabWidth: style.whitespace?.numberOfSpacesInTabs ?? 4,
-        linesBetweenQueries: 1,
+        tabWidth,
+        useTabs,
+        linesBetweenQueries,
     };
 
     if (style.casing) {

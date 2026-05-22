@@ -22,8 +22,12 @@ export interface SqlPromptStyleJson {
     };
     whitespace?: {
         numberOfSpacesInTabs?: number;
+        spacesOrTabs?: 'onlySpaces' | 'onlyTabs' | 'spacesAndTabs';
         wrapLinesLongerThan?: number;
+        whiteSpaceBeforeSemiColon?: 'none' | 'spaceBefore' | 'newLineBefore';
         newLines?: {
+            emptyLinesBetweenStatements?: number;
+            emptyLinesAfterBatchSeparator?: number;
             preserveExistingEmptyLinesBetweenStatements?: boolean;
             preserveExistingEmptyLinesAfterBatchSeparator?: boolean;
         };
