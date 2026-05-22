@@ -28,8 +28,10 @@ function splitBlockBoundaries(line: string): string[] {
     // Negative lookbehind/lookahead prevent matching inside identifiers or
     // variable names like @end / end_date.
     // BEGIN TRANSACTION and BEGIN DISTRIBUTED are excluded via negative lookahead.
+    // END followed by AS is a CASE expression terminator (e.g. END AS alias),
+    // not a block boundary — exclude it via negative lookahead.
     const BOUNDARY_RE =
-        /(?<![a-zA-Z0-9@_])(END\s+(?:TRY|CATCH)\s*;?|BEGIN\s+(?:TRY|CATCH)\s*;?|END\s*;?|BEGIN(?!\s+(?:TRANSACTION|DISTRIBUTED|TRY|CATCH)\b))(?![a-zA-Z0-9_])/gi;
+        /(?<![a-zA-Z0-9@_])(END\s+(?:TRY|CATCH)\s*;?|BEGIN\s+(?:TRY|CATCH)\s*;?|END(?!\s+AS\b)\s*;?|BEGIN(?!\s+(?:TRANSACTION|DISTRIBUTED|TRY|CATCH)\b))(?![a-zA-Z0-9_])/gi;
 
     const segments: string[] = [];
     let lastIndex = 0;

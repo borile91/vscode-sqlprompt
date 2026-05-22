@@ -36,6 +36,7 @@ export function applyJoinOnFormatting(sql: string, style: SqlPromptStyleJson, ta
     if (!shouldTransformJoinIndent && !placeOnNewLine) return sql;
 
     const keywordAlignment = onCfg?.keywordAlignment ?? 'indented';
+    const conditionAlignment = onCfg?.conditionAlignment;
     const lines = sql.split('\n');
 
     // For "toTable" alignment, infer the keyword column width from the SQL so
@@ -55,8 +56,11 @@ export function applyJoinOnFormatting(sql: string, style: SqlPromptStyleJson, ta
             // When toTable is active, the JOIN keyword moves to the table column.
             const effectiveIndent = shouldTransformJoinIndent ? kwColWidth : indent;
 
-            // Check if ON is inline on the same line as the JOIN/table
-            const inlineOnMatch = tableAndRest.match(/^(.*?)\s+ON\s+(.+)$/i);
+            // Check if ON is inline on the same line as the JOIN/table.
+            // OUTER APPLY / CROSS APPLY never have ON, so skip this check for them.
+            const isApply = /^(?:OUTER|CROSS)\s+APPLY$/i.test(joinKeyword);
+            const inlineOnMatch = !isApply ? tableAndRest.match(/^(.*?)\s+ON\s+(.+)$/i) : null;
+
             if (inlineOnMatch) {
                 // ON is inline — split it out
                 const tableOnly = inlineOnMatch[1].trimEnd();
@@ -65,10 +69,13 @@ export function applyJoinOnFormatting(sql: string, style: SqlPromptStyleJson, ta
                 if (placeOnNewLine) {
                     const onIndent = computeOnIndent(effectiveIndent, joinKeyword, keywordAlignment, tabWidth);
                     result.push(' '.repeat(onIndent) + 'ON ' + condition);
+                    i++;
+                    // Re-indent AND/OR condition continuations after ON
+                    i = reindentConditions(lines, i, onIndent, conditionAlignment, result);
                 } else {
                     result[result.length - 1] += ' ON ' + condition;
+                    i++;
                 }
-                i++;
                 continue;
             }
 
@@ -81,7 +88,7 @@ export function applyJoinOnFormatting(sql: string, style: SqlPromptStyleJson, ta
             i++;
 
             // Peek ahead: next line might already be an ON line
-            if (placeOnNewLine && i < lines.length) {
+            if (!isApply && placeOnNewLine && i < lines.length) {
                 const nextLine = lines[i];
                 const onLineMatch = nextLine.match(/^(\s*)(ON)\s+(.*)/i);
                 if (onLineMatch) {
@@ -89,6 +96,8 @@ export function applyJoinOnFormatting(sql: string, style: SqlPromptStyleJson, ta
                     const onIndent = computeOnIndent(effectiveIndent, joinKeyword, keywordAlignment, tabWidth);
                     result.push(' '.repeat(onIndent) + 'ON ' + condition);
                     i++;
+                    // Re-indent AND/OR condition continuations after ON
+                    i = reindentConditions(lines, i, onIndent, conditionAlignment, result);
                     continue;
                 }
             }
@@ -129,16 +138,47 @@ interface JoinMatch {
 
 /**
  * Matches a JOIN line: optional leading spaces + JOIN keyword(s) + space + rest.
- * Recognises INNER JOIN, LEFT JOIN, RIGHT JOIN, FULL JOIN, CROSS JOIN, JOIN.
+ * Recognises INNER JOIN, LEFT JOIN, RIGHT JOIN, FULL JOIN, CROSS JOIN, JOIN,
+ * OUTER APPLY, CROSS APPLY.
  */
 function matchJoinLine(line: string): JoinMatch | null {
-    const m = line.match(/^(\s*)((?:INNER|LEFT|RIGHT|FULL|CROSS)\s+(?:OUTER\s+)?JOIN|JOIN)\s+(.+)$/i);
+    const m = line.match(
+        /^(\s*)((?:INNER|LEFT|RIGHT|FULL|CROSS)\s+(?:OUTER\s+)?JOIN|OUTER\s+APPLY|CROSS\s+APPLY|JOIN)\s+(.+)$/i,
+    );
     if (!m) return null;
     return {
         indent: m[1].length,
         joinKeyword: m[2].replace(/\s+/g, ' '),
         tableAndRest: m[3],
     };
+}
+
+/**
+ * When `conditionAlignment === "toInner"`, re-indents AND/OR condition lines
+ * that immediately follow an ON clause so they align with the first condition
+ * (i.e. at column `onIndent + "ON ".length`).
+ *
+ * Consumes lines from `lines[startIdx]` while they look like condition
+ * operators, appends them to `result`, and returns the next index.
+ */
+function reindentConditions(
+    lines: string[],
+    startIdx: number,
+    onIndent: number,
+    conditionAlignment: string | undefined,
+    result: string[],
+): number {
+    if (conditionAlignment !== 'toInner') return startIdx;
+
+    const condCol = onIndent + 'ON '.length; // align to first condition character
+    let i = startIdx;
+    while (i < lines.length) {
+        const m = lines[i].match(/^\s*((?:AND|OR)\b.*)/i);
+        if (!m) break;
+        result.push(' '.repeat(condCol) + m[1].trimStart());
+        i++;
+    }
+    return i;
 }
 
 /**

@@ -47,6 +47,8 @@ const SQL_FORMATTER_KW_WIDTH = 10;
  *  - "ORDER BY" (8) and "GROUP BY" (8) are also compound tokens.
  */
 const KEYWORD_TOKENS: string[] = [
+    'OUTER APPLY', // 11 — must precede 'OUTER' / 'CROSS' singles
+    'CROSS APPLY', // 11
     'INTERSECT',   // 9
     'LEFT JOIN',   // 9
     'FULL JOIN',   // 9
@@ -99,7 +101,7 @@ interface DetectedKeyword {
  * They are moved to the FROM content column rather than kept at the clause
  * keyword column, so they never inflate the max keyword width for the block.
  */
-const JOIN_CLAUSE_KEYWORDS = new Set(['LEFT JOIN', 'FULL JOIN']);
+const JOIN_CLAUSE_KEYWORDS = new Set(['LEFT JOIN', 'FULL JOIN', 'OUTER APPLY', 'CROSS APPLY']);
 
 /**
  * Keywords that act as boolean operators inside WHERE / ON / HAVING conditions.
@@ -181,9 +183,11 @@ function rePadBlock(block: string, oldWidth: number): string {
 
             // AND/OR and JOIN keywords render at the content column (indent + newWidth)
             // rather than at the keyword column (indent + 0) with extra padding.
+            // Normalise internal whitespace in compound tokens (e.g. OUTER     APPLY → OUTER APPLY).
             if (CONDITION_OPERATORS.has(kwUpper) || JOIN_CLAUSE_KEYWORDS.has(kwUpper)) {
                 if (newWidth === undefined) return line; // no clause keywords in block
-                return ' '.repeat(kw.indent + newWidth) + kw.token + ' ' + kw.content;
+                const normToken = kw.token.replace(/\s+/g, ' ');
+                return ' '.repeat(kw.indent + newWidth) + normToken + ' ' + kw.content;
             }
 
             if (newWidth === undefined || newWidth === oldWidth) return line;
