@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": ".."
+		}
+	],
+	"settings": {
+		"[sql]": {
+			"editor.defaultFormatter": "borile91.vscode-sqlprompt"
+		},
+		"sqlPrompt.formatting.activeStyle": "1 - MadLab Vertical",
+		"mssql.intelliSense.enableSuggestions": false
+	}
+}
