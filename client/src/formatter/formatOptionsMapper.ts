@@ -11,7 +11,7 @@ export function mapToFormatterOptions(style: SqlPromptStyleJson): FormatOptionsW
     const tabWidth = style.whitespace?.numberOfSpacesInTabs ?? 4;
     const useTabs = style.whitespace?.spacesOrTabs === 'onlyTabs';
     const linesBetweenQueries =
-        (style.whitespace?.newLines?.emptyLinesBetweenStatements ?? 1) + 1;
+        style.whitespace?.newLines?.emptyLinesBetweenStatements ?? 1;
 
     const opts: FormatOptionsWithLanguage = {
         language: 'tsql',

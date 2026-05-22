@@ -73,11 +73,11 @@ See [AllOptions.json](AllOptions.json) for the full set of supported keys.
 | `dml` | [configurations/dml.md](configurations/dml.md) | SELECT / INSERT / UPDATE / DELETE |
 | `ddl` | [configurations/ddl.md](configurations/ddl.md) | CREATE / ALTER / DROP |
 | `controlFlow` | [configurations/controlFlow.md](configurations/controlFlow.md) | IF / WHILE / BEGIN-END |
-| `cte` | — | WITH clause |
-| `variables` | — | DECLARE / SET |
+| `cte` | [configurations/cte.md](configurations/cte.md) | WITH clause |
+| `variables` | [configurations/variables.md](configurations/variables.md) | DECLARE / SET |
 | `joinStatements` | [configurations/joinStatements.md](configurations/joinStatements.md) | JOIN keyword and ON clause alignment |
 | `insertStatements` | — | INSERT column and values lists |
-| `functionCalls` | — | Function argument formatting |
+| `functionCalls` | [configurations/functionCall.md](configurations/functionCall.md) | Function argument formatting |
 | `caseExpressions` | — | CASE / WHEN / THEN / END |
 | `operators` | [configurations/operators.md](configurations/operators.md) | AND/OR, BETWEEN, IN |
 
