@@ -1,8 +1,16 @@
 # SQL Formatting
 
-## Overview
+## Quick Navigation
 
-The extension can format SQL documents using style profiles exported from Redgate SQL Prompt (`.json` format). A folder containing one or more style files is configured once; the extension loads each file and makes the style selectable.
+| Document | Description |
+|---|---|
+| [IMPLEMENTATION.md](IMPLEMENTATION.md) | Feature-by-feature implementation guide with test cases |
+| [configurations/](configurations/) | Per-category option docs with examples |
+| [examples/](examples/) | Full SQL snippets formatted with the 1-MadLab-Vertical style |
+| [1-MadLab-Vertical.jsonc](1-MadLab-Vertical.jsonc) | Primary style profile used for development and testing |
+| [AllOptions.json](AllOptions.json) | Reference profile listing every supported option |
+
+---
 
 ## VS Code Integration
 
@@ -19,60 +27,68 @@ The implementation therefore exposes style selection through two complementary c
 
 Setting `"[sql]": { "editor.defaultFormatter": "borile91.vscode-sqlprompt" }` makes our provider the default formatter for all SQL files.
 
-## Configuration
+---
+
+## Extension Settings
 
 | Setting | Type | Description |
 |---|---|---|
 | `sqlPrompt.formatting.stylesFolder` | `string` | Absolute path to the folder containing `.json` style files. Changes take effect immediately without reloading the extension. |
 | `sqlPrompt.formatting.activeStyle` | `string` | Name of the currently active style (filename without `.json`, or `metadata.name` from the file). Persisted at workspace or user scope. |
 
+---
+
 ## Style File Format
 
-The extension reads the **JSON export** format produced by Redgate SQL Prompt (the new portable format, not `.sqlpromptstylev2` XML).
-
-Example file structure:
+Style files are JSON exports from Redgate SQL Prompt (portable `.json` format, not `.sqlpromptstylev2` XML).
 
 ```json
 {
   "metadata": { "name": "My Style" },
   "casing": {
-    "reservedKeywords": "uppercase",
-    "builtInFunctions": "uppercase",
-    "builtInDataTypes": "uppercase"
+    "reservedKeywords": "uppercase"
   },
   "lists": {
-    "placeCommasBeforeItems": true
+    "placeCommasBeforeItems": true,
+    "commaAlignment": "toList"
   },
   "whitespace": {
-    "wrapLinesLongerThan": 120
-  },
-  "operators": {
-    "andOr": { "alignment": "toFirstListItem" }
+    "wrapLinesLongerThan": 200
   }
 }
 ```
 
-## Formatting Engine
+See [AllOptions.json](AllOptions.json) for the full set of supported keys.
 
-Formatting is performed by [`sql-formatter`](https://github.com/sql-formatter-org/sql-formatter) (T-SQL dialect). The style JSON is mapped to its options as follows:
+---
 
-| Style JSON field | sql-formatter option | Notes |
+## Configuration Categories
+
+| Category | Config doc | Covers |
 |---|---|---|
-| `casing.reservedKeywords` | `keywordCase` | `"uppercase"` → `"upper"`, `"lowercase"` → `"lower"`, else `"preserve"` |
-| `casing.builtInFunctions` | `functionCase` | Same mapping |
-| `casing.builtInDataTypes` | `dataTypeCase` | Same mapping |
-| `lists.placeCommasBeforeItems` | `commaPosition` | `true` → `"before"`, `false` → `"after"` |
-| `whitespace.wrapLinesLongerThan` | `expressionWidth` | Defaults to `80` if not set |
-| `operators.andOr.alignment` | `logicalOperatorNewline` | `"afterOperator"` → `"after"`, all others → `"before"` |
+| `whitespace` | [configurations/whitespace.md](configurations/whitespace.md) | Tabs, line wrapping, semicolons, blank lines |
+| `lists` | [configurations/lists.md](configurations/lists.md) | Comma placement and column list alignment |
+| `parentheses` | — | Spacing, layout, collapse thresholds |
+| `casing` | — | Keywords, functions, data types |
+| `dml` | [configurations/dml.md](configurations/dml.md) | SELECT / INSERT / UPDATE / DELETE |
+| `ddl` | [configurations/ddl.md](configurations/ddl.md) | CREATE / ALTER / DROP |
+| `controlFlow` | [configurations/controlFlow.md](configurations/controlFlow.md) | IF / WHILE / BEGIN-END |
+| `cte` | — | WITH clause |
+| `variables` | — | DECLARE / SET |
+| `joinStatements` | [configurations/joinStatements.md](configurations/joinStatements.md) | JOIN keyword and ON clause alignment |
+| `insertStatements` | — | INSERT column and values lists |
+| `functionCalls` | — | Function argument formatting |
+| `caseExpressions` | — | CASE / WHEN / THEN / END |
+| `operators` | [configurations/operators.md](configurations/operators.md) | AND/OR, BETWEEN, IN |
 
-Options not covered by `sql-formatter` (detailed JOIN alignment, DDL parenthesis style, CASE indentation, etc.) are silently ignored. The covered subset produces correct keyword casing, comma placement, and line-wrap behaviour.
+---
 
 ## Architecture
 
 ```
 client/src/formatter/
-├── styleLoader.ts          Reads .json files from the configured folder
-├── formatOptionsMapper.ts  Maps SqlPromptStyleJson → sql-formatter FormatOptionsWithLanguage
+├── styleLoader.ts            Reads .json files from the configured folder
+├── formatOptionsMapper.ts    Maps SqlPromptStyleJson → formatter engine options
 └── sqlFormattingProvider.ts  DocumentFormattingEditProvider implementation
 ```
 
