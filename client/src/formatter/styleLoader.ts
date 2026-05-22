@@ -60,9 +60,23 @@ export interface SqlPromptStyleJson {
     };
     ddl?: {
         parenthesisStyle?: string;
+        overrideParenthesesForCreateAlter?: boolean;
         indentClauses?: boolean;
+        indentContents?: boolean;
+        placeClosingParenthesisOnNewLine?: boolean;
         placeFirstProcedureParameterOnNewLine?: 'always' | 'never' | 'ifMultiple';
+        firstDefinitionBreakType?: 'always' | 'never' | 'whenLong';
+        placeFirstDefinitionOnNewLine?: boolean;
         collapseStatementsShorterThan?: number;
+        collapseShortStatements?: boolean;
+        breakOnConstraints?: boolean;
+        constraintColumnsBreakType?: 'never' | 'always' | 'whenLong';
+        verticallyAlignDataTypes?: boolean;
+        verticallyAlignColumnDefinitions?: boolean;
+        openingParenthesisAlignment?: string;
+        openingParenthesisBreakType?: string;
+        closingParenthesisAlignment?: string;
+        contentsBreakType?: string;
     };
     controlFlow?: {
         indentBeginAndEndKeywords?: boolean;

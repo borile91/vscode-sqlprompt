@@ -16,6 +16,7 @@ import { applyLeadingCommaFormat } from './listFormatter';
 import { applySemicolonFormatting } from './semicolonFormatter';
 import { applyJoinOnFormatting } from './joinFormatter';
 import { applyCaseFormatting } from './caseFormatter';
+import { applyDdlFormatting } from './ddlFormatter';
 
 export class SqlFormattingProvider implements DocumentFormattingEditProvider {
     constructor(private readonly getStyle: () => LoadedStyle | undefined) {}
@@ -42,6 +43,7 @@ export class SqlFormattingProvider implements DocumentFormattingEditProvider {
             formatted = applyLeadingCommaFormat(formatted, style.options);
             formatted = applyJoinOnFormatting(formatted, style.options, tabWidth);
             formatted = applyCaseFormatting(formatted, style.options, tabWidth);
+            formatted = applyDdlFormatting(formatted, style.options);
             formatted = applyControlFlowIndentation(formatted, style.options, tabWidth);
             formatted = applySemicolonFormatting(formatted, style.options);
         } catch {
