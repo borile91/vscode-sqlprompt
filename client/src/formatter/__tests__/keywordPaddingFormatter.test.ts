@@ -39,4 +39,43 @@ describe('applyKeywordRePadding', () => {
         // keyword width becomes 7, continuation line also gets 7 leading spaces
         assert.ok(result.startsWith('SELECT a,\n       b\nFROM   t'));
     });
+
+    it('does not count LEFT JOIN in keyword width — SELECT gets 1 space', () => {
+        const input = 'SELECT    a\nFROM      t1\nLEFT JOIN t2 ON t1.id = t2.id\nWHERE     x = 1';
+        const result = applyKeywordRePadding(input);
+        // Without LEFT JOIN in max, newWidth = SELECT(6)+1 = 7
+        assert.ok(result.startsWith('SELECT a\nFROM   t1'), `got: ${result.split('\n')[0]}`);
+    });
+
+    it('moves LEFT JOIN to the content column (FROM content column)', () => {
+        const input = 'SELECT    a\nFROM      t1\nLEFT JOIN t2 ON t1.id = t2.id';
+        const result = applyKeywordRePadding(input);
+        const lines = result.split('\n');
+        // FROM width = 7, so content at col 7. LEFT JOIN should be at col 7.
+        assert.ok(lines[2].startsWith('       LEFT JOIN'), `got: "${lines[2]}"`);
+    });
+
+    it('moves AND to the content column of its parent clause', () => {
+        const input = 'SELECT    a\nFROM      t\nWHERE     x = 1\nAND       y = 2';
+        const result = applyKeywordRePadding(input);
+        const lines = result.split('\n');
+        // WHERE width = 7 (SELECT=6 max), so content at col 7. AND should be at col 7.
+        assert.ok(lines[3].startsWith('       AND y = 2'), `got: "${lines[3]}"`);
+    });
+
+    it('moves OR to the content column', () => {
+        const input = 'SELECT    a\nFROM      t\nWHERE     x = 1\nOR        y = 2';
+        const result = applyKeywordRePadding(input);
+        const lines = result.split('\n');
+        assert.ok(lines[3].startsWith('       OR '), `got: "${lines[3]}"`);
+    });
+
+    it('AND does not inflate keyword width when alone with WHERE', () => {
+        const input = 'WHERE     x = 1\nAND       y = 2\nAND       z = 3';
+        const result = applyKeywordRePadding(input);
+        const lines = result.split('\n');
+        // WHERE(5) → newWidth=6. AND moves to col 6, not col 10.
+        assert.ok(lines[0].startsWith('WHERE '), `got: "${lines[0]}"`);
+        assert.ok(lines[1].startsWith('      AND '), `got: "${lines[1]}"`);
+    });
 });

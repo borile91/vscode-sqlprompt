@@ -64,4 +64,13 @@ describe('applyProcBodyIndentation — indentClauses: true', () => {
             'CREATE PROCEDURE dbo.P\nAS\n    BEGIN\n        SELECT 1;\n    END;',
         );
     });
+
+    it('GO batch separator is placed at column 0 and stops body indentation', () => {
+        const sql = 'CREATE PROCEDURE dbo.P\nAS\nRETURN 0;\nGO';
+        const result = applyProcBodyIndentation(sql, styleOn, 4);
+        const lines = result.split('\n');
+        const goLine = lines.find(l => /^GO$/i.test(l.trim()));
+        assert.ok(goLine !== undefined, 'GO line should be present');
+        assert.equal(goLine, 'GO', 'GO must be at column 0');
+    });
 });
