@@ -93,7 +93,14 @@ export interface SqlPromptStyleJson {
         placeExpressionOnNewLine?: boolean;
         placeFirstWhenOnNewLine?: 'always' | 'never' | 'ifInputExpression';
         whenAlignment?: string;
+        alignElseToWhen?: boolean;
+        placeElseOnNewLine?: boolean;
+        placeEndOnNewLine?: boolean;
+        endAlignment?: string;
+        expressionAlignment?: string;
+        placeThenOnNewLine?: boolean;
         collapseCaseExpressionsShorterThan?: number;
+        collapseShortCaseExpressions?: boolean;
     };
 }
 
