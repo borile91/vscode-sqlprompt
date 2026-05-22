@@ -1,1 +1,0 @@
--- SQL Prompt debug file for testing formatting
