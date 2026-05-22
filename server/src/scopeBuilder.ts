@@ -380,12 +380,31 @@ function extractTableRefs(
 function resolveTable(
   name: string,
   schema: string | undefined,
-  _database: string | undefined,
+  database: string | undefined,
   tables: TableInfo[],
 ): TableInfo | undefined {
   const nameLower = name.toLowerCase();
   if (schema) {
     const schemaLower = schema.toLowerCase();
+    if (database) {
+      const dbLower = database.toLowerCase();
+      // Prefer an exact database match (cross-DB tables are tagged; current-DB
+      // tables have database === undefined and serve as fallback).
+      const exact = tables.find(
+        (t) =>
+          t.name.toLowerCase() === nameLower &&
+          t.schema.toLowerCase() === schemaLower &&
+          t.database?.toLowerCase() === dbLower,
+      );
+      if (exact) return exact;
+      // Fallback: untagged table with matching name+schema (current DB).
+      return tables.find(
+        (t) =>
+          t.name.toLowerCase() === nameLower &&
+          t.schema.toLowerCase() === schemaLower &&
+          t.database === undefined,
+      );
+    }
     return tables.find(
       (t) =>
         t.name.toLowerCase() === nameLower &&

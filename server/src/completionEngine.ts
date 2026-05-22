@@ -84,6 +84,7 @@ export function buildCompletions(
   position: Position,
   statementRange: StatementRange,
   databases: string[] = [],
+  loadingDatabases: ReadonlySet<string> = new Set(),
 ): CompletionItem[] {
   // ── 0. USE <database> completions ────────────────────────────────────────
   if (context.clause === 'use') {
@@ -92,7 +93,7 @@ export function buildCompletions(
 
   // ── 1. Dot-qualified completions ─────────────────────────────────────────
   if (context.isAfterDot && context.qualifierChain?.length) {
-    return buildDotCompletions(context, tables, routines, position);
+    return buildDotCompletions(context, tables, routines, position, databases, loadingDatabases);
   }
 
   const items: CompletionItem[] = [];
@@ -224,6 +225,19 @@ export function buildCompletions(
             sortText: `01_cte_${cteIdx.toString().padStart(3, '0')}`,
           });
         });
+
+        // Add database names so the user can type "DBA." to get cross-DB schemas.
+        databases.forEach((dbName) => {
+          items.push({
+            label: dbName,
+            kind: CompletionItemKind.Module,
+            detail: 'Database',
+            filterText: dbName,
+            textEdit: TextEdit.replace(replaceRange, dbName),
+            insertTextFormat: InsertTextFormat.PlainText,
+            sortText: `00_db_${dbName}`,
+          });
+        });
       }
 
       // After a JOIN + table ref, suggest "ON fk.predicate"
@@ -348,10 +362,19 @@ function buildDotCompletions(
   tables: TableInfo[],
   routines: RoutineSnapshot,
   position: Position,
+  databases: string[] = [],
+  loadingDatabases: ReadonlySet<string> = new Set(),
 ): CompletionItem[] {
   const chain = context.qualifierChain!;
   const qualifier = chain[chain.length - 1]; // last part before the dot
   const replaceRange = Range.create(position, position);
+  const qualifierLower = qualifier.toLowerCase();
+
+  // ── [db.]schema. chain: when chain length ≥ 2, restrict to the database
+  // named by the penultimate qualifier.  e.g. chain = ["DBA", "dbo"] means
+  // the user is typing after "DBA.dbo." — show tables in DBA.dbo only.
+  const dbFilter =
+    chain.length >= 2 ? chain[chain.length - 2].toLowerCase() : undefined;
 
   // Is it a visible alias?
   const matchingSource = context.visibleSources.find(
@@ -415,14 +438,28 @@ function buildDotCompletions(
     return [];
   }
 
-  // Is it a schema name?
-  const schemaLower = qualifier.toLowerCase();
-  const schemaMatches = tables.filter((t) => t.schema.toLowerCase() === schemaLower);
-  const schemaRoutineMatches = routines.tableValuedFunctions.filter(
-    (fn) => fn.schema.toLowerCase() === schemaLower,
+  // Is it a schema name? (optionally scoped to a specific database)
+  const schemaLower = qualifierLower;
+  const schemaMatches = tables.filter(
+    (t) =>
+      t.schema.toLowerCase() === schemaLower &&
+      // When a database qualifier is active (e.g. "EasyMexs_Master.dbo."),
+      // only return tables that are explicitly tagged with that database.
+      // Tables without a database tag belong to the currently-connected DB
+      // and must NOT bleed through into cross-DB completions.
+      (dbFilter === undefined
+        ? true
+        : t.database?.toLowerCase() === dbFilter),
   );
+  const schemaRoutineMatches =
+    dbFilter === undefined
+      ? routines.tableValuedFunctions.filter(
+          (fn) => fn.schema.toLowerCase() === schemaLower,
+        )
+      : []; // routines are scoped to the connected DB only
   const schemaProcedureMatches =
-    context.statementKind === 'exec' || context.clause === 'exec'
+    dbFilter === undefined &&
+    (context.statementKind === 'exec' || context.clause === 'exec')
       ? routines.storedProcedures.filter((proc) => proc.schema.toLowerCase() === schemaLower)
       : [];
 
@@ -490,6 +527,69 @@ function buildDotCompletions(
       textEdit: TextEdit.replace(replaceRange, col.name),
       sortText: `02_col_${col.name}`,
     }));
+  }
+
+  // Is it a database name? (chain length 1 only — for "DBA." → show schemas)
+  if (chain.length === 1) {
+    const isKnownDatabase =
+      databases.some((d) => d.toLowerCase() === qualifierLower) ||
+      tables.some((t) => (t.database ?? '').toLowerCase() === qualifierLower);
+
+    if (isKnownDatabase) {
+      // If the schema is still loading, show a placeholder item.
+      if (loadingDatabases.has(qualifierLower)) {
+        return [
+          {
+            label: `Loading schema for ${qualifier}…`,
+            kind: CompletionItemKind.Event,
+            detail: 'Please wait — schema is being loaded',
+            insertText: '',
+            insertTextFormat: InsertTextFormat.PlainText,
+            sortText: '00_loading',
+            // Prevent accidental insertion
+            textEdit: TextEdit.replace(Range.create(position, position), ''),
+          },
+        ];
+      }
+
+      const tablesForDb = tables.filter(
+        (t) => (t.database ?? '').toLowerCase() === qualifierLower,
+      );
+
+      const schemasForDb = [...new Set(tablesForDb.map((t) => t.schema))].sort();
+
+      const schemaItems = schemasForDb.map((schema) => ({
+        label: schema,
+        kind: CompletionItemKind.Module,
+        detail: `Schema in ${qualifier}`,
+        filterText: schema,
+        insertText: schema,
+        insertTextFormat: InsertTextFormat.PlainText,
+        textEdit: TextEdit.replace(replaceRange, schema),
+        sortText: `01_schema_${schema}`,
+      }));
+
+      const usedAliases = new Set(
+        context.visibleSources
+          .map((s) => s.alias)
+          .filter((a): a is string => a !== undefined),
+      );
+      const tableItems = tablesForDb.map((table) => {
+        const alias = generateAlias(table.name, new Set(usedAliases));
+        const fullName = `${table.schema}.${table.name}`;
+        return {
+          label: fullName,
+          kind: CompletionItemKind.Class,
+          detail: `Table (${table.schema}) — alias: ${alias}`,
+          filterText: fullName,
+          textEdit: TextEdit.replace(replaceRange, `${fullName} AS ${alias}`),
+          insertTextFormat: InsertTextFormat.PlainText,
+          sortText: `02_table_${table.schema}_${table.name}`,
+        };
+      });
+
+      return [...schemaItems, ...tableItems];
+    }
   }
 
   return [];
@@ -1038,7 +1138,12 @@ function resolveRefs(sources: VisibleSource[], tables: TableInfo[]): ResolvedRef
     const table = tables.find(
       (t) =>
         t.name.toLowerCase() === s.objectName.toLowerCase() &&
-        t.schema.toLowerCase() === s.schema!.toLowerCase(),
+        t.schema.toLowerCase() === s.schema!.toLowerCase() &&
+        // When a database is specified on the source, match it; otherwise accept
+        // any table with the same name+schema (backward compat for single-DB).
+        (s.database === undefined ||
+          t.database === undefined ||
+          t.database.toLowerCase() === s.database.toLowerCase()),
     );
     if (table) {
       result.push({

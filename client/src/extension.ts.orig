@@ -13,9 +13,6 @@ import {
     Range,
     EventEmitter,
     TextDocumentContentProvider,
-    StatusBarAlignment,
-    StatusBarItem,
-    ProgressLocation,
 } from "vscode";
 
 import {
@@ -25,9 +22,6 @@ import {
     ServerOptions,
     TransportKind,
 } from "vscode-languageclient/node";
-
-import { loadStylesFromFolder, LoadedStyle } from './formatter/styleLoader';
-import { SqlFormattingProvider } from './formatter/sqlFormattingProvider';
 
 let client: LanguageClient | undefined;
 let connectionSyncDebounce: ReturnType<typeof setTimeout> | undefined;
@@ -53,10 +47,6 @@ const schemaSnapshotCache = new Map<
 >();
 const inFlightSchemaSyncs = new Map<string, Promise<boolean>>();
 
-// ── Formatting state ──────────────────────────────────────────────────────────
-let loadedStyles: LoadedStyle[] = [];
-let formatterStatusBarItem: StatusBarItem | undefined;
-
 type ColumnInfo = {
     name: string;
     dataType: string;
@@ -70,7 +60,6 @@ type TableInfo = {
     name: string;
     columns: ColumnInfo[];
     foreignKeys: ForeignKeyInfo[];
-    database?: string;
 };
 
 type ForeignKeyMapping = {
@@ -1052,75 +1041,22 @@ export async function activate(context: ExtensionContext) {
     console.log("SQL Prompt: language server started.");
 
     // ── Schema Loading Notifications ──────────────────────────────────────────
-    // Pending progress resolvers for cross-DB demand loads (keyed by db name).
-    const pendingCrossDbProgress = new Map<string, () => void>();
-
     client.onNotification("sqlPrompt/schemaLoadingStarted", (params: any) => {
-        if (params.database) {
-            // Cross-DB demand load: show notification progress bar that stays
-            // open until schemaLoadingCompleted (or Failed) resolves it.
-            window.withProgress(
-                {
-                    location: ProgressLocation.Notification,
-                    title: `SQL Prompt: Loading [${params.database}]…`,
-                    cancellable: false,
-                },
-                () =>
-                    new Promise<void>((resolve) => {
-                        pendingCrossDbProgress.set(
-                            params.database.toLowerCase(),
-                            resolve,
-                        );
-                    }),
-            );
-        } else {
-            // Initial schema load (direct connection): use status bar.
-            window.setStatusBarMessage(params.message || "Loading schema...");
-        }
+        const message = params.message || "Loading schema...";
+        window.setStatusBarMessage(message);
     });
 
     client.onNotification("sqlPrompt/schemaLoadingCompleted", (params: any) => {
-        if (params.database) {
-            // Resolve the pending progress bar for this database.
-            const key = params.database.toLowerCase();
-            pendingCrossDbProgress.get(key)?.();
-            pendingCrossDbProgress.delete(key);
-            const msg = params.message ?? `Schema loaded for ${params.database}`;
-            window.showInformationMessage(`SQL Prompt: ${msg}`);
-        } else {
-            // Initial schema load: keep existing status-bar behaviour.
-            const tableCount = params.tableCount ?? 0;
-            const scalarFunctionCount = params.scalarFunctionCount ?? 0;
-            const tableValuedFunctionCount = params.tableValuedFunctionCount ?? 0;
-            const storedProcedureCount = params.storedProcedureCount ?? 0;
-            const message =
-                params.message ??
-                `Schema loaded: ${tableCount} tables, ${scalarFunctionCount} scalar functions, ${tableValuedFunctionCount} table-valued functions, ${storedProcedureCount} stored procedures.`;
-            window.setStatusBarMessage(message, 5000);
-        }
+        const tableCount = params.tableCount ?? 0;
+        const scalarFunctionCount = params.scalarFunctionCount ?? 0;
+        const tableValuedFunctionCount = params.tableValuedFunctionCount ?? 0;
+        const storedProcedureCount = params.storedProcedureCount ?? 0;
+        const message = `Schema loaded: ${tableCount} tables, ${scalarFunctionCount} scalar functions, ${tableValuedFunctionCount} table-valued functions, ${storedProcedureCount} stored procedures.`;
+        window.setStatusBarMessage(message, 5000);
     });
 
     client.onNotification("sqlPrompt/schemaLoadingFailed", (params: any) => {
-        if (params.database) {
-            const key = params.database.toLowerCase();
-            pendingCrossDbProgress.get(key)?.();
-            pendingCrossDbProgress.delete(key);
-        }
         window.showErrorMessage(`SQL Prompt: schema loading failed — ${params.error}`);
-    });
-
-    client.onRequest("sqlPrompt/loadCrossDatabaseSchema", async (params: { database: string }) => {
-        const ownerUri = window.activeTextEditor?.document.uri.toString();
-        if (!ownerUri) {
-            return { tables: [] };
-        }
-        try {
-            const snapshot = await loadSchemaForDatabaseViaConnectionSharing(ownerUri, params.database);
-            return { tables: snapshot?.tables ?? [] };
-        } catch (e: any) {
-            console.error(`[SQL Prompt] loadCrossDatabaseSchema failed: ${e.message}`);
-            return { tables: [] };
-        }
     });
 
     // ── Go to Definition ──────────────────────────────────────────────────────
@@ -1259,85 +1195,6 @@ export async function activate(context: ExtensionContext) {
 
     // ─────────────────────────────────────────────────────────────────────────
 
-    // ── Formatting ────────────────────────────────────────────────────────────
-
-    const initialStylesFolder = workspace
-        .getConfiguration('sqlPrompt.formatting')
-        .get<string>('stylesFolder', '');
-    if (initialStylesFolder) {
-        loadedStyles = await loadStylesFromFolder(initialStylesFolder);
-    }
-
-    function getActiveStyle(): LoadedStyle | undefined {
-        const name = workspace
-            .getConfiguration('sqlPrompt.formatting')
-            .get<string>('activeStyle', '');
-        return loadedStyles.find(s => s.name === name);
-    }
-
-    function updateFormatterStatusBar(): void {
-        if (!formatterStatusBarItem) { return; }
-        const style = getActiveStyle();
-        formatterStatusBarItem.text = style
-            ? `$(symbol-string) ${style.name}`
-            : `$(symbol-string) No SQL style`;
-        formatterStatusBarItem.tooltip = style
-            ? `SQL Prompt: formatting with "${style.name}" — click to change`
-            : 'SQL Prompt: click to select a formatting style';
-    }
-
-    formatterStatusBarItem = window.createStatusBarItem(StatusBarAlignment.Right, 90);
-    formatterStatusBarItem.command = 'sqlPrompt.selectFormattingStyle';
-    context.subscriptions.push(formatterStatusBarItem);
-
-    context.subscriptions.push(
-        languages.registerDocumentFormattingEditProvider(
-            [{ scheme: 'file', language: 'sql' }, { scheme: 'untitled', language: 'sql' }],
-            new SqlFormattingProvider(getActiveStyle),
-        ),
-        commands.registerCommand('sqlPrompt.selectFormattingStyle', async () => {
-            const stylesFolder = workspace
-                .getConfiguration('sqlPrompt.formatting')
-                .get<string>('stylesFolder', '');
-            if (stylesFolder) {
-                loadedStyles = await loadStylesFromFolder(stylesFolder);
-            }
-            if (loadedStyles.length === 0) {
-                window.showWarningMessage(
-                    'SQL Prompt: no style files found. Set sqlPrompt.formatting.stylesFolder to a folder containing .json style files.',
-                );
-                return;
-            }
-            const items = loadedStyles.map(s => ({ label: s.name, description: s.filePath }));
-            const picked = await window.showQuickPick(items, {
-                placeHolder: 'Select a SQL formatting style',
-            });
-            if (!picked) { return; }
-            await workspace.getConfiguration('sqlPrompt.formatting').update(
-                'activeStyle',
-                picked.label,
-                ConfigurationTarget.Workspace,
-            );
-            updateFormatterStatusBar();
-        }),
-        workspace.onDidChangeConfiguration(async (event) => {
-            if (event.affectsConfiguration('sqlPrompt.formatting.stylesFolder')) {
-                const newFolder = workspace
-                    .getConfiguration('sqlPrompt.formatting')
-                    .get<string>('stylesFolder', '');
-                loadedStyles = newFolder ? await loadStylesFromFolder(newFolder) : [];
-                updateFormatterStatusBar();
-            } else if (event.affectsConfiguration('sqlPrompt.formatting.activeStyle')) {
-                updateFormatterStatusBar();
-            }
-        }),
-    );
-
-    updateFormatterStatusBar();
-    formatterStatusBarItem.show();
-
-    // ─────────────────────────────────────────────────────────────────────────
-
     // Subscribe to mssql connection changes so the schema reloads automatically
     // whenever the user connects/disconnects/switches connection in mssql.
     await setupMssqlConnectionListener(context);
@@ -1352,62 +1209,5 @@ export async function deactivate() {
     if (client) {
         await client.stop();
         client = undefined;
-    }
-}
-
-async function loadSchemaForDatabaseViaConnectionSharing(ownerUri: string, database: string): Promise<SchemaSnapshot | undefined> {
-    const api = await getMssqlApi();
-    if (!api?.connectionSharing) {
-        return undefined;
-    }
-
-    const dbBracketed = '[' + database.replace(/]/g, ']]') + ']';
-    
-    // We only load tables/views (and their columns) for cross-database. No routines/FKs.
-    const schemaQuery = `
-            SELECT
-                s.name AS schema_name,
-                so.name AS table_name,
-                c.name AS column_name,
-                ty.name AS data_type,
-                c.max_length,
-                c.is_nullable,
-                CASE WHEN so.type = 'U' AND pk.column_id IS NOT NULL THEN 1 ELSE 0 END AS is_primary_key
-            FROM ${dbBracketed}.sys.objects so
-            INNER JOIN ${dbBracketed}.sys.schemas s ON so.schema_id = s.schema_id
-            INNER JOIN ${dbBracketed}.sys.columns c ON so.object_id = c.object_id
-            INNER JOIN ${dbBracketed}.sys.types ty ON c.user_type_id = ty.user_type_id
-            LEFT JOIN (
-                SELECT ic.object_id, ic.column_id
-                FROM ${dbBracketed}.sys.index_columns ic
-                INNER JOIN ${dbBracketed}.sys.indexes i
-                    ON ic.object_id = i.object_id AND ic.index_id = i.index_id
-                WHERE i.is_primary_key = 1
-            ) pk ON so.object_id = pk.object_id AND c.column_id = pk.column_id
-            WHERE so.type IN ('U', 'V') AND so.is_ms_shipped = 0
-            ORDER BY s.name, so.name, c.column_id
-    `;
-
-    try {
-        const result = await api.connectionSharing.executeSimpleQuery?.(ownerUri, schemaQuery);
-        const rows = extractRowsFromSimpleQueryResult(result);
-        const schemaTables = mapRowsToSchemaSnapshot(rows);
-        
-        // Tag tables with the requested database name
-        for (const t of schemaTables) {
-            t.database = database;
-        }
-
-        console.log(`[SQL Prompt] Cross-database schema loaded for [${database}]: ${schemaTables.length} tables`);
-        return {
-            tables: schemaTables,
-            scalarFunctions: [],
-            tableValuedFunctions: [],
-            storedProcedures: [],
-            databases: []
-        };
-    } catch (e: any) {
-        console.error(`[SQL Prompt] loadSchemaForDatabaseViaConnectionSharing failed for [${database}]: ${e.message}`);
-        return undefined;
     }
 }

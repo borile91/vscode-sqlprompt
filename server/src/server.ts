@@ -32,6 +32,57 @@ let routines: RoutineSnapshot = emptyRoutineSnapshot();
 let databases: string[] = [];
 let hasConfigurationCapability = false;
 
+/** Lowercase database names whose schema has already been loaded (or attempted). */
+const loadedDatabaseNames = new Set<string>();
+/** Lowercase database names whose schema load is in progress (to avoid duplicate requests). */
+const loadingDatabaseNames = new Set<string>();
+
+function preloadCrossDatabaseSchemas(currentDatabase: string | undefined): void {
+  if (!schemaLoader || databases.length === 0) {
+    return;
+  }
+
+  const targetDatabases = databases.filter((db) => {
+    const lower = db.toLowerCase();
+    if (currentDatabase && lower === currentDatabase.toLowerCase()) {
+      return false;
+    }
+    return !loadedDatabaseNames.has(lower) && !loadingDatabaseNames.has(lower);
+  });
+
+  if (targetDatabases.length === 0) {
+    return;
+  }
+
+  targetDatabases.forEach((db) => loadingDatabaseNames.add(db.toLowerCase()));
+  connection.console.info(
+    `SQL Prompt: preloading cross-database schemas for ${targetDatabases.join(', ')}`,
+  );
+
+  void schemaLoader.loadAllDatabaseSchemas(targetDatabases)
+    .then((extraTables) => {
+      tables = [...tables, ...extraTables];
+      targetDatabases.forEach((db) => {
+        const lower = db.toLowerCase();
+        loadingDatabaseNames.delete(lower);
+        loadedDatabaseNames.add(lower);
+      });
+      connection.console.info(
+        `SQL Prompt: cross-database preload completed, added ${extraTables.length} table(s).`,
+      );
+    })
+    .catch((err: any) => {
+      targetDatabases.forEach((db) => {
+        const lower = db.toLowerCase();
+        loadingDatabaseNames.delete(lower);
+        loadedDatabaseNames.add(lower);
+      });
+      connection.console.error(
+        `SQL Prompt: cross-database preload failed — ${err?.message ?? err}`,
+      );
+    });
+}
+
 connection.onInitialize((params: InitializeParams) => {
   connection.console.info("SQL Prompt server: onInitialize called");
   const capabilities = params.capabilities;
@@ -67,6 +118,8 @@ connection.onRequest(
         routines = emptyRoutineSnapshot();
         databases = [];
       }
+      loadedDatabaseNames.clear();
+      loadingDatabaseNames.clear();
 
       // Log the connection string with password masked for debugging
       const masked = params.connectionString.replace(
@@ -88,8 +141,21 @@ connection.onRequest(
           return [];
         }),
       ]);
+
+      // Mark the connected database as loaded.
+      const currentDbName = tables[0]?.database;
+      if (currentDbName) {
+        loadedDatabaseNames.add(currentDbName.toLowerCase());
+        connection.console.info(`SQL Prompt: connected database is [${currentDbName}].`);
+      }
+      preloadCrossDatabaseSchemas(currentDbName);
       connection.console.info(
-        `SQL Prompt: schema updated via mssql connection. Loaded ${tables.length} tables, ${routines.scalarFunctions.length} scalar function(s), ${routines.tableValuedFunctions.length} table-valued function(s), ${routines.storedProcedures.length} procedure(s), ${databases.length} database(s).`,
+        `SQL Prompt: schema updated via mssql connection. Loaded ${tables.length} tables, ${routines.scalarFunctions.length} scalar function(s), ${routines.tableValuedFunctions.length} table-valued function(s), ${routines.storedProcedures.length} procedure(s), ${databases.length} database(s) visible.`,
+      );
+      connection.console.info(
+        `SQL Prompt: other databases available for demand-loading: ${databases
+          .filter((d) => d.toLowerCase() !== (currentDbName ?? '').toLowerCase())
+          .join(', ') || '(none)'}`,
       );
       connection.sendNotification("sqlPrompt/schemaLoadingCompleted", {
         tableCount: tables.length,
@@ -152,6 +218,8 @@ connection.onRequest("sqlPrompt/disconnect", async () => {
     routines = emptyRoutineSnapshot();
     databases = [];
   }
+  loadedDatabaseNames.clear();
+  loadingDatabaseNames.clear();
   return { success: true };
 });
 
@@ -162,6 +230,8 @@ connection.onRequest("sqlPrompt/reloadSchema", async () => {
       message: "Reloading schema...",
     });
     try {
+      loadedDatabaseNames.clear();
+      loadingDatabaseNames.clear();
       [tables, routines, databases] = await Promise.all([
         schemaLoader.loadSchema(),
         schemaLoader.loadRoutines().catch(() => emptyRoutineSnapshot()),
@@ -170,6 +240,14 @@ connection.onRequest("sqlPrompt/reloadSchema", async () => {
           return [];
         }),
       ]);
+
+      const currentDbNameReload = tables[0]?.database;
+      if (currentDbNameReload) {
+        loadedDatabaseNames.add(currentDbNameReload.toLowerCase());
+      }
+
+      preloadCrossDatabaseSchemas(currentDbNameReload);
+
       connection.sendNotification("sqlPrompt/schemaLoadingCompleted", {
         tableCount: tables.length,
         scalarFunctionCount: routines.scalarFunctions.length,
@@ -309,7 +387,86 @@ connection.onCompletion(
       `isAfterDot=${context.isAfterDot} sources=${context.visibleSources.length}`,
     );
 
-    return buildCompletions(context, tables, routines, document, position, statementRange, databases);
+    // ── Demand-load cross-database schema ─────────────────────────────────────
+    // When the user types "DBName." in a FROM/JOIN, trigger schema load for that
+    // database if it hasn't been loaded yet.  The current request returns
+    // immediately (possibly with empty results); the next keystroke will have the
+    // loaded schema available.
+    if (context.isAfterDot && context.qualifierChain?.length) {
+      const topQualifier = context.qualifierChain[0];
+      const topLower = topQualifier.toLowerCase();
+      const knownDb = databases.find((d) => d.toLowerCase() === topLower);
+
+      if (knownDb && !loadedDatabaseNames.has(topLower) && !loadingDatabaseNames.has(topLower)) {
+        loadingDatabaseNames.add(topLower);
+        connection.console.info(`SQL Prompt: demand-loading schema for [${knownDb}]...`);
+        connection.sendNotification('sqlPrompt/schemaLoadingStarted', {
+          database: knownDb,
+          message: `Loading schema for ${knownDb}...`,
+        });
+
+        if (schemaLoader) {
+          schemaLoader
+            .loadSchemaForDatabase(knownDb)
+            .then((extraTables) => {
+              tables = [...tables, ...extraTables];
+              loadedDatabaseNames.add(topLower);
+              loadingDatabaseNames.delete(topLower);
+              connection.console.info(
+                `SQL Prompt: demand-loaded ${extraTables.length} table(s) for [${knownDb}].`,
+              );
+              connection.sendNotification('sqlPrompt/schemaLoadingCompleted', {
+                database: knownDb,
+                tableCount: tables.length,
+                message: `Schema loaded for ${knownDb}: ${extraTables.length} table(s)`,
+              });
+            })
+            .catch((err: any) => {
+              loadingDatabaseNames.delete(topLower);
+              loadedDatabaseNames.add(topLower); // avoid infinite retry on permission errors
+              connection.console.error(
+                `SQL Prompt: demand-load failed for [${knownDb}]: ${err?.message ?? err}`,
+              );
+              connection.sendNotification('sqlPrompt/schemaLoadingFailed', {
+                database: knownDb,
+                error: err?.message ?? String(err),
+              });
+            });
+        } else {
+          // Send request to client to use connectionSharing
+          connection.sendRequest<{ tables: TableInfo[] }>('sqlPrompt/loadCrossDatabaseSchema', { database: knownDb })
+            .then((result) => {
+              const extraTables = result.tables ?? [];
+              tables = [...tables, ...extraTables];
+              loadedDatabaseNames.add(topLower);
+              loadingDatabaseNames.delete(topLower);
+              connection.console.info(
+                `SQL Prompt: connectionSharing demand-loaded ${extraTables.length} table(s) for [${knownDb}].`,
+              );
+              connection.sendNotification('sqlPrompt/schemaLoadingCompleted', {
+                database: knownDb,
+                tableCount: tables.length,
+                message: `Schema loaded for ${knownDb}: ${extraTables.length} table(s)`,
+              });
+            })
+            .catch((err: any) => {
+              loadingDatabaseNames.delete(topLower);
+              loadedDatabaseNames.add(topLower);
+              connection.console.error(
+                `SQL Prompt: connectionSharing demand-load failed for [${knownDb}]: ${err?.message ?? err}`,
+              );
+              connection.sendNotification('sqlPrompt/schemaLoadingFailed', {
+                database: knownDb,
+                error: err?.message ?? String(err),
+              });
+            });
+        }
+      } else if (knownDb && loadingDatabaseNames.has(topLower)) {
+        connection.console.info(`SQL Prompt: schema for [${knownDb}] is already loading...`);
+      }
+    }
+
+    return buildCompletions(context, tables, routines, document, position, statementRange, databases, loadingDatabaseNames);
   },
 );
 
