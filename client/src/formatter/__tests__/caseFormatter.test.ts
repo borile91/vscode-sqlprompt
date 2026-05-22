@@ -5,7 +5,7 @@ import type { SqlPromptStyleJson } from '../styleLoader.js';
 
 const TAB = 4;
 
-function madlabStyle(): SqlPromptStyleJson {
+function testStyle(): SqlPromptStyleJson {
     return {
         caseExpressions: {
             placeFirstWhenOnNewLine: 'ifInputExpression',
@@ -29,7 +29,7 @@ describe('applyCaseFormatting — placeFirstWhenOnNewLine: ifInputExpression', (
     it('places first WHEN on new line for simple CASE (has input expression)', () => {
         // Simple CASE: CASE Status WHEN 1 THEN …
         const input = "SELECT CASE Status WHEN 1 THEN 'Active' WHEN 2 THEN 'Inactive' ELSE 'Unknown' END AS Label";
-        const result = applyCaseFormatting(input, madlabStyle(), TAB);
+        const result = applyCaseFormatting(input, testStyle(), TAB);
         const lines = result.split('\n');
 
         // First line should end with CASE Status
@@ -41,7 +41,7 @@ describe('applyCaseFormatting — placeFirstWhenOnNewLine: ifInputExpression', (
     it('keeps first WHEN inline for searched CASE (no input expression)', () => {
         // Searched CASE: CASE WHEN x > 0 THEN …
         const input = "SELECT CASE WHEN x > 0 THEN 'Pos' ELSE 'Neg' END";
-        const result = applyCaseFormatting(input, madlabStyle(), TAB);
+        const result = applyCaseFormatting(input, testStyle(), TAB);
         const lines = result.split('\n');
         // CASE WHEN should remain on the same line
         assert.ok(lines[0].includes('CASE') && lines[0].includes('WHEN'), `line 0: ${lines[0]}`);
@@ -51,7 +51,7 @@ describe('applyCaseFormatting — placeFirstWhenOnNewLine: ifInputExpression', (
 describe('applyCaseFormatting — placeElseOnNewLine: true', () => {
     it('places ELSE on a new line', () => {
         const input = "SELECT CASE x WHEN 1 THEN 'A' ELSE 'B' END";
-        const result = applyCaseFormatting(input, madlabStyle(), TAB);
+        const result = applyCaseFormatting(input, testStyle(), TAB);
         const lines = result.split('\n');
         assert.ok(lines.some(l => l.trim().startsWith('ELSE')), 'ELSE should be on its own line');
     });
@@ -60,7 +60,7 @@ describe('applyCaseFormatting — placeElseOnNewLine: true', () => {
 describe('applyCaseFormatting — placeEndOnNewLine: true + endAlignment: toCase', () => {
     it('places END on a new line aligned to CASE column', () => {
         const input = "SELECT CASE x WHEN 1 THEN 'A' END";
-        const result = applyCaseFormatting(input, madlabStyle(), TAB);
+        const result = applyCaseFormatting(input, testStyle(), TAB);
         const lines = result.split('\n');
         const endLine = lines.find(l => l.trim().startsWith('END'));
         assert.ok(endLine !== undefined, 'END should be on its own line');
@@ -93,7 +93,7 @@ describe('applyCaseFormatting — placeFirstWhenOnNewLine: always', () => {
 describe('applyCaseFormatting — lines without CASE are unchanged', () => {
     it('passes through non-CASE lines untouched', () => {
         const sql = 'SELECT a, b\nFROM t\nWHERE x = 1';
-        const result = applyCaseFormatting(sql, madlabStyle(), TAB);
+        const result = applyCaseFormatting(sql, testStyle(), TAB);
         assert.equal(result, sql);
     });
 });

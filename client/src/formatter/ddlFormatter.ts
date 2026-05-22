@@ -270,7 +270,7 @@ const COLUMN_DEF_RE = /^(\s+)(\[?[a-zA-Z_@#][a-zA-Z0-9_@#$]*\]?|\[[^\]]+\])\s+(\
 const CONSTRAINT_RE = /^\s+(?:PRIMARY\s+KEY|FOREIGN\s+KEY|UNIQUE|CHECK|INDEX|CONSTRAINT)\b/i;
 
 /**
- * Matches a leading-comma column definition (MadLab style):
+ * Matches a leading-comma column definition (default style):
  *   , OrderDate DATETIME NOT NULL
  */
 const LEADING_COMMA_COL_RE = /^(\s+,\s+)(\[?[a-zA-Z_@#][a-zA-Z0-9_@#$]*\]?|\[[^\]]+\])\s+(\S+)(.*)/;
