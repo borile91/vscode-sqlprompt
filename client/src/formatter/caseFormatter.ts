@@ -158,8 +158,8 @@ function processCaseExpressions(
                 } else {
                     caseLine += ' ' + tok.text;
                 }
-                caseLines.push(caseLine);
-                caseLine = '';
+                // Do NOT push/reset here — any trailing content (e.g. AS alias)
+                // will be appended by the next OTHER token, then flushed at end.
             } else {
                 // OTHER: value/expression
                 caseLine += ' ' + tok.text;
@@ -209,4 +209,71 @@ function tokeniseCaseRest(rest: string): CaseToken[] {
     }
 
     return tokens;
+}
+
+/**
+ * Pre-pass: collapses multi-line CASE…END expressions onto a single line so
+ * that the list formatter can treat the whole CASE as one item (correct leading-
+ * comma placement). `applyCaseFormatting` then re-expands to the final format.
+ *
+ * Only collapses when `caseExpressions` config is present (i.e. when the CASE
+ * formatter will later run). Does not cross blank lines or BEGIN blocks.
+ */
+export function collapseCaseToSingleLine(sql: string, style: SqlPromptStyleJson): string {
+    if (!style.caseExpressions) return sql;
+
+    const lines = sql.split('\n');
+    const result: string[] = [];
+    let i = 0;
+
+    while (i < lines.length) {
+        const line = lines[i];
+
+        // Count CASE and END occurrences on this line (word-boundary)
+        const casesOnLine = (line.match(/\bCASE\b/gi) ?? []).length;
+        const endsOnLine = (line.match(/\bEND\b/gi) ?? []).length;
+
+        if (casesOnLine === 0 || casesOnLine <= endsOnLine) {
+            // No unmatched CASE on this line — leave as-is
+            result.push(line);
+            i++;
+            continue;
+        }
+
+        // Unmatched CASE: collect subsequent lines until depth reaches 0
+        let depth = casesOnLine - endsOnLine;
+        let combined = line.trimEnd();
+        let j = i + 1;
+        let aborted = false;
+
+        while (j < lines.length && depth > 0) {
+            const nextTrimmed = lines[j].trim();
+
+            // Stop at blank lines or BEGIN blocks (don't collapse across them)
+            if (nextTrimmed === '' || /\bBEGIN\b/i.test(nextTrimmed)) {
+                aborted = true;
+                break;
+            }
+
+            const moreCases = (nextTrimmed.match(/\bCASE\b/gi) ?? []).length;
+            const moreEnds = (nextTrimmed.match(/\bEND\b/gi) ?? []).length;
+            depth += moreCases - moreEnds;
+
+            combined += ' ' + nextTrimmed;
+            j++;
+        }
+
+        if (!aborted && depth <= 0) {
+            // Successfully collapsed — preserve leading whitespace of original line
+            const leadingSpace = (line.match(/^(\s*)/) ?? ['', ''])[1];
+            const content = combined.trim().replace(/\s+/g, ' ');
+            result.push(leadingSpace + content);
+            i = j;
+        } else {
+            result.push(line);
+            i++;
+        }
+    }
+
+    return result.join('\n');
 }

@@ -16,6 +16,37 @@ export function applyDdlFormatting(sql: string, style: SqlPromptStyleJson): stri
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// CREATE VIEW formatting  (ddl.indentClauses)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * When `ddl.indentClauses === true`, moves the AS keyword of a CREATE VIEW
+ * statement onto its own line.  The body (SELECT …) is then indented by
+ * `applyProcBodyIndentation` in a later pipeline step.
+ *
+ * Also normalises extra whitespace in `CREATE    VIEW` that sql-formatter
+ * tabularLeft may produce.
+ *
+ * Input:
+ *   CREATE    VIEW ui.vwOrdini AS
+ *   SELECT …
+ *
+ * Output:
+ *   CREATE VIEW ui.vwOrdini
+ *   AS
+ *   SELECT …
+ */
+export function applyDdlViewFormatting(sql: string, style: SqlPromptStyleJson): string {
+    if (!style.ddl?.indentClauses) return sql;
+    // Match CREATE [whitespace] VIEW [whitespace] <name> [whitespace] AS
+    // preserving any leading indentation on the line.
+    return sql.replace(
+        /^([ \t]*)CREATE\s+VIEW\s+(\S+)\s+AS\b/gim,
+        (_match, indent, name) => `${indent}CREATE VIEW ${name}\n${indent}AS`,
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Procedure body indentation  (ddl.indentClauses)
 // ─────────────────────────────────────────────────────────────────────────────
 

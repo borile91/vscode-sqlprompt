@@ -15,8 +15,8 @@ import { applySetLineJoining, applyKeywordRePadding } from './keywordPaddingForm
 import { applyLeadingCommaFormat } from './listFormatter';
 import { applySemicolonFormatting } from './semicolonFormatter';
 import { applyJoinOnFormatting } from './joinFormatter';
-import { applyCaseFormatting } from './caseFormatter';
-import { applyDdlFormatting, applyDdlProcFormatting, applyProcBodyIndentation } from './ddlFormatter';
+import { applyCaseFormatting, collapseCaseToSingleLine } from './caseFormatter';
+import { applyDdlFormatting, applyDdlProcFormatting, applyDdlViewFormatting, applyProcBodyIndentation } from './ddlFormatter';
 import { applyDeclareFormatting } from './declareFormatter';
 import { applyExecParamFormatting } from './execFormatter';
 
@@ -45,6 +45,8 @@ export class SqlFormattingProvider implements DocumentFormattingEditProvider {
             formatted = applyKeywordRePadding(formatted);
             formatted = applyDeclareFormatting(formatted, style.options);
             formatted = applyDdlProcFormatting(formatted, style.options, tabWidth);
+            formatted = applyDdlViewFormatting(formatted, style.options);
+            formatted = collapseCaseToSingleLine(formatted, style.options);
             formatted = applyLeadingCommaFormat(formatted, style.options);
             formatted = applyJoinOnFormatting(formatted, style.options, tabWidth);
             formatted = applyCaseFormatting(formatted, style.options, tabWidth);
@@ -54,6 +56,15 @@ export class SqlFormattingProvider implements DocumentFormattingEditProvider {
             formatted = applyProcBodyIndentation(formatted, style.options, tabWidth);
             formatted = applyExecParamFormatting(formatted, style.options);
             formatted = removeBlankLinesBeforeEnd(formatted);
+            // Remove space before ( in schema-qualified function/procedure calls
+            formatted = formatted.replace(/(\.\w+)\s+\(/g, '$1(');
+            // Add spaces inside table-hint parentheses when addSpacesInsideParentheses is set
+            if (style.options?.parentheses?.addSpacesInsideParentheses) {
+                formatted = formatted.replace(
+                    /\((NOLOCK|UPDLOCK|ROWLOCK|TABLOCK|TABLOCKX|HOLDLOCK|READPAST|NOWAIT|READCOMMITTEDLOCK|REPEATABLEREAD|SERIALIZABLE|SNAPSHOT|FORCESCAN|FORCESEEK|PAGLOCK)\)/gi,
+                    '( $1 )',
+                );
+            }
         } catch {
             return [];
         }
