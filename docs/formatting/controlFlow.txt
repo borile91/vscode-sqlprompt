@@ -1,8 +1,0 @@
-    BEGIN
-        SELECT    *
-        FROM      tabella END BEGIN try
-        SELECT    3 END try BEGIN catch END catch
-
-IF 1 = 1
-    BEGIN
-        SELECT    1 END
