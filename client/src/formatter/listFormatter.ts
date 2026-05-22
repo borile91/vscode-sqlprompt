@@ -7,6 +7,18 @@ function splitComment(text: string): [string, string] {
     return [text.slice(0, idx).trimEnd(), text.slice(idx).trimStart()];
 }
 
+/**
+ * Splits a column expression into [baseExpression, alias] where alias is the
+ * " AS name" or " name" suffix, or empty string if there is no alias.
+ * Only splits on an unquoted AS keyword or a bare trailing identifier.
+ */
+function splitAlias(expression: string): [string, string] {
+    // Match "expr AS alias" (alias is a single identifier or quoted identifier)
+    const asMatch = expression.match(/^(.*?)\s+(AS\s+\S+)$/i);
+    if (asMatch) return [asMatch[1].trimEnd(), asMatch[2]];
+    return [expression, ''];
+}
+
 interface ColumnItem {
     expression: string;
     comment: string;
@@ -87,30 +99,73 @@ function collectItems(
 /**
  * Formats a collected list of items with leading-comma style.
  * The comma sits at column (kwWidth - 2) so that ", content" aligns at kwWidth.
+ * When alignAliases is true, AS alias parts are padded to the same column.
+ * When alignComments is true, inline comments are padded to the same column.
  */
 function formatItems(
     kwPrefix: string,
     kwWidth: number,
     items: ColumnItem[],
     alignComments: boolean,
+    alignAliases: boolean,
 ): string[] {
     const commaIndent = Math.max(0, kwWidth - 2);
     const commaPad = ' '.repeat(commaIndent);
 
+    // Split each expression into [base, alias]
+    const split = items.map(item => {
+        const [base, alias] = alignAliases ? splitAlias(item.expression) : [item.expression, ''];
+        return { base, alias, comment: item.comment };
+    });
+
+    // Compute max base expression length (for alias alignment)
+    let maxBaseLen = 0;
+    if (alignAliases) {
+        for (const { base, alias } of split) {
+            if (alias) maxBaseLen = Math.max(maxBaseLen, base.length);
+        }
+    }
+
+    // Compute max expression+alias length (for comment alignment)
     let maxExprLen = 0;
     if (alignComments) {
-        for (const item of items) {
-            if (item.comment) maxExprLen = Math.max(maxExprLen, item.expression.length);
+        for (const { base, alias } of split) {
+            const expr = alignAliases && alias && maxBaseLen > 0
+                ? base.padEnd(maxBaseLen) + ' ' + alias
+                : base + (alias ? ' ' + alias : '');
+            for (const item of items) {
+                if (item.comment) maxExprLen = Math.max(maxExprLen, expr.length);
+            }
+        }
+        // Simpler recalculation:
+        maxExprLen = 0;
+        for (let idx = 0; idx < split.length; idx++) {
+            const { base, alias } = split[idx];
+            if (items[idx].comment) {
+                const expr = alignAliases && alias && maxBaseLen > 0
+                    ? base.padEnd(maxBaseLen) + ' ' + alias
+                    : base + (alias ? ' ' + alias : '');
+                maxExprLen = Math.max(maxExprLen, expr.length);
+            }
         }
     }
 
     const formatted: string[] = [];
-    for (let j = 0; j < items.length; j++) {
-        const { expression, comment } = items[j];
-        let exprPart = expression;
-        if (alignComments && comment && maxExprLen > 0) {
-            exprPart = expression.padEnd(maxExprLen);
+    for (let j = 0; j < split.length; j++) {
+        const { base, alias } = split[j];
+        const { comment } = items[j];
+
+        let exprPart: string;
+        if (alignAliases && alias && maxBaseLen > 0) {
+            exprPart = base.padEnd(maxBaseLen) + ' ' + alias;
+        } else {
+            exprPart = base + (alias ? ' ' + alias : '');
         }
+
+        if (alignComments && comment && maxExprLen > 0) {
+            exprPart = exprPart.padEnd(maxExprLen);
+        }
+
         const commentPart = comment ? ' ' + comment : '';
 
         if (j === 0) {
@@ -141,6 +196,7 @@ export function applyLeadingCommaFormat(
     if (!style.lists?.placeCommasBeforeItems) return sql;
 
     const alignComments = style.lists.alignComments ?? false;
+    const alignAliases = style.lists.alignAliases ?? false;
     const lines = sql.split('\n');
     const result: string[] = [];
     let i = 0;
@@ -164,7 +220,7 @@ export function applyLeadingCommaFormat(
         const { items, nextIndex } = collectItems(lines, i, firstItemText, kwWidth);
         i = nextIndex;
 
-        result.push(...formatItems(kwPrefix, kwWidth, items, alignComments));
+        result.push(...formatItems(kwPrefix, kwWidth, items, alignComments, alignAliases));
     }
 
     return result.join('\n');

@@ -83,3 +83,29 @@ describe('applyLeadingCommaFormat — GROUP BY lists', () => {
     });
 });
 
+describe('applyLeadingCommaFormat — alignAliases', () => {
+    it('aligns AS aliases when alignAliases is true', () => {
+        const styleAligned: SqlPromptStyleJson = {
+            lists: { placeCommasBeforeItems: true, alignAliases: true },
+        };
+        const input = 'SELECT TerritoryID AS ID,\n       Name AS TerritoryName,\n       SalesYTD AS YTD\nFROM   t';
+        const result = applyLeadingCommaFormat(input, styleAligned);
+        const lines = result.split('\n');
+        // Find column of 'AS' in each item
+        const asPositions = lines
+            .filter(l => l.includes(' AS '))
+            .map(l => l.indexOf(' AS '));
+        // All AS should start at the same column
+        assert.ok(asPositions.length >= 2);
+        assert.ok(asPositions.every(pos => pos === asPositions[0]), `AS positions: ${asPositions}`);
+    });
+
+    it('does not align aliases when alignAliases is false', () => {
+        const input = 'SELECT TerritoryID AS ID,\n       Name AS TerritoryName\nFROM   t';
+        const result = applyLeadingCommaFormat(input, styleOn);
+        // aliases should remain as-is (not padded)
+        assert.ok(result.includes('TerritoryID AS ID'));
+        assert.ok(result.includes('Name AS TerritoryName'));
+    });
+});
+
