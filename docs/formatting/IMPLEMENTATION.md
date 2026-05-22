@@ -2,9 +2,8 @@
 
 Each section documents one configurable behaviour: the JSON key path, accepted values, a description of the transformation, and one or more **input → expected output** test pairs.
 
-**Active style profile used as primary target:** [`1-MadLab-Vertical.jsonc`](1-MadLab-Vertical.jsonc)  
-**Full options reference:** [`AllOptions.json`](AllOptions.json)  
-**End-to-end formatted examples:** [`examples/`](examples/)
+**Active style profile used as primary target:** [`DefaultFormattingStyle.jsonc`](DefaultFormattingStyle.jsonc)  
+**Full options reference:** [`Defaults.json`](Defaults.json)
 
 ---
 

@@ -6,8 +6,6 @@
 |---|---|
 | [IMPLEMENTATION.md](IMPLEMENTATION.md) | Feature-by-feature implementation guide with test cases |
 | [configurations/](configurations/) | Per-category option docs with examples |
-| [examples/](examples/) | Full SQL snippets formatted with the 1-MadLab-Vertical style |
-| [1-MadLab-Vertical.jsonc](1-MadLab-Vertical.jsonc) | Primary style profile used for development and testing |
 | [AllOptions.json](AllOptions.json) | Reference profile listing every supported option |
 
 ---
