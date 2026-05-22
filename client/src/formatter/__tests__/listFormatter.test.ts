@@ -51,3 +51,35 @@ describe('applyLeadingCommaFormat — alignComments', () => {
         assert.ok(firstItem.indexOf('--') === secondItem.indexOf('--'));
     });
 });
+
+describe('applyLeadingCommaFormat — ORDER BY lists', () => {
+    it('applies leading commas to ORDER BY list', () => {
+        // sql-formatter tabularLeft output: "ORDER BY col1,\n         col2"
+        const input = 'SELECT a\nFROM   t\nORDER BY a,\n         b';
+        const result = applyLeadingCommaFormat(input, styleOn);
+        const lines = result.split('\n');
+        assert.ok(lines[2].startsWith('ORDER BY a'), `line 2: ${lines[2]}`);
+        assert.ok(lines[3].includes(', b'), `line 3: ${lines[3]}`);
+    });
+
+    it('stops ORDER BY collection at next clause', () => {
+        const input = 'ORDER BY a,\n         b\nFROM   t';
+        const result = applyLeadingCommaFormat(input, styleOn);
+        const lines = result.split('\n');
+        // FROM should remain intact
+        assert.ok(lines.some(l => l.startsWith('FROM')));
+    });
+});
+
+describe('applyLeadingCommaFormat — GROUP BY lists', () => {
+    it('applies leading commas to GROUP BY list', () => {
+        const input = 'SELECT a, b\nFROM   t\nGROUP BY a,\n         b';
+        const result = applyLeadingCommaFormat(input, styleOn);
+        const lines = result.split('\n');
+        const gbLine = lines.findIndex(l => l.startsWith('GROUP BY'));
+        assert.ok(gbLine >= 0);
+        assert.ok(lines[gbLine].startsWith('GROUP BY a'), `gbLine: ${lines[gbLine]}`);
+        assert.ok(lines[gbLine + 1].includes(', b'), `next: ${lines[gbLine + 1]}`);
+    });
+});
+
