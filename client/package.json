@@ -7,7 +7,7 @@
   },
   "scripts": {
     "compile": "tsc -b",
-    "test": "tsc -b && node --test out/formatter/__tests__/formatOptionsMapper.test.js out/formatter/__tests__/keywordPaddingFormatter.test.js out/formatter/__tests__/listFormatter.test.js out/formatter/__tests__/controlFlowFormatter.test.js"
+    "test": "tsc -b && node --test out/formatter/__tests__/formatOptionsMapper.test.js out/formatter/__tests__/keywordPaddingFormatter.test.js out/formatter/__tests__/listFormatter.test.js out/formatter/__tests__/controlFlowFormatter.test.js out/formatter/__tests__/semicolonFormatter.test.js"
   },
   "dependencies": {
     "sql-formatter": "^15.0.0",
