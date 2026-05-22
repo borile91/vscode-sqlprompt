@@ -128,3 +128,36 @@ export function applyControlFlowIndentation(
 
     return result.join('\n');
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Remove blank lines before END keywords
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Removes blank lines immediately before END / END TRY / END CATCH lines.
+ *
+ * sql-formatter emits one blank line between every statement, which means
+ * the last statement before END is always followed by a blank line.  SQL Prompt
+ * style does not use blank lines before closing END keywords.
+ */
+export function removeBlankLinesBeforeEnd(sql: string): string {
+    const lines = sql.split('\n');
+    const result: string[] = [];
+
+    for (let i = 0; i < lines.length; i++) {
+        const trimmed = lines[i].trim();
+
+        if (trimmed === '') {
+            // Look ahead: skip this blank line if the next non-blank line is END
+            let next = i + 1;
+            while (next < lines.length && lines[next].trim() === '') next++;
+            if (next < lines.length && /^END\b/i.test(lines[next].trim())) {
+                continue; // drop this blank line
+            }
+        }
+
+        result.push(lines[i]);
+    }
+
+    return result.join('\n');
+}

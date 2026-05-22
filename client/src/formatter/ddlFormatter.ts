@@ -53,6 +53,12 @@ export function applyProcBodyIndentation(
             }
             continue;
         }
+        // GO is a batch separator — must always remain at column 0
+        if (/^[ \t]*GO\s*$/i.test(line)) {
+            result.push(line.trim());
+            inBody = false;
+            continue;
+        }
         // Indent every line in the procedure body (blank lines stay blank)
         result.push(line === '' ? '' : pad + line);
     }

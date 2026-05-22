@@ -10,7 +10,7 @@ import {
 import { format } from 'sql-formatter';
 import type { LoadedStyle } from './styleLoader';
 import { mapToFormatterOptions } from './formatOptionsMapper';
-import { applyControlFlowIndentation } from './controlFlowFormatter';
+import { applyControlFlowIndentation, removeBlankLinesBeforeEnd } from './controlFlowFormatter';
 import { applySetLineJoining, applyKeywordRePadding } from './keywordPaddingFormatter';
 import { applyLeadingCommaFormat } from './listFormatter';
 import { applySemicolonFormatting } from './semicolonFormatter';
@@ -18,6 +18,7 @@ import { applyJoinOnFormatting } from './joinFormatter';
 import { applyCaseFormatting } from './caseFormatter';
 import { applyDdlFormatting, applyDdlProcFormatting, applyProcBodyIndentation } from './ddlFormatter';
 import { applyDeclareFormatting } from './declareFormatter';
+import { applyExecParamFormatting } from './execFormatter';
 
 export class SqlFormattingProvider implements DocumentFormattingEditProvider {
     constructor(private readonly getStyle: () => LoadedStyle | undefined) {}
@@ -51,6 +52,8 @@ export class SqlFormattingProvider implements DocumentFormattingEditProvider {
             formatted = applyControlFlowIndentation(formatted, style.options, tabWidth);
             formatted = applySemicolonFormatting(formatted, style.options);
             formatted = applyProcBodyIndentation(formatted, style.options, tabWidth);
+            formatted = applyExecParamFormatting(formatted, style.options);
+            formatted = removeBlankLinesBeforeEnd(formatted);
         } catch {
             return [];
         }

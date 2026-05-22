@@ -94,7 +94,19 @@ interface DetectedKeyword {
     content: string;
 }
 
-/** Regex cache for each keyword token. */
+/**
+ * Keywords that should be treated as JOIN continuations (sub-clause of FROM).
+ * They are moved to the FROM content column rather than kept at the clause
+ * keyword column, so they never inflate the max keyword width for the block.
+ */
+const JOIN_CLAUSE_KEYWORDS = new Set(['LEFT JOIN', 'FULL JOIN']);
+
+/**
+ * Keywords that act as boolean operators inside WHERE / ON / HAVING conditions.
+ * They are rendered at the content column of the parent clause rather than as
+ * independent clause keywords, so they never inflate the max keyword width.
+ */
+const CONDITION_OPERATORS = new Set(['AND', 'OR']);
 const kwRegexCache = new Map<string, RegExp>();
 
 function getKwRegex(kw: string): RegExp {
@@ -136,13 +148,18 @@ function detectKeyword(line: string): DetectedKeyword | null {
 function rePadBlock(block: string, oldWidth: number): string {
     const lines = block.split('\n');
 
-    // Build indent → max keyword length map
+    // Build indent → max keyword length map.
+    // AND/OR and JOIN keywords are excluded — they are rendered relative to the
+    // content column of their parent clause and must not inflate the width.
     const indentMaxLen = new Map<number, number>();
     for (const line of lines) {
         const kw = detectKeyword(line);
         if (kw) {
-            const prev = indentMaxLen.get(kw.indent) ?? 0;
-            indentMaxLen.set(kw.indent, Math.max(prev, kw.canonicalLength));
+            const kwUpper = kw.token.replace(/\s+/g, ' ').toUpperCase();
+            if (!JOIN_CLAUSE_KEYWORDS.has(kwUpper) && !CONDITION_OPERATORS.has(kwUpper)) {
+                const prev = indentMaxLen.get(kw.indent) ?? 0;
+                indentMaxLen.set(kw.indent, Math.max(prev, kw.canonicalLength));
+            }
         }
     }
 
@@ -159,8 +176,17 @@ function rePadBlock(block: string, oldWidth: number): string {
         // 1. Keyword line — adjust spacing after the keyword token
         const kw = detectKeyword(line);
         if (kw) {
-            const newWidth = indentNewWidth.get(kw.indent)!;
-            if (newWidth === oldWidth) return line;
+            const newWidth = indentNewWidth.get(kw.indent);
+            const kwUpper = kw.token.replace(/\s+/g, ' ').toUpperCase();
+
+            // AND/OR and JOIN keywords render at the content column (indent + newWidth)
+            // rather than at the keyword column (indent + 0) with extra padding.
+            if (CONDITION_OPERATORS.has(kwUpper) || JOIN_CLAUSE_KEYWORDS.has(kwUpper)) {
+                if (newWidth === undefined) return line; // no clause keywords in block
+                return ' '.repeat(kw.indent + newWidth) + kw.token + ' ' + kw.content;
+            }
+
+            if (newWidth === undefined || newWidth === oldWidth) return line;
             const padding = ' '.repeat(newWidth - kw.token.replace(/\s+/g, ' ').length);
             return ' '.repeat(kw.indent) + kw.token + padding + kw.content;
         }
