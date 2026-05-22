@@ -15,6 +15,7 @@ import { applyKeywordRePadding } from './keywordPaddingFormatter';
 import { applyLeadingCommaFormat } from './listFormatter';
 import { applySemicolonFormatting } from './semicolonFormatter';
 import { applyJoinOnFormatting } from './joinFormatter';
+import { applyCaseFormatting } from './caseFormatter';
 
 export class SqlFormattingProvider implements DocumentFormattingEditProvider {
     constructor(private readonly getStyle: () => LoadedStyle | undefined) {}
@@ -40,6 +41,7 @@ export class SqlFormattingProvider implements DocumentFormattingEditProvider {
             formatted = applyKeywordRePadding(formatted);
             formatted = applyLeadingCommaFormat(formatted, style.options);
             formatted = applyJoinOnFormatting(formatted, style.options, tabWidth);
+            formatted = applyCaseFormatting(formatted, style.options, tabWidth);
             formatted = applyControlFlowIndentation(formatted, style.options, tabWidth);
             formatted = applySemicolonFormatting(formatted, style.options);
         } catch {
