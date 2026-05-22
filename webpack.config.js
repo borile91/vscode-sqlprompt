@@ -1,21 +1,22 @@
 // @ts-check
-'use strict';
+"use strict";
 
-const path = require('path');
+const path = require("path");
 
 /** @type {import('webpack').Configuration} */
 const clientConfig = {
-    context: path.resolve(__dirname, 'client'),
-    entry: './src/extension.ts',
-    target: 'node',
-    mode: 'none',
+    context: path.resolve(__dirname, "client"),
+    entry: "./src/extension.ts",
+    target: "node",
+    mode: "none",
     output: {
-        path: path.resolve(__dirname, 'client', 'dist'),
-        filename: 'extension.js',
-        libraryTarget: 'commonjs2',
+        path: path.resolve(__dirname, "client", "dist"),
+        filename: "extension.js",
+        libraryTarget: "commonjs2",
+        devtoolModuleFilenameTemplate: "../[resource-path]",
     },
     resolve: {
-        extensions: ['.ts', '.js'],
+        extensions: [".ts", ".js"],
     },
     module: {
         rules: [
@@ -24,9 +25,13 @@ const clientConfig = {
                 exclude: /node_modules/,
                 use: [
                     {
-                        loader: 'ts-loader',
+                        loader: "ts-loader",
                         options: {
-                            configFile: path.resolve(__dirname, 'client', 'tsconfig.json'),
+                            configFile: path.resolve(
+                                __dirname,
+                                "client",
+                                "tsconfig.json",
+                            ),
                             transpileOnly: true,
                             compilerOptions: {
                                 composite: false,
@@ -40,25 +45,26 @@ const clientConfig = {
         ],
     },
     externals: {
-        vscode: 'commonjs vscode',
+        vscode: "commonjs vscode",
     },
-    devtool: 'source-map',
-    infrastructureLogging: { level: 'log' },
+    devtool: "source-map",
+    infrastructureLogging: { level: "log" },
 };
 
 /** @type {import('webpack').Configuration} */
 const serverConfig = {
-    context: path.resolve(__dirname, 'server'),
-    entry: './src/server.ts',
-    target: 'node',
-    mode: 'none',
+    context: path.resolve(__dirname, "server"),
+    entry: "./src/server.ts",
+    target: "node",
+    mode: "none",
     output: {
-        path: path.resolve(__dirname, 'server', 'dist'),
-        filename: 'server.js',
-        libraryTarget: 'commonjs2',
+        path: path.resolve(__dirname, "server", "dist"),
+        filename: "server.js",
+        libraryTarget: "commonjs2",
+        devtoolModuleFilenameTemplate: "../[resource-path]",
     },
     resolve: {
-        extensions: ['.ts', '.js'],
+        extensions: [".ts", ".js"],
     },
     module: {
         rules: [
@@ -67,9 +73,13 @@ const serverConfig = {
                 exclude: /node_modules/,
                 use: [
                     {
-                        loader: 'ts-loader',
+                        loader: "ts-loader",
                         options: {
-                            configFile: path.resolve(__dirname, 'server', 'tsconfig.json'),
+                            configFile: path.resolve(
+                                __dirname,
+                                "server",
+                                "tsconfig.json",
+                            ),
                             transpileOnly: true,
                             compilerOptions: {
                                 composite: false,
@@ -82,8 +92,8 @@ const serverConfig = {
             },
         ],
     },
-    devtool: 'source-map',
-    infrastructureLogging: { level: 'log' },
+    devtool: "source-map",
+    infrastructureLogging: { level: "log" },
 };
 
 module.exports = [clientConfig, serverConfig];

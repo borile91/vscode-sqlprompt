@@ -1,0 +1,10 @@
+@@ -1050,7 +1050,8 @@
+         const scalarFunctionCount = params.scalarFunctionCount ?? 0;
+         const tableValuedFunctionCount = params.tableValuedFunctionCount ?? 0;
+         const storedProcedureCount = params.storedProcedureCount ?? 0;
+-        const message = \`Schema loaded: \${tableCount} tables, \${scalarFunctionCount} scalar functions, \${tableValuedFunctionCount} table-valued functions, \${storedProcedureCount} stored procedures.\`;
++        const message = params.message ??
++            \`Schema loaded: \${tableCount} tables, \${scalarFunctionCount} scalar functions, \${tableValuedFunctionCount} table-valued functions, \${storedProcedureCount} stored procedures.\`;
+         window.setStatusBarMessage(message, 5000);
+     });
+ 

@@ -15,6 +15,7 @@ import {
     TextDocumentContentProvider,
     StatusBarAlignment,
     StatusBarItem,
+    ProgressLocation,
 } from "vscode";
 
 import {
@@ -69,6 +70,7 @@ type TableInfo = {
     name: string;
     columns: ColumnInfo[];
     foreignKeys: ForeignKeyInfo[];
+    database?: string;
 };
 
 type ForeignKeyMapping = {
@@ -473,7 +475,7 @@ async function loadSchemaViaConnectionSharing(ownerUri: string): Promise<SchemaS
             ORDER BY s.name, so.name, c.column_id
         `;
 
-        const foreignKeysQuery = `
+    const foreignKeysQuery = `
             SELECT
                 fk.name AS fk_name,
                 sch_parent.name AS parent_schema,
@@ -930,14 +932,11 @@ export async function activate(context: ExtensionContext) {
         path.join("server", "dist", "server.js"),
     );
 
-    const debugOptions = { execArgv: ["--nolazy", "--inspect-brk=6009"] };
-
     const serverOptions: ServerOptions = {
         run: { module: serverModule, transport: TransportKind.ipc },
         debug: {
             module: serverModule,
             transport: TransportKind.ipc,
-            options: debugOptions,
         },
     };
 
@@ -953,18 +952,11 @@ export async function activate(context: ExtensionContext) {
         revealOutputChannelOn: RevealOutputChannelOn.Info,
     };
 
-    // forceDebug: when running in development mode, always start the language
-    // server with --inspect=6009 regardless of process.execArgv. This is needed
-    // because modern VS Code may not expose --inspect-brk in the extension host's
-    // execArgv, which would otherwise prevent the debug server options from being
-    // used and make "Attach to Server" fail to find anything on port 6009.
-    const forceDebug = context.extensionMode === ExtensionMode.Development;
     client = new LanguageClient(
         "sqlPrompt",
         "SQL Prompt Language Server",
         serverOptions,
         clientOptions,
-        forceDebug,
     );
 
     context.subscriptions.push(
@@ -1060,22 +1052,75 @@ export async function activate(context: ExtensionContext) {
     console.log("SQL Prompt: language server started.");
 
     // ── Schema Loading Notifications ──────────────────────────────────────────
+    // Pending progress resolvers for cross-DB demand loads (keyed by db name).
+    const pendingCrossDbProgress = new Map<string, () => void>();
+
     client.onNotification("sqlPrompt/schemaLoadingStarted", (params: any) => {
-        const message = params.message || "Loading schema...";
-        window.setStatusBarMessage(message);
+        if (params.database) {
+            // Cross-DB demand load: show notification progress bar that stays
+            // open until schemaLoadingCompleted (or Failed) resolves it.
+            window.withProgress(
+                {
+                    location: ProgressLocation.Notification,
+                    title: `SQL Prompt: Loading [${params.database}]…`,
+                    cancellable: false,
+                },
+                () =>
+                    new Promise<void>((resolve) => {
+                        pendingCrossDbProgress.set(
+                            params.database.toLowerCase(),
+                            resolve,
+                        );
+                    }),
+            );
+        } else {
+            // Initial schema load (direct connection): use status bar.
+            window.setStatusBarMessage(params.message || "Loading schema...");
+        }
     });
 
     client.onNotification("sqlPrompt/schemaLoadingCompleted", (params: any) => {
-        const tableCount = params.tableCount ?? 0;
-        const scalarFunctionCount = params.scalarFunctionCount ?? 0;
-        const tableValuedFunctionCount = params.tableValuedFunctionCount ?? 0;
-        const storedProcedureCount = params.storedProcedureCount ?? 0;
-        const message = `Schema loaded: ${tableCount} tables, ${scalarFunctionCount} scalar functions, ${tableValuedFunctionCount} table-valued functions, ${storedProcedureCount} stored procedures.`;
-        window.setStatusBarMessage(message, 5000);
+        if (params.database) {
+            // Resolve the pending progress bar for this database.
+            const key = params.database.toLowerCase();
+            pendingCrossDbProgress.get(key)?.();
+            pendingCrossDbProgress.delete(key);
+            const msg = params.message ?? `Schema loaded for ${params.database}`;
+            window.showInformationMessage(`SQL Prompt: ${msg}`);
+        } else {
+            // Initial schema load: keep existing status-bar behaviour.
+            const tableCount = params.tableCount ?? 0;
+            const scalarFunctionCount = params.scalarFunctionCount ?? 0;
+            const tableValuedFunctionCount = params.tableValuedFunctionCount ?? 0;
+            const storedProcedureCount = params.storedProcedureCount ?? 0;
+            const message =
+                params.message ??
+                `Schema loaded: ${tableCount} tables, ${scalarFunctionCount} scalar functions, ${tableValuedFunctionCount} table-valued functions, ${storedProcedureCount} stored procedures.`;
+            window.setStatusBarMessage(message, 5000);
+        }
     });
 
     client.onNotification("sqlPrompt/schemaLoadingFailed", (params: any) => {
+        if (params.database) {
+            const key = params.database.toLowerCase();
+            pendingCrossDbProgress.get(key)?.();
+            pendingCrossDbProgress.delete(key);
+        }
         window.showErrorMessage(`SQL Prompt: schema loading failed — ${params.error}`);
+    });
+
+    client.onRequest("sqlPrompt/loadCrossDatabaseSchema", async (params: { database: string }) => {
+        const ownerUri = window.activeTextEditor?.document.uri.toString();
+        if (!ownerUri) {
+            return { tables: [] };
+        }
+        try {
+            const snapshot = await loadSchemaForDatabaseViaConnectionSharing(ownerUri, params.database);
+            return { tables: snapshot?.tables ?? [] };
+        } catch (e: any) {
+            console.error(`[SQL Prompt] loadCrossDatabaseSchema failed: ${e.message}`);
+            return { tables: [] };
+        }
     });
 
     // ── Go to Definition ──────────────────────────────────────────────────────
@@ -1177,7 +1222,7 @@ export async function activate(context: ExtensionContext) {
                     // Prefer server-returned columns; fall back to local snapshot
                     const columns = resolved.columns ?? lastTablesSnapshot.find(
                         t => t.schema.toLowerCase() === resolved!.schema.toLowerCase() &&
-                             t.name.toLowerCase() === resolved!.name.toLowerCase(),
+                            t.name.toLowerCase() === resolved!.name.toLowerCase(),
                     )?.columns;
 
                     if (columns) {
@@ -1307,5 +1352,62 @@ export async function deactivate() {
     if (client) {
         await client.stop();
         client = undefined;
+    }
+}
+
+async function loadSchemaForDatabaseViaConnectionSharing(ownerUri: string, database: string): Promise<SchemaSnapshot | undefined> {
+    const api = await getMssqlApi();
+    if (!api?.connectionSharing) {
+        return undefined;
+    }
+
+    const dbBracketed = '[' + database.replace(/]/g, ']]') + ']';
+    
+    // We only load tables/views (and their columns) for cross-database. No routines/FKs.
+    const schemaQuery = `
+            SELECT
+                s.name AS schema_name,
+                so.name AS table_name,
+                c.name AS column_name,
+                ty.name AS data_type,
+                c.max_length,
+                c.is_nullable,
+                CASE WHEN so.type = 'U' AND pk.column_id IS NOT NULL THEN 1 ELSE 0 END AS is_primary_key
+            FROM ${dbBracketed}.sys.objects so
+            INNER JOIN ${dbBracketed}.sys.schemas s ON so.schema_id = s.schema_id
+            INNER JOIN ${dbBracketed}.sys.columns c ON so.object_id = c.object_id
+            INNER JOIN ${dbBracketed}.sys.types ty ON c.user_type_id = ty.user_type_id
+            LEFT JOIN (
+                SELECT ic.object_id, ic.column_id
+                FROM ${dbBracketed}.sys.index_columns ic
+                INNER JOIN ${dbBracketed}.sys.indexes i
+                    ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+                WHERE i.is_primary_key = 1
+            ) pk ON so.object_id = pk.object_id AND c.column_id = pk.column_id
+            WHERE so.type IN ('U', 'V') AND so.is_ms_shipped = 0
+            ORDER BY s.name, so.name, c.column_id
+    `;
+
+    try {
+        const result = await api.connectionSharing.executeSimpleQuery?.(ownerUri, schemaQuery);
+        const rows = extractRowsFromSimpleQueryResult(result);
+        const schemaTables = mapRowsToSchemaSnapshot(rows);
+        
+        // Tag tables with the requested database name
+        for (const t of schemaTables) {
+            t.database = database;
+        }
+
+        console.log(`[SQL Prompt] Cross-database schema loaded for [${database}]: ${schemaTables.length} tables`);
+        return {
+            tables: schemaTables,
+            scalarFunctions: [],
+            tableValuedFunctions: [],
+            storedProcedures: [],
+            databases: []
+        };
+    } catch (e: any) {
+        console.error(`[SQL Prompt] loadSchemaForDatabaseViaConnectionSharing failed for [${database}]: ${e.message}`);
+        return undefined;
     }
 }
