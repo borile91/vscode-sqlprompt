@@ -102,13 +102,13 @@ export function applyProcBodyIndentation(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Matches the beginning of a CREATE PROCEDURE/FUNCTION/PROC line up to and
- * including the opening `(` of the parameter list.
+ * Matches the beginning of a CREATE or ALTER PROCEDURE/FUNCTION/PROC line up to
+ * and including the opening `(` of the parameter list.
  *
  * Group 1 — everything before the `(` (including optional leading whitespace).
  */
 const CREATE_PROC_RE =
-    /^([ \t]*CREATE\s+(?:OR\s+REPLACE\s+)?(?:PROCEDURE|FUNCTION|PROC)\s+\S+)\s*\(/i;
+    /^([ \t]*(?:CREATE|ALTER)\s+(?:OR\s+REPLACE\s+)?(?:PROCEDURE|FUNCTION|PROC)\s+\S+)\s*\(/i;
 
 /**
  * Splits a parameter-list string (the text between the outer `(` and `)`) at
@@ -266,6 +266,46 @@ export function applyDdlProcFormatting(
         }
 
         result.push(lineIndent + bodyIndent + ')');
+
+        // Handle RETURNS @name TABLE (columns) for table-valued functions.
+        // sql-formatter places "RETURNS @name" at the end of the proc header line
+        // and "TABLE (columns) AS" on the very next line.
+        const returnsOnlyMatch = afterClose.match(/^(RETURNS\s+\S+)$/i);
+        if (returnsOnlyMatch && tempI < lines.length) {
+            const tableLine = lines[tempI];
+            // Match: optional indent + TABLE + optional spaces + (columns) + optional AS
+            const tableLineMatch = tableLine.match(/^([ \t]*)TABLE\s*\((.+)\)([ \t]*)?(AS\b.*)?$/i);
+            if (tableLineMatch) {
+                const tableColumns = splitParamList(tableLineMatch[2]);
+                const asClause = tableLineMatch[4]?.trim() ?? '';
+                result.push(lineIndent + returnsOnlyMatch[1] + ' TABLE');
+                result.push(lineIndent + bodyIndent + '(');
+                for (let p = 0; p < tableColumns.length; p++) {
+                    if (p === 0) {
+                        result.push(lineIndent + bodyIndent + tableColumns[p]);
+                    } else {
+                        result.push(lineIndent + commaIndent + ', ' + tableColumns[p]);
+                    }
+                }
+                result.push(lineIndent + bodyIndent + ')');
+                if (asClause) {
+                    // Split "AS BEGIN" → "AS" on its own line + "BEGIN" on the next,
+                    // so that applyProcBodyIndentation can detect the standalone "AS"
+                    // and apply body indentation correctly.
+                    const asBodyMatch = asClause.match(/^AS\s+(.*)/i);
+                    if (asBodyMatch) {
+                        result.push(lineIndent + 'AS');
+                        const bodyStart = asBodyMatch[1].trim();
+                        if (bodyStart) result.push(bodyStart);
+                    } else {
+                        result.push(lineIndent + asClause);
+                    }
+                }
+                tempI++;
+                i = tempI;
+                continue;
+            }
+        }
 
         if (afterClose) {
             result.push(lineIndent + afterClose);

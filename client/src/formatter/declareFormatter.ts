@@ -133,5 +133,7 @@ export function applyDeclareFormatting(sql: string, style: SqlPromptStyleJson): 
         i = j;
     }
 
-    return result.join('\n');
+    // Remove blank lines that sql-formatter inserts between consecutive DECLARE
+    // statements — they should be grouped without intervening blank lines.
+    return result.join('\n').replace(/([ \t]*DECLARE\b[^\n]*\n)\n+([ \t]*DECLARE\b)/g, '$1$2');
 }
