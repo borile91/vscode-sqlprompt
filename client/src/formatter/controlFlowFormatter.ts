@@ -145,18 +145,20 @@ export function applyControlFlowIndentation(
 
         } else if (STANDALONE_BEGIN_RE.test(trimmed)) {
             // Bare BEGIN: normally indented one level beyond the owning statement.
-            // Special case: a bare BEGIN at contentExtraIndent === 0 is the outermost
-            // function-body BEGIN (e.g. ALTER FUNCTION … AS BEGIN … END).  Treat it
-            // as a compound opener so that applyProcBodyIndentation can add the base
-            // tabWidth offset without double-indenting it.
+            // Special case: a bare BEGIN at contentExtraIndent === 0 with no active
+            // pending single-body context is the outermost function-body BEGIN
+            // (e.g. ALTER FUNCTION … AS BEGIN … END).  Treat it as a compound opener
+            // so that applyProcBodyIndentation can add the base tabWidth offset
+            // without double-indenting it.
             // When there is a pending single-body indent (e.g. "IF cond\n BEGIN"),
             // the BEGIN is the compound body of the IF and should be placed at
             // pendingSingleBodyIndent (= IF_indent + tabWidth).
+            const hadPendingSingleBody = pendingSingleBodyIndent > 0;
             const beginBase =
                 pendingSingleBodyIndent > 0 ? pendingSingleBodyIndent - tabWidth : contentExtraIndent;
             pendingSingleBodyIndent = 0;
             pendingSingleBodyKeywordWidth = 0;
-            if (beginBase === 0) {
+            if (beginBase === 0 && !hadPendingSingleBody) {
                 result.push(applyKeywordCasing(trimmed, style));
                 stack.push(COMPOUND_SENTINEL);
                 contentExtraIndent = tabWidth;
