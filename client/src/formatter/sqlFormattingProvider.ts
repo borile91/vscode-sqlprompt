@@ -16,7 +16,13 @@ import { applyLeadingCommaFormat } from './listFormatter';
 import { applySemicolonFormatting } from './semicolonFormatter';
 import { applyJoinOnFormatting } from './joinFormatter';
 import { applyCaseFormatting, collapseCaseToSingleLine } from './caseFormatter';
-import { applyDdlFormatting, applyDdlProcFormatting, applyDdlViewFormatting, applyProcBodyIndentation } from './ddlFormatter';
+import {
+    applyDdlFormatting,
+    applyDdlParameterlessProcAsFormatting,
+    applyDdlProcFormatting,
+    applyDdlViewFormatting,
+    applyProcBodyIndentation,
+} from './ddlFormatter';
 import { applyDeclareFormatting } from './declareFormatter';
 import { applyExecParamFormatting } from './execFormatter';
 
@@ -66,6 +72,7 @@ export class SqlFormattingProvider implements DocumentFormattingEditProvider {
             );
             formatted = applyDeclareFormatting(formatted, style.options);
             formatted = applyDdlProcFormatting(formatted, style.options, tabWidth);
+            formatted = applyDdlParameterlessProcAsFormatting(formatted, style.options);
             formatted = applyDdlViewFormatting(formatted, style.options);
             formatted = collapseCaseToSingleLine(formatted, style.options);
             formatted = applyLeadingCommaFormat(formatted, style.options);
@@ -114,6 +121,15 @@ export class SqlFormattingProvider implements DocumentFormattingEditProvider {
             // Only match horizontal whitespace (not newlines) so that a procedure
             // parameter list  `proc_name\n    (`  is not collapsed to `proc_name(`.
             formatted = formatted.replace(/(\.\w+)[ \t]+\(/g, '$1(');
+            // Restore the intentional space before the INSERT column-list opening
+            // parenthesis for schema-qualified tables (the dot-tablename regex above
+            // inadvertently removes it for tables like dbo.MyTable).
+            if (style.options.insertStatements?.columns?.parenthesisStyle) {
+                formatted = formatted.replace(
+                    /^([ \t]*INSERT\s+(?:INTO\s+)?[^\s(]+)\(/gim,
+                    '$1 (',
+                );
+            }
             // Remove spurious space before ( in known T-SQL built-in statements
             // (sql-formatter may emit a space after statement names like RAISERROR).
             formatted = formatted.replace(/\bRAISERROR\s+\(/gi, 'RAISERROR(');
@@ -123,9 +139,21 @@ export class SqlFormattingProvider implements DocumentFormattingEditProvider {
                     /\((NOLOCK|UPDLOCK|ROWLOCK|TABLOCK|TABLOCKX|HOLDLOCK|READPAST|NOWAIT|READCOMMITTEDLOCK|REPEATABLEREAD|SERIALIZABLE|SNAPSHOT|FORCESCAN|FORCESEEK|PAGLOCK)\)/gi,
                     '( $1 )',
                 );
-                // Add space after VALUES ( for INSERT … VALUES statements.
-                formatted = formatted.replace(/\bVALUES\s*\((?!\s)/gi, 'VALUES ( ');
+                // Add spaces inside single-line VALUES(…) parentheses.
+                // Uses greedy match to find the last ) before optional ; on the line,
+                // then adds a space before ) unless the content already ends with )
+                // (e.g. GETDATE()) to avoid producing the ugly double-paren sequence ) ).
+                formatted = formatted.replace(
+                    /^([ \t]*VALUES\s*\()(.+)\)([ \t]*;?[ \t]*)$/gim,
+                    (_m, kw, content, suffix) => {
+                        const c = content.trim();
+                        return `${kw} ${c}${c.endsWith(')') ? '' : ' '})${suffix}`;
+                    },
+                );
             }
+            // Keep one empty line between a leading comment block and the first
+            // SQL statement when sql-formatter compacts them together.
+            formatted = formatted.replace(/^((?:[ \t]*--[^\n]*\n)+)(?=\S)/, '$1\n');
         } catch {
             return [];
         }

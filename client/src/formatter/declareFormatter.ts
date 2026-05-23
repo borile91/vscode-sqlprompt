@@ -50,6 +50,8 @@ function splitVarSpec(spec: string): [string, string] {
  */
 export function applyDeclareFormatting(sql: string, style: SqlPromptStyleJson): string {
     if (!style.lists?.placeCommasBeforeItems) return sql;
+    const listBreakMode = style.lists.placeSubsequentItemsOnNewLines;
+    const keepDeclareInline = listBreakMode === 'never' || listBreakMode === 'ifLongerThanMaxLineLength';
 
     const lines = sql.split('\n');
     const result: string[] = [];
@@ -99,6 +101,20 @@ export function applyDeclareFormatting(sql: string, style: SqlPromptStyleJson): 
             continue;
         }
 
+        // Find which variable carries the semicolon (the last one from sql-formatter)
+        // The last continuation line ends with `;` (possibly `BIT;`)
+        const lastLine = lines[j - 1] ?? '';
+        const hasSemicolon = lastLine.trimEnd().endsWith(';');
+
+        if (keepDeclareInline) {
+            const inlineContent = vars
+                .map(v => v.name + (v.typeAndDefault ? ' ' + v.typeAndDefault : ''))
+                .join(', ');
+            result.push(lineIndent + 'DECLARE ' + inlineContent + (hasSemicolon ? ';' : ''));
+            i = j;
+            continue;
+        }
+
         // Column layout:
         //   DECLARE keyword = 7 chars + 1 space = 8 → variable name starts at 8
         //   commaIndent = 8 - 2 = 6  →  "      , @var" aligns @ at column 8
@@ -116,11 +132,6 @@ export function applyDeclareFormatting(sql: string, style: SqlPromptStyleJson): 
             }
             return lineIndent + ' '.repeat(commaIndent) + ', ' + content;
         };
-
-        // Find which variable carries the semicolon (the last one from sql-formatter)
-        // The last continuation line ends with `;` (possibly `BIT;`)
-        const lastLine = lines[j - 1] ?? '';
-        const hasSemicolon = lastLine.trimEnd().endsWith(';');
 
         const emittedLines = vars.map((v, idx) => emitVar(v, idx === 0));
 

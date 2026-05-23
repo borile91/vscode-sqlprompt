@@ -26,7 +26,13 @@ export function mapToFormatterOptions(style: SqlPromptStyleJson): FormatOptionsW
         opts.dataTypeCase = mapCasing(style.casing.builtInDataTypes);
     }
 
-    if (style.whitespace?.wrapLinesLongerThan !== undefined) {
+    if (style.whitespace?.wrapLongLines === false) {
+        // Prevent sql-formatter from wrapping: use a very large expression width.
+        // The wrapLinesLongerThan value is still used by custom post-processors
+        // (e.g. placeSubsequentItemsOnNewLines: "ifLongerThanMaxLineLength") but
+        // sql-formatter itself should not expand expressions.
+        opts.expressionWidth = 9999;
+    } else if (style.whitespace?.wrapLinesLongerThan !== undefined) {
         opts.expressionWidth = style.whitespace.wrapLinesLongerThan;
     }
 
