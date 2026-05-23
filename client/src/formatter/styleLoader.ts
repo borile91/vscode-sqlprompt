@@ -17,8 +17,8 @@ export interface SqlPromptStyleJson {
         alignAliases?: boolean;
         addSpaceBeforeComma?: boolean;
         addSpaceAfterComma?: boolean;
-        placeFirstItemOnNewLines?: 'never' | 'always' | 'wrap' | 'whenLong';
-        placeSubsequentItemsOnNewLines?: 'never' | 'always' | 'wrap' | 'whenLong';
+        placeFirstItemOnNewLines?: 'never' | 'always' | 'wrap' | 'whenLong' | 'ifLongerThanMaxLineLength';
+        placeSubsequentItemsOnNewLines?: 'never' | 'always' | 'wrap' | 'whenLong' | 'ifLongerThanMaxLineLength';
         alignSubsequentItemsWithFirstItem?: boolean;
         alignClauseItems?: boolean;
         alignItemsAcrossClauses?: boolean;
@@ -32,6 +32,7 @@ export interface SqlPromptStyleJson {
     whitespace?: {
         numberOfSpacesInTabs?: number;
         spacesOrTabs?: 'onlySpaces' | 'onlyTabs' | 'spacesAndTabs';
+        wrapLongLines?: boolean;
         wrapLinesLongerThan?: number;
         whiteSpaceBeforeSemiColon?: 'none' | 'spaceBefore' | 'newLineBefore';
         newLines?: {
@@ -104,9 +105,11 @@ export interface SqlPromptStyleJson {
         columns?: {
             parenthesisStyle?: string;
             indentContents?: boolean;
+            placeSubsequentColumnsOnNewLines?: 'never' | 'always' | 'whenLong' | 'ifLongerThanMaxLineLength';
         };
         values?: {
             parenthesisStyle?: string;
+            indentContents?: boolean;
         };
     };
     functionCalls?: {

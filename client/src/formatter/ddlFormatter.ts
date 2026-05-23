@@ -46,6 +46,28 @@ export function applyDdlViewFormatting(sql: string, style: SqlPromptStyleJson): 
     );
 }
 
+/**
+ * For parameterless CREATE/ALTER PROCEDURE/FUNCTION headers, force `AS` onto
+ * its own line so later passes can indent the procedure body consistently.
+ */
+export function applyDdlParameterlessProcAsFormatting(sql: string, style: SqlPromptStyleJson): string {
+    if (!style.ddl?.indentClauses) return sql;
+
+    return sql.replace(
+        /^([ \t]*)(CREATE|ALTER)\s+(OR\s+REPLACE\s+)?(PROCEDURE|FUNCTION|PROC)\s+(.+?)\s+AS(?:\s+(BEGIN))?[ \t]*$/gim,
+        (_match, indent, op, orReplace, kind, namePart, beginKw) => {
+            const name = String(namePart).trim();
+            const head = `${op.toUpperCase()} ${(orReplace ?? '').toUpperCase()}${kind.toUpperCase()} ${name}`
+                .replace(/\s+/g, ' ')
+                .trim();
+            if (beginKw) {
+                return `${indent}${head}\n${indent}AS\n${indent}${String(beginKw).toUpperCase()}`;
+            }
+            return `${indent}${head}\n${indent}AS`;
+        },
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Procedure body indentation  (ddl.indentClauses)
 // ─────────────────────────────────────────────────────────────────────────────

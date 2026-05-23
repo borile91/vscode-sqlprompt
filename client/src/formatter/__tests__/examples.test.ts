@@ -9,6 +9,7 @@ import { applySetLineJoining, applyKeywordRePadding } from '../keywordPaddingFor
 import { applyDeclareFormatting } from '../declareFormatter.js';
 import {
     applyDdlProcFormatting,
+    applyDdlParameterlessProcAsFormatting,
     applyDdlViewFormatting,
     applyDdlFormatting,
     applyProcBodyIndentation,
@@ -21,8 +22,7 @@ import { applySemicolonFormatting } from '../semicolonFormatter.js';
 import { applyExecParamFormatting } from '../execFormatter.js';
 
 // Same pipeline as SqlFormattingProvider.provideDocumentFormattingEdits
-function formatSql(text: string, options: SqlPromptStyleJson): string {
-    const tabWidth = options.whitespace?.numberOfSpacesInTabs ?? 4;
+function formatSql(text: string, options: SqlPromptStyleJson): string {    const tabWidth = options.whitespace?.numberOfSpacesInTabs ?? 4;
     const spacesInside = options.parentheses?.addSpacesInsideParentheses ?? false;
     let formatted = format(text, mapToFormatterOptions(options));
     formatted = applySetLineJoining(formatted);
@@ -43,6 +43,7 @@ function formatSql(text: string, options: SqlPromptStyleJson): string {
     );
     formatted = applyDeclareFormatting(formatted, options);
     formatted = applyDdlProcFormatting(formatted, options, tabWidth);
+    formatted = applyDdlParameterlessProcAsFormatting(formatted, options);
     formatted = applyDdlViewFormatting(formatted, options);
     formatted = collapseCaseToSingleLine(formatted, options);
     formatted = applyLeadingCommaFormat(formatted, options);
@@ -78,6 +79,15 @@ function formatSql(text: string, options: SqlPromptStyleJson): string {
     // Remove space before ( in schema-qualified function/procedure calls.
     // Only match horizontal whitespace (not newlines).
     formatted = formatted.replace(/(\.\w+)[ \t]+\(/g, '$1(');
+    // Restore the intentional space before the INSERT column-list opening
+    // parenthesis for schema-qualified tables (the dot-tablename regex above
+    // inadvertently removes it for tables like dbo.MyTable).
+    if (options.insertStatements?.columns?.parenthesisStyle) {
+        formatted = formatted.replace(
+            /^([ \t]*INSERT\s+(?:INTO\s+)?[^\s(]+)\(/gim,
+            '$1 (',
+        );
+    }
     // Remove spurious space before ( in RAISERROR.
     formatted = formatted.replace(/\bRAISERROR\s+\(/gi, 'RAISERROR(');
     if (spacesInside) {
@@ -85,9 +95,18 @@ function formatSql(text: string, options: SqlPromptStyleJson): string {
             /\((NOLOCK|UPDLOCK|ROWLOCK|TABLOCK|TABLOCKX|HOLDLOCK|READPAST|NOWAIT|READCOMMITTEDLOCK|REPEATABLEREAD|SERIALIZABLE|SNAPSHOT|FORCESCAN|FORCESEEK|PAGLOCK)\)/gi,
             '( $1 )',
         );
-        // Add space after VALUES ( for INSERT … VALUES statements.
-        formatted = formatted.replace(/\bVALUES\s*\((?!\s)/gi, 'VALUES ( ');
+        // Add spaces inside single-line VALUES(…) parentheses.
+        formatted = formatted.replace(
+            /^([ \t]*VALUES\s*\()(.+)\)([ \t]*;?[ \t]*)$/gim,
+            (_m, kw, content, suffix) => {
+                const c = content.trim();
+                return `${kw} ${c}${c.endsWith(')') ? '' : ' '})${suffix}`;
+            },
+        );
     }
+    // Keep one blank line between a leading comment block and the first SQL
+    // statement when sql-formatter compacts them onto adjacent lines.
+    formatted = formatted.replace(/^((?:[ \t]*--[^\n]*\n)+)(?=\S)/, '$1\n');
     return formatted;
 }
 

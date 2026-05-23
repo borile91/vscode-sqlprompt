@@ -190,14 +190,72 @@ function formatItems(
  * The comma is placed at column (keywordWidth - 2) so that the content after
  * ", " aligns with the first column (at keywordWidth).
  */
+/**
+ * Collapses a multi-line SELECT item list (e.g. the values part of an
+ * INSERT … SELECT) into a single line when it has no FROM/WHERE/etc. clauses.
+ *
+ * Returns the collapsed line and the index after the last consumed line, or
+ * null if the SELECT has fewer than two items or contains clause keywords.
+ */
+function collapseSelectItems(
+    lines: string[],
+    selectIdx: number,
+    selectIndent: string,
+    firstItem: string,
+): { line: string; nextIndex: number } | null {
+    const kwWidth = 'SELECT '.length; // 7
+    const contPrefix = selectIndent + ' '.repeat(kwWidth);
+
+    const items: string[] = [firstItem.replace(/,\s*$/, '').trim()];
+    let j = selectIdx + 1;
+    let hasFinalSemi = false;
+
+    while (j < lines.length) {
+        const contLine = lines[j];
+        // Stop if indentation doesn't match continuation prefix
+        if (!contLine.startsWith(contPrefix)) break;
+        // Guard: one extra space means a deeper-indented sub-expression — stop
+        if (contLine.charAt(contPrefix.length) === ' ') break;
+        // Stop at clause keywords (FROM, WHERE, GROUP BY, …)
+        if (CLAUSE_RE.test(contLine)) break;
+
+        const itemText = contLine.slice(contPrefix.length);
+        const isFinalItem = itemText.trimEnd().endsWith(';');
+        const item = itemText.replace(/[,;]\s*$/, '').trim();
+        items.push(item);
+        j++;
+        if (isFinalItem) {
+            hasFinalSemi = true;
+            break;
+        }
+    }
+
+    if (items.length <= 1) return null;
+
+    return {
+        line: `${selectIndent}SELECT ${items.join(', ')}${hasFinalSemi ? ';' : ''}`,
+        nextIndex: j,
+    };
+}
+
 export function applyLeadingCommaFormat(
     sql: string,
     style: SqlPromptStyleJson,
 ): string {
     if (!style.lists?.placeCommasBeforeItems) return sql;
+    const listBreakMode = style.lists.placeSubsequentItemsOnNewLines;
+    const forceLeadingCommaLayout =
+        listBreakMode !== 'never' && listBreakMode !== 'ifLongerThanMaxLineLength';
+
+    const hasInsertConfig = !!style.insertStatements?.columns?.parenthesisStyle;
+
+    // Nothing to do: leading-comma layout is disabled and no INSERT config to apply
+    if (!forceLeadingCommaLayout && !hasInsertConfig) return sql;
 
     const alignComments = style.lists.alignComments ?? false;
     const alignAliases = style.lists.alignAliases ?? false;
+    const spacesInside = style.parentheses?.addSpacesInsideParentheses ?? false;
+    const columnsBreakMode = style.insertStatements?.columns?.placeSubsequentColumnsOnNewLines;
     const lines = sql.split('\n');
     const result: string[] = [];
     let i = 0;
@@ -205,18 +263,40 @@ export function applyLeadingCommaFormat(
     while (i < lines.length) {
         const line = lines[i];
 
-        // ── INSERT column expansion ──────────────────────────────────────────
-        // When `insertStatements.columns.parenthesisStyle` is set, expand the
-        // INSERT column list: single column gets spaces-inside-parens inline,
-        // multiple columns are expanded to leading-comma multi-line format.
-        if (style.insertStatements?.columns?.parenthesisStyle) {
+        // ── INSERT column formatting ─────────────────────────────────────────
+        // Runs regardless of forceLeadingCommaLayout so that insertStatements
+        // config is always honoured (e.g. placeSubsequentColumnsOnNewLines:
+        // "never" with placeSubsequentItemsOnNewLines: "ifLongerThanMaxLineLength").
+        if (hasInsertConfig) {
+            // ── Single-line INSERT: INSERT [INTO] table(col1, col2, …) ────────
             const insertMatch = line.match(
                 /^([ \t]*)INSERT\s+(INTO\s+)?(\S+)\s*\(([^)]*)\)\s*$/i,
             );
             if (insertMatch) {
                 const [, lineIndent, intoClause, tableName, columnListStr] = insertMatch;
-                const spacesInside = style.parentheses?.addSpacesInsideParentheses ?? false;
                 const columns = columnListStr.split(',').map(c => c.trim()).filter(Boolean);
+
+                if (columnsBreakMode === 'never') {
+                    const openParen = spacesInside ? '( ' : '(';
+                    const closeSuffix = spacesInside ? ' )' : ')';
+                    result.push(
+                        `${lineIndent}INSERT ${intoClause ? 'INTO ' : ''}${tableName} ${openParen}${columns.join(', ')}${closeSuffix}`,
+                    );
+                    i++;
+                    // For INSERT … SELECT: collapse the SELECT values to one line
+                    if (i < lines.length) {
+                        const nextLine = lines[i];
+                        const selMatch = nextLine.match(/^([ \t]*)SELECT\s+(.*?),\s*$/i);
+                        if (selMatch) {
+                            const collapsed = collapseSelectItems(lines, i, selMatch[1], selMatch[2]);
+                            if (collapsed) {
+                                result.push(collapsed.line);
+                                i = collapsed.nextIndex;
+                            }
+                        }
+                    }
+                    continue;
+                }
 
                 if (columns.length <= 1) {
                     // Single column: keep inline, optionally add spaces inside parens
@@ -229,14 +309,10 @@ export function applyLeadingCommaFormat(
                     }
                 } else {
                     // Multi-column: expand with leading-comma format.
-                    // Use plain "INSERT " (1 space) as the keyword prefix regardless
-                    // of whatever tabularLeft padding was applied by applyKeywordRePadding,
-                    // so that the continuation alignment matches SQL Prompt conventions.
                     const intoStr = intoClause ? 'INTO ' : '';
                     const openParen = spacesInside ? '( ' : '(';
                     const closeSuffix = spacesInside ? ' )' : ')';
                     const firstLinePrefix = `${lineIndent}INSERT ${intoStr}${tableName} ${openParen}`;
-                    // Continuation comma sits 2 chars before the first-column position
                     const contIndent = ' '.repeat(firstLinePrefix.length - lineIndent.length - 2);
                     result.push(`${firstLinePrefix}${columns[0]}`);
                     for (let c = 1; c < columns.length - 1; c++) {
@@ -249,6 +325,57 @@ export function applyLeadingCommaFormat(
                 i++;
                 continue;
             }
+
+            // ── Multi-line INSERT: INSERT [INTO] table (\n  col,\n  …\n  ) ──
+            // Handles the case where sql-formatter expanded the column list
+            // across multiple lines (expressionWidth smaller than column list).
+            const insertMultiMatch = line.match(
+                /^([ \t]*)INSERT\s+(INTO\s+)?(\S+)\s*\(\s*$/i,
+            );
+            if (insertMultiMatch && columnsBreakMode === 'never') {
+                const [, lineIndent, intoClause, tableName] = insertMultiMatch;
+                const columns: string[] = [];
+                let j = i + 1;
+                while (j < lines.length) {
+                    const trimmed = lines[j].trim();
+                    if (/^\)\s*;?\s*$/.test(trimmed)) break;
+                    if (trimmed) columns.push(trimmed.replace(/,\s*$/, ''));
+                    j++;
+                }
+                const closingTrimmed = (lines[j] ?? '').trim();
+                const hasSemicolon = closingTrimmed === ');';
+                j++;
+
+                const openParen = spacesInside ? '( ' : '(';
+                const closeSuffix = spacesInside ? ' )' : ')';
+                result.push(
+                    `${lineIndent}INSERT ${intoClause ? 'INTO ' : ''}${tableName} ${openParen}${columns.join(', ')}${closeSuffix}${hasSemicolon ? ';' : ''}`,
+                );
+
+                // For INSERT … SELECT: collapse the SELECT values to one line
+                if (!hasSemicolon && j < lines.length) {
+                    const nextLine = lines[j];
+                    const selMatch = nextLine.match(/^([ \t]*)SELECT\s+(.*?),\s*$/i);
+                    if (selMatch) {
+                        const collapsed = collapseSelectItems(lines, j, selMatch[1], selMatch[2]);
+                        if (collapsed) {
+                            result.push(collapsed.line);
+                            j = collapsed.nextIndex;
+                        }
+                    }
+                }
+
+                i = j;
+                continue;
+            }
+        }
+
+        // ── Leading-comma layout for SELECT / ORDER BY / GROUP BY / SET ──────
+        // Only applied when forceLeadingCommaLayout is true.
+        if (!forceLeadingCommaLayout) {
+            result.push(line);
+            i++;
+            continue;
         }
 
         const clauseMatch = line.match(LIST_CLAUSE_RE);
