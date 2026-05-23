@@ -30,7 +30,12 @@ export function applySetLineJoining(sql: string): string {
     // a newline, then optional leading whitespace on the next line.
     // Replace with the leading indent + "SET " (the next-line indent is dropped
     // because sql-formatter adds an extra tabWidth indent for the "clause content").
-    return sql.replace(/^([ \t]*SET)[ \t]*\n[ \t]*/gm, '$1 ');
+    return sql
+        .replace(/^([ \t]*SET)[ \t]*\n[ \t]*/gm, '$1 ')
+        // sql-formatter tabularLeft pads sub-keywords inside SET statements to 10
+        // chars (e.g. "NOCOUNT   ON" → 7 chars padded to 10).  After the join
+        // above this becomes "SET NOCOUNT   ON;" — collapse excess spaces.
+        .replace(/^([ \t]*SET\s+\w+)[ \t]{2,}(\w)/gm, '$1 $2');
 }
 
 /** Fixed keyword column width produced by sql-formatter tabularLeft for T-SQL. */
@@ -79,6 +84,7 @@ const KEYWORD_TOKENS: string[] = [
     'INTO',        // 4
     'EXEC',        // 4
     'WITH',        // 4
+    'USE',         // 3
     'AND',         // 3
     'SET',         // 3
     'OR',          // 2
@@ -223,7 +229,10 @@ function rePadBlock(block: string, oldWidth: number): string {
 export function applyKeywordRePadding(sql: string): string {
     // Split on blank lines, preserving the separators
     const parts = sql.split(/(\n{2,})/);
-    return parts
+    const repaded = parts
         .map(part => (/^\n+$/.test(part) ? part : rePadBlock(part, SQL_FORMATTER_KW_WIDTH)))
         .join('');
+    // Strip trailing whitespace from every line (sql-formatter tabularLeft pads
+    // lone keywords like GO to SQL_FORMATTER_KW_WIDTH which leaves trailing spaces).
+    return repaded.replace(/[ \t]+(?=\n|$)/gm, '');
 }

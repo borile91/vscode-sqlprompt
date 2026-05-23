@@ -39,10 +39,6 @@ export function applyJoinOnFormatting(sql: string, style: SqlPromptStyleJson, ta
     const conditionAlignment = onCfg?.conditionAlignment;
     const lines = sql.split('\n');
 
-    // For "toTable" alignment, infer the keyword column width from the SQL so
-    // that JOIN lines can be indented to match the clause table column.
-    const kwColWidth = shouldTransformJoinIndent ? inferKeywordColumnWidth(lines) : 0;
-
     const result: string[] = [];
     let i = 0;
 
@@ -54,7 +50,11 @@ export function applyJoinOnFormatting(sql: string, style: SqlPromptStyleJson, ta
             const { indent, joinKeyword, tableAndRest } = joinMatch;
 
             // When toTable is active, the JOIN keyword moves to the table column.
-            const effectiveIndent = shouldTransformJoinIndent ? kwColWidth : indent;
+            // Compute kwColWidth locally by scanning backward to the nearest FROM/SELECT
+            // so that each JOIN uses the width of its own SELECT block.
+            const effectiveIndent = shouldTransformJoinIndent
+                ? getLocalKwColWidth(lines, i)
+                : indent;
 
             // Check if ON is inline on the same line as the JOIN/table.
             // OUTER APPLY / CROSS APPLY never have ON, so skip this check for them.
@@ -118,7 +118,7 @@ export function applyJoinOnFormatting(sql: string, style: SqlPromptStyleJson, ta
  * Returns 0 if no recognisable clause line is found.
  */
 function inferKeywordColumnWidth(lines: string[]): number {
-    const clauseKeywords = ['SELECT', 'FROM', 'WHERE', 'HAVING', 'UPDATE', 'DELETE', 'INSERT'];
+    const clauseKeywords = ['SELECT', 'FROM', 'WHERE', 'HAVING', 'UPDATE', 'DELETE'];
     for (const line of lines) {
         for (const kw of clauseKeywords) {
             const m = line.match(new RegExp(`^(${kw})(\\s+)\\S`, 'i'));
@@ -128,6 +128,20 @@ function inferKeywordColumnWidth(lines: string[]): number {
         }
     }
     return 0;
+}
+
+/**
+ * Scans backward from `joinIdx` to find the nearest FROM or SELECT line and
+ * returns its keyword column width (keyword length + trailing spaces).
+ * This gives a per-JOIN column width rather than a single document-wide value,
+ * which is important when different SELECT blocks have different keyword padding.
+ */
+function getLocalKwColWidth(lines: string[], joinIdx: number): number {
+    for (let i = joinIdx - 1; i >= 0; i--) {
+        const m = lines[i].match(/^(FROM|SELECT)(\s+)\S/i);
+        if (m) return m[1].length + m[2].length;
+    }
+    return inferKeywordColumnWidth(lines);
 }
 
 interface JoinMatch {

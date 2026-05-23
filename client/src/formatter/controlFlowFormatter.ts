@@ -87,6 +87,22 @@ export function applyControlFlowIndentation(
     const result: string[] = [];
     let contentExtraIndent = 0;
     const stack: number[] = []; // saves contentExtraIndent at each block entry
+    // When > 0, the NEXT non-blank non-BEGIN, non-AND/OR line is a single-statement
+    // IF / WHILE / ELSE body and should be emitted at this indent level.
+    let pendingSingleBodyIndent = 0;
+    // Width of the keyword (e.g. "IF " = 3, "WHILE " = 6) that set pendingSingleBodyIndent.
+    // Used to place AND/OR condition continuations at the correct column.
+    let pendingSingleBodyKeywordWidth = 0;
+    // Sentinel pushed into `stack` when a bare BEGIN is treated as a compound
+    // opener (i.e. it's the outermost BEGIN of a function body at indent 0).
+    // The matching END must then be emitted without the extra tabWidth.
+    const COMPOUND_SENTINEL = -1;
+    // When true, we are inside a COMPOUND_SENTINEL block (the outermost function
+    // body BEGIN/END). Lines here already have sql-formatter's absolute indent so
+    // we must PREPEND contentExtraIndent rather than strip-and-replace.
+    // Outside compound blocks (inside nested BEGIN/END), we strip-and-replace so
+    // that sql-formatter's inner indent does not double-count with our extra indent.
+    let inCompoundBlock = false;
 
     for (const line of lines) {
         const trimmed = line.trim();
@@ -99,32 +115,125 @@ export function applyControlFlowIndentation(
         if (STANDALONE_END_RE.test(trimmed)) {
             // Bare END: matches same indent as its opening bare BEGIN
             const savedExtra = stack.length > 0 ? stack.pop()! : 0;
-            result.push(' '.repeat(savedExtra + tabWidth) + applyKeywordCasing(trimmed, style));
-            contentExtraIndent = savedExtra;
+            pendingSingleBodyIndent = 0;
+            pendingSingleBodyKeywordWidth = 0;
+            if (savedExtra === COMPOUND_SENTINEL) {
+                // Matching a compound-sentinel BEGIN — emit at base level (no +tabWidth)
+                result.push(applyKeywordCasing(trimmed, style));
+                contentExtraIndent = 0;
+                inCompoundBlock = false;
+            } else {
+                result.push(' '.repeat(savedExtra + tabWidth) + applyKeywordCasing(trimmed, style));
+                contentExtraIndent = savedExtra;
+            }
 
         } else if (COMPOUND_END_RE.test(trimmed)) {
             // END TRY / END CATCH: back to the level of the matching BEGIN TRY/CATCH
             const savedExtra = stack.length > 0 ? stack.pop()! : 0;
+            pendingSingleBodyIndent = 0;
+            pendingSingleBodyKeywordWidth = 0;
             result.push(' '.repeat(savedExtra) + applyKeywordCasing(trimmed, style));
             contentExtraIndent = savedExtra;
 
         } else if (COMPOUND_BEGIN_RE.test(trimmed)) {
             // BEGIN TRY / BEGIN CATCH: stays at current level, opens indented block
+            pendingSingleBodyIndent = 0;
+            pendingSingleBodyKeywordWidth = 0;
             result.push(' '.repeat(contentExtraIndent) + applyKeywordCasing(trimmed, style));
             stack.push(contentExtraIndent);
             contentExtraIndent += tabWidth;
 
         } else if (STANDALONE_BEGIN_RE.test(trimmed)) {
-            // Bare BEGIN: indented one level beyond the owning statement
-            const beginIndent = contentExtraIndent + tabWidth;
-            result.push(' '.repeat(beginIndent) + applyKeywordCasing(trimmed, style));
-            stack.push(contentExtraIndent);
-            contentExtraIndent = indentContents ? beginIndent + tabWidth : beginIndent;
+            // Bare BEGIN: normally indented one level beyond the owning statement.
+            // Special case: a bare BEGIN at contentExtraIndent === 0 is the outermost
+            // function-body BEGIN (e.g. ALTER FUNCTION … AS BEGIN … END).  Treat it
+            // as a compound opener so that applyProcBodyIndentation can add the base
+            // tabWidth offset without double-indenting it.
+            // When there is a pending single-body indent (e.g. "IF cond\n BEGIN"),
+            // the BEGIN is the compound body of the IF and should be placed at
+            // pendingSingleBodyIndent (= IF_indent + tabWidth).
+            const beginBase =
+                pendingSingleBodyIndent > 0 ? pendingSingleBodyIndent - tabWidth : contentExtraIndent;
+            pendingSingleBodyIndent = 0;
+            pendingSingleBodyKeywordWidth = 0;
+            if (beginBase === 0) {
+                result.push(applyKeywordCasing(trimmed, style));
+                stack.push(COMPOUND_SENTINEL);
+                contentExtraIndent = tabWidth;
+                inCompoundBlock = true;
+            } else {
+                const beginIndent = beginBase + tabWidth;
+                result.push(' '.repeat(beginIndent) + applyKeywordCasing(trimmed, style));
+                stack.push(beginBase);
+                contentExtraIndent = indentContents ? beginIndent + tabWidth : beginIndent;
+            }
 
         } else {
             // Regular content: prepend extra indent, keeping sql-formatter's own
-            // indentation intact (preserves tabularLeft column alignment)
-            result.push(contentExtraIndent > 0 ? ' '.repeat(contentExtraIndent) + line : line);
+            // indentation intact (preserves tabularLeft column alignment).
+
+            // AND/OR lines may be condition continuations for a preceding IF/WHILE:
+            // they align at (IF_indent + IF_keyword_width) rather than using pendingSingleBodyIndent.
+            const isConditionCont =
+                pendingSingleBodyIndent > 0 && /^(?:AND|OR)\b/i.test(trimmed);
+
+            if (isConditionCont) {
+                // Align at the IF/WHILE content column: IF_indent + keyword_width
+                // pendingSingleBodyIndent = emittedIndent + tabWidth, so
+                // emittedIndent = pendingSingleBodyIndent - tabWidth
+                // AND/OR should be at: emittedIndent + keyword_width
+                // Normalise tabular-left padding between AND/OR and the condition:
+                // sql-formatter pads "AND    expr" to align columns; collapse to one space.
+                const normTrimmed = trimmed.replace(/^(AND|OR)\s+/i, (_, kw) => kw + ' ');
+                const condIndent =
+                    (pendingSingleBodyIndent - tabWidth) + pendingSingleBodyKeywordWidth;
+                result.push(condIndent > 0 ? ' '.repeat(condIndent) + normTrimmed : normTrimmed);
+                // Leave pendingSingleBodyIndent in place — body statement comes later
+            } else {
+                const effectiveIndent =
+                    pendingSingleBodyIndent > 0 ? pendingSingleBodyIndent : contentExtraIndent;
+                // For lines placed because of pendingSingleBodyIndent (the body of an
+                // IF/WHILE/ELSE that has no BEGIN), strip the original leading whitespace
+                // and replace it with the computed indent to avoid double-counting
+                // sql-formatter's base indent.
+                // For lines placed because of contentExtraIndent (inside a BEGIN block),
+                // prepend the extra spaces and keep the existing alignment whitespace,
+                // because those lines may have tabularLeft-aligned WHERE/AND conditions
+                // that must not be re-indented.
+                if (pendingSingleBodyIndent > 0) {
+                    result.push(' '.repeat(effectiveIndent) + trimmed);
+                } else if (effectiveIndent > 0) {
+                    result.push(' '.repeat(effectiveIndent) + line);
+                } else {
+                    result.push(line);
+                }
+
+                const isComment = trimmed.startsWith('--');
+                if (!isComment) {
+                    // Non-comment lines consume the pending single-body marker
+                    pendingSingleBodyIndent = 0;
+                    pendingSingleBodyKeywordWidth = 0;
+                }
+
+                // Mark that the NEXT non-blank line should be indented as a single-statement
+                // body (applies to IF, WHILE, and ELSE / ELSE IF not followed by BEGIN).
+                if (!isComment) {
+                    const cfm = trimmed.match(/^(IF|WHILE|ELSE(?:\s+IF)?)\b/i);
+                    if (cfm) {
+                        // The body must be tabWidth deeper than the IF/WHILE/ELSE line.
+                        // When effectiveIndent > 0 the line is being placed there; otherwise
+                        // it keeps sql-formatter's own indent which we must measure from `line`.
+                        const emittedIndent =
+                            effectiveIndent > 0
+                                ? effectiveIndent
+                                : line.match(/^(\s*)/)![1].length;
+                        pendingSingleBodyIndent = emittedIndent + tabWidth;
+                        // Width includes the keyword + one space (e.g. "IF " = 3, "ELSE IF " = 8)
+                        pendingSingleBodyKeywordWidth =
+                            cfm[1].replace(/\s+/g, ' ').length + 1;
+                    }
+                }
+            }
         }
     }
 
@@ -150,10 +259,10 @@ export function removeBlankLinesBeforeEnd(sql: string): string {
         const trimmed = lines[i].trim();
 
         if (trimmed === '') {
-            // Look ahead: skip this blank line if the next non-blank line is END
+            // Look ahead: skip this blank line if the next non-blank line is END or ELSE
             let next = i + 1;
             while (next < lines.length && lines[next].trim() === '') next++;
-            if (next < lines.length && /^END\b/i.test(lines[next].trim())) {
+            if (next < lines.length && /^(?:END|ELSE)\b/i.test(lines[next].trim())) {
                 continue; // drop this blank line
             }
         }
