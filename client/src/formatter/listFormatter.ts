@@ -32,8 +32,9 @@ const CLAUSE_RE =
 const STANDALONE_COMMA_RE = /^\s*,\s*$/;
 
 // Clause keyword lines that start a comma-separated list we want to reformat.
-// Matches: SELECT, ORDER BY, GROUP BY — capturing the full keyword+trailing-space prefix.
-const LIST_CLAUSE_RE = /^(\s*(?:SELECT|ORDER\s+BY|GROUP\s+BY)\s+)(.*?)$/i;
+// Matches: SELECT, ORDER BY, GROUP BY, and UPDATE SET (but not SET @variable).
+const LIST_CLAUSE_RE =
+    /^(\s*(?:SELECT|ORDER\s+BY|GROUP\s+BY|SET(?!\s*@))\s+)(.*?)$/i;
 
 /**
  * Collects a comma-separated item list starting at line `start` in `lines`,
@@ -204,6 +205,52 @@ export function applyLeadingCommaFormat(
     while (i < lines.length) {
         const line = lines[i];
 
+        // ── INSERT column expansion ──────────────────────────────────────────
+        // When `insertStatements.columns.parenthesisStyle` is set, expand the
+        // INSERT column list: single column gets spaces-inside-parens inline,
+        // multiple columns are expanded to leading-comma multi-line format.
+        if (style.insertStatements?.columns?.parenthesisStyle) {
+            const insertMatch = line.match(
+                /^([ \t]*)INSERT\s+(INTO\s+)?(\S+)\s*\(([^)]*)\)\s*$/i,
+            );
+            if (insertMatch) {
+                const [, lineIndent, intoClause, tableName, columnListStr] = insertMatch;
+                const spacesInside = style.parentheses?.addSpacesInsideParentheses ?? false;
+                const columns = columnListStr.split(',').map(c => c.trim()).filter(Boolean);
+
+                if (columns.length <= 1) {
+                    // Single column: keep inline, optionally add spaces inside parens
+                    if (spacesInside && columns.length === 1) {
+                        result.push(
+                            `${lineIndent}INSERT ${intoClause ? 'INTO ' : ''}${tableName} ( ${columns[0]} )`,
+                        );
+                    } else {
+                        result.push(line);
+                    }
+                } else {
+                    // Multi-column: expand with leading-comma format.
+                    // Use plain "INSERT " (1 space) as the keyword prefix regardless
+                    // of whatever tabularLeft padding was applied by applyKeywordRePadding,
+                    // so that the continuation alignment matches SQL Prompt conventions.
+                    const intoStr = intoClause ? 'INTO ' : '';
+                    const openParen = spacesInside ? '( ' : '(';
+                    const closeSuffix = spacesInside ? ' )' : ')';
+                    const firstLinePrefix = `${lineIndent}INSERT ${intoStr}${tableName} ${openParen}`;
+                    // Continuation comma sits 2 chars before the first-column position
+                    const contIndent = ' '.repeat(firstLinePrefix.length - lineIndent.length - 2);
+                    result.push(`${firstLinePrefix}${columns[0]}`);
+                    for (let c = 1; c < columns.length - 1; c++) {
+                        result.push(`${lineIndent}${contIndent}, ${columns[c]}`);
+                    }
+                    result.push(
+                        `${lineIndent}${contIndent}, ${columns[columns.length - 1]}${closeSuffix}`,
+                    );
+                }
+                i++;
+                continue;
+            }
+        }
+
         const clauseMatch = line.match(LIST_CLAUSE_RE);
         if (!clauseMatch) {
             result.push(line);
@@ -212,15 +259,27 @@ export function applyLeadingCommaFormat(
         }
 
         const kwPrefix = clauseMatch[1]; // e.g. "SELECT    " or "ORDER BY "
-        const kwWidth = kwPrefix.length;
+        const kwWidthBase = kwPrefix.length;
         const firstItemText = clauseMatch[2];
+
+        // For SELECT statements, a TOP (n) or DISTINCT modifier shifts the first
+        // column expression rightward.  Detect and account for it so that
+        // continuation-line commas align under the first real column, not under
+        // the keyword content start.
+        let effectiveKwWidth = kwWidthBase;
+        if (/^SELECT\s/i.test(kwPrefix.trimStart())) {
+            const topMatch = firstItemText.match(/^((?:TOP|DISTINCT)\s*(?:\([^)]*\))?\s*)/i);
+            if (topMatch) {
+                effectiveKwWidth = kwWidthBase + topMatch[1].length;
+            }
+        }
 
         i++;
 
-        const { items, nextIndex } = collectItems(lines, i, firstItemText, kwWidth);
+        const { items, nextIndex } = collectItems(lines, i, firstItemText, kwWidthBase);
         i = nextIndex;
 
-        result.push(...formatItems(kwPrefix, kwWidth, items, alignComments, alignAliases));
+        result.push(...formatItems(kwPrefix, effectiveKwWidth, items, alignComments, alignAliases));
     }
 
     return result.join('\n');
