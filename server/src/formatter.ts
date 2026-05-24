@@ -15,7 +15,7 @@ export interface FormatterConfig {
     keywordCase: 'upper' | 'lower' | 'preserve';
     /** Number of spaces per indentation level.  Default: 4. */
     indentSize: number;
-    /** Place commas after ('after') or before ('before') each list item.  Default: 'after'. */
+    /** Place commas at the end of each line ('after') or at the start of the next line ('before').  Default: 'after'. */
     commaPosition: 'before' | 'after';
 }
 
