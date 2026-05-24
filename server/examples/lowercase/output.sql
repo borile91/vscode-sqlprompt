@@ -1,0 +1,27 @@
+select
+    o.order_id,
+    o.order_date,
+    c.customer_name,
+    p.product_name,
+    od.quantity,
+    od.unit_price,
+    od.quantity * od.unit_price as line_total
+from orders as o
+inner join customers as c
+    on o.customer_id = c.customer_id
+inner join order_details as od
+    on o.order_id = od.order_id
+inner join products as p
+    on od.product_id = p.product_id
+where
+    o.order_date >= '2024-01-01'
+    and o.order_date < '2025-01-01'
+    and c.country = 'USA'
+group by
+    o.order_id,
+    o.order_date,
+    c.customer_name,
+    p.product_name
+order by
+    o.order_date desc,
+    c.customer_name asc
