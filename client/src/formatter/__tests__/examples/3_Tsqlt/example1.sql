@@ -1,0 +1,108 @@
+USE SampleDb_Master;
+GO
+
+SET ANSI_NULLS ON;
+GO
+
+SET QUOTED_IDENTIFIER ON;
+GO
+
+CREATE TABLE dbo.TABLE_DETAIL
+    (
+        id INT IDENTITY(1, 1) NOT NULL
+      , COL_CODE_A VARCHAR(3) NOT NULL
+      , col_code_b VARCHAR(3) NOT NULL
+      , ColGroup VARCHAR(11) NOT NULL
+      , COL_TYPE VARCHAR(3) NOT NULL
+      , col_year SMALLINT NOT NULL
+      , COL_NUM VARCHAR(20) NOT NULL
+      , COL_ROW VARCHAR(20) NOT NULL
+      , COL_ITEM VARCHAR(40) NOT NULL
+      , COL_QTY_A NUMERIC(12, 3) NOT NULL
+      , col_qty_b NUMERIC(12, 3) NOT NULL
+      , ColQtyC NUMERIC(12, 3) NOT NULL
+      , COL_TEXT NVARCHAR(255) NULL
+      , col_flag_a BIT NOT NULL
+      , ColFlagB BIT NOT NULL
+      , COL_DATE_A DATETIME NOT NULL
+      , col_date_b DATE NULL
+      , ColDateC DATE NULL
+      , COL_RATIO NUMERIC(9, 3) NULL
+      , COL_PRIORITY INT NOT NULL
+      , CONSTRAINT PK_TABLE_DETAIL PRIMARY KEY CLUSTERED (
+        COL_CODE_A ASC
+      , col_code_b ASC
+      , ColGroup ASC
+      , COL_TYPE ASC
+      , col_year ASC
+      , COL_NUM ASC
+      , COL_ROW ASC )              WITH ( PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, OPTIMIZE_FOR_SEQUENTIAL_KEY = OFF ) ON [PRIMARY]
+    ) ON [PRIMARY];
+GO
+
+ALTER TABLE dbo.TABLE_DETAIL
+ADD CONSTRAINT DF_TABLE_DETAIL_COL_QTY_A DEFAULT (( 0 )) FOR COL_QTY_A;
+GO
+
+ALTER TABLE dbo.TABLE_DETAIL
+ADD CONSTRAINT DF_TABLE_DETAIL_col_qty_b DEFAULT (( 0 )) FOR col_qty_b;
+GO
+
+ALTER TABLE dbo.TABLE_DETAIL
+ADD CONSTRAINT DF_TABLE_DETAIL_ColQtyC DEFAULT (( 0 )) FOR ColQtyC;
+GO
+
+ALTER TABLE dbo.TABLE_DETAIL
+ADD CONSTRAINT DF_TABLE_DETAIL_col_flag_a DEFAULT (( 0 )) FOR col_flag_a;
+GO
+
+ALTER TABLE dbo.TABLE_DETAIL
+ADD CONSTRAINT DF_TABLE_DETAIL_ColFlagB DEFAULT (( 0 )) FOR ColFlagB;
+GO
+
+ALTER TABLE dbo.TABLE_DETAIL
+ADD CONSTRAINT DF_TABLE_DETAIL_COL_DATE_A DEFAULT ( GETDATE()) FOR COL_DATE_A;
+GO
+
+ALTER TABLE dbo.TABLE_DETAIL
+ADD CONSTRAINT DF_TABLE_DETAIL_COL_PRIORITY DEFAULT (( 50 )) FOR COL_PRIORITY;
+GO
+
+ALTER TABLE dbo.TABLE_DETAIL WITH CHECK
+ADD CONSTRAINT FK_TABLE_DETAIL_TABLE_ITEM FOREIGN KEY ( COL_ITEM ) REFERENCES dbo.TABLE_ITEM ( COL_ITEM );
+GO
+
+ALTER TABLE dbo.TABLE_DETAIL CHECK CONSTRAINT FK_TABLE_DETAIL_TABLE_ITEM;
+GO
+
+ALTER TABLE dbo.TABLE_DETAIL WITH CHECK
+ADD CONSTRAINT FK_TABLE_DETAIL_TABLE_HEADER FOREIGN KEY (
+                                            COL_CODE_A
+                                          , col_code_b
+                                          , ColGroup
+                                          , COL_TYPE
+                                          , col_year
+                                          , COL_NUM ) REFERENCES dbo.TABLE_HEADER (
+                                            COL_CODE_A
+                                          , col_code_b
+                                          , ColGroup
+                                          , COL_TYPE
+                                          , col_year
+                                          , COL_NUM ) ON UPDATE CASCADE ON DELETE CASCADE;
+GO
+
+ALTER TABLE dbo.TABLE_DETAIL CHECK CONSTRAINT FK_TABLE_DETAIL_TABLE_HEADER;
+GO
+
+ALTER TABLE dbo.TABLE_DETAIL WITH CHECK
+ADD CONSTRAINT FK_TABLE_DETAIL_AUX_TYPE FOREIGN KEY ( COL_TYPE ) REFERENCES aux.TABLE_TYPE ( COL_TYPE );
+GO
+
+ALTER TABLE dbo.TABLE_DETAIL CHECK CONSTRAINT FK_TABLE_DETAIL_AUX_TYPE;
+GO
+
+EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'Generic detail note for formatter tests.', @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'TABLE_DETAIL', @level2type = N'COLUMN', @level2name = N'COL_TEXT';
+GO
+
+EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'Generic quantity for sample records.', @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'TABLE_DETAIL', @level2type = N'COLUMN', @level2name = N'COL_RATIO';
+GO
