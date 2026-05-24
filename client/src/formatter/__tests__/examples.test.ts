@@ -115,38 +115,61 @@ interface ParsedExample {
     query: string;
 }
 
-function parseExampleFile(content: string): ParsedExample {
-    const configMatch = content.match(/^#\s*config\s*\n(.*?)(?:\n|$)/m);
-    const queryMatch = content.match(/^#\s*query\s*\n([\s\S]*)$/m);
-    if (!configMatch || !queryMatch) {
-        throw new Error('Example file does not have expected # config / # query sections');
+function parseExampleFile(exampleDir: string, sqlFileName: string): ParsedExample {
+    const configFiles = fs.readdirSync(exampleDir).filter(f => f.endsWith('.json')).sort();
+    if (configFiles.length === 0) {
+        throw new Error(`No config JSON found in ${exampleDir}`);
     }
+    if (configFiles.length > 1) {
+        throw new Error(`Multiple config JSON files found in ${exampleDir}`);
+    }
+
+    const sqlPath = path.join(exampleDir, sqlFileName);
+    const query = fs.readFileSync(sqlPath, 'utf8').trimEnd();
     return {
-        configPath: configMatch[1].trim(),
-        query: queryMatch[1].trimEnd(),
+        configPath: path.join(exampleDir, configFiles[0]),
+        query,
     };
 }
 
-// Resolve examples directory relative to this source file (before compilation the
-// compiled output sits two levels above the workspace root: out/formatter/__tests__)
-const examplesDir = path.resolve(__dirname, '..', '..', '..', '..', '.vscode', 'debug', 'examples');
+// Resolve examples directory so it works from both src/* and out/* execution roots.
+const examplesDir = path.resolve(__dirname, '..', '..', '..', 'src', 'formatter', '__tests__', 'examples');
 
-const exampleFiles = fs.existsSync(examplesDir)
-    ? fs.readdirSync(examplesDir).filter(f => f.endsWith('.md')).sort()
+interface ExampleCase {
+    group: string;
+    fileName: string;
+    filePath: string;
+}
+
+const exampleCases: ExampleCase[] = fs.existsSync(examplesDir)
+    ? fs.readdirSync(examplesDir)
+        .sort()
+        .flatMap(groupName => {
+            const groupPath = path.join(examplesDir, groupName);
+            if (!fs.statSync(groupPath).isDirectory()) {
+                return [];
+            }
+            return fs.readdirSync(groupPath)
+                .filter(f => f.endsWith('.sql'))
+                .sort()
+                .map(fileName => ({
+                    group: groupName,
+                    fileName,
+                    filePath: path.join(groupPath, fileName),
+                }));
+        })
     : [];
 
 describe('formatter examples — idempotent formatting', () => {
-    if (exampleFiles.length === 0) {
+    if (exampleCases.length === 0) {
         it('skipped — examples directory not found', () => {});
     }
-    for (const fileName of exampleFiles) {
-        const filePath = path.join(examplesDir, fileName);
-        const content = fs.readFileSync(filePath, 'utf8');
+    for (const exampleCase of exampleCases) {
         let parsed: ParsedExample;
         try {
-            parsed = parseExampleFile(content);
+            parsed = parseExampleFile(path.dirname(exampleCase.filePath), exampleCase.fileName);
         } catch (e) {
-            it(`${fileName} — skipped: ${(e as Error).message}`, () => {});
+            it(`${exampleCase.group}/${exampleCase.fileName} — skipped: ${(e as Error).message}`, () => { });
             continue;
         }
 
@@ -155,11 +178,11 @@ describe('formatter examples — idempotent formatting', () => {
             const raw = fs.readFileSync(parsed.configPath, 'utf8');
             styleOptions = JSON.parse(raw) as SqlPromptStyleJson;
         } catch (e) {
-            it(`${fileName} — skipped: cannot load config ${parsed.configPath}: ${(e as Error).message}`, () => {});
+            it(`${exampleCase.group}/${exampleCase.fileName} — skipped: cannot load config ${parsed.configPath}: ${(e as Error).message}`, () => { });
             continue;
         }
 
-        it(`${fileName} — formatting is idempotent`, () => {
+        it(`${exampleCase.group}/${exampleCase.fileName} — formatting is idempotent`, () => {
             const result = formatSql(parsed.query, styleOptions);
             assert.equal(result, parsed.query);
         });

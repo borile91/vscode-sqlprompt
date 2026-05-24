@@ -8,3 +8,4 @@ server/out/
 .DS_Store
 **/dist/**
 .vscode/**
+client/src/formatter/__tests__/examples/.vs/**
