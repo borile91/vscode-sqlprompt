@@ -57,11 +57,19 @@ describe('mapToFormatterOptions', () => {
         assert.equal(mapToFormatterOptions(style).expressionWidth, 200);
     });
 
-    it('sets tabularLeft indentStyle for toTable keywordAlignment', () => {
+    it('sets tabularLeft indentStyle for toTable keywordAlignment with leading commas', () => {
+        const style: SqlPromptStyleJson = {
+            joinStatements: { join: { keywordAlignment: 'toTable' } },
+            lists: { placeCommasBeforeItems: true },
+        };
+        assert.equal(mapToFormatterOptions(style).indentStyle, 'tabularLeft');
+    });
+
+    it('does not set tabularLeft indentStyle for toTable without leading commas', () => {
         const style: SqlPromptStyleJson = {
             joinStatements: { join: { keywordAlignment: 'toTable' } },
         };
-        assert.equal(mapToFormatterOptions(style).indentStyle, 'tabularLeft');
+        assert.equal(mapToFormatterOptions(style).indentStyle, undefined);
     });
 
     it('does not set indentStyle for toFrom keywordAlignment', () => {

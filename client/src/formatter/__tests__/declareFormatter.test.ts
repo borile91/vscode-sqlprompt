@@ -58,7 +58,9 @@ describe('applyDeclareFormatting — multi-variable', () => {
         const result = applyDeclareFormatting(sql, styleOn);
         const lines = result.split('\n');
         assert.equal(lines.length, 3);
-        assert.ok(lines[0].includes('BIT = 0'));
+        // Default value must be present; type is padded for alignment so check
+        // type and value separately.
+        assert.ok(lines[0].includes('BIT') && lines[0].includes('= 0'));
         assert.ok(lines[1].includes('INT'));
         assert.ok(lines[2].includes('VARCHAR(5);'));
     });

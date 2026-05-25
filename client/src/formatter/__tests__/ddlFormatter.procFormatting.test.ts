@@ -8,14 +8,29 @@ function style(firstParamOnNewLine: 'always' | 'never'): SqlPromptStyleJson {
 }
 
 describe('applyDdlProcFormatting — disabled', () => {
-    it('returns sql unchanged when feature is disabled', () => {
-        const sql = 'CREATE PROCEDURE dbo.P (@a INT, @b VARCHAR(10)) AS';
-        assert.equal(applyDdlProcFormatting(sql, style('never'), 4), sql);
-    });
-
     it('returns sql unchanged when ddl config is absent', () => {
         const sql = 'CREATE PROCEDURE dbo.P (@a INT) AS';
         assert.equal(applyDdlProcFormatting(sql, {}, 4), sql);
+    });
+});
+
+describe("applyDdlProcFormatting — placeFirstProcedureParameterOnNewLine: 'never'", () => {
+    it('packs params greedy-inline and places AS on its own line', () => {
+        const sql = 'CREATE PROCEDURE dbo.P (@a INT, @b VARCHAR(10)) AS';
+        const result = applyDdlProcFormatting(sql, style('never'), 4);
+        assert.equal(result, 'CREATE PROCEDURE dbo.P (@a INT, @b VARCHAR(10))\nAS');
+    });
+
+    it('wraps params at maxLineLen with continuation at lineIndent', () => {
+        const longStyle: SqlPromptStyleJson = {
+            ddl: { placeFirstProcedureParameterOnNewLine: 'never' },
+            whitespace: { wrapLinesLongerThan: 30 },
+        };
+        const sql = 'CREATE PROCEDURE dbo.P (@a INT, @b VARCHAR(10), @c BIT) AS';
+        const result = applyDdlProcFormatting(sql, longStyle, 4);
+        const lines = result.split('\n');
+        assert.ok(lines[0].startsWith('CREATE PROCEDURE dbo.P ('));
+        assert.equal(lines[lines.length - 1], 'AS');
     });
 });
 

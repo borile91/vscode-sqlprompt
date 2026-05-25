@@ -1,6 +1,303 @@
 import type { SqlPromptStyleJson } from './styleLoader';
 
 /**
+ * Reformats CREATE TABLE blocks from sql-formatter standard-indent output into
+ * compact scripting style: first column inline with `(`, subsequent columns at
+ * column 0, CONSTRAINT + WITH options greedy-packed.
+ * Triggered when `ddl.collapseShortStatements: true` and no `parenthesisStyle`.
+ */
+function applyDdlTableCompactFormatting(sql: string, style: SqlPromptStyleJson): string {
+    const lines = sql.split('\n');
+    const result: string[] = [];
+    let i = 0;
+
+    while (i < lines.length) {
+        const line = lines[i];
+        // Match "CREATE TABLE name (" at col 0, space before `(` is optional
+        const ctMatch = line.match(/^(CREATE\s+TABLE\s+\S+)\s*\(\s*$/i);
+        if (!ctMatch) {
+            result.push(line);
+            i++;
+            continue;
+        }
+
+        const tablePrefix = ctMatch[1]; // e.g. "CREATE TABLE dbo.TABLE_DETAIL"
+        const cols: string[] = [];
+        let constraintRaw = '';   // e.g. "CONSTRAINT PK_... PRIMARY KEY CLUSTERED (keys)"
+        let withOpts: string[] = [];
+        let indexFg = '';         // filegroup for clustered index
+        let tableFg = '';         // filegroup for CREATE TABLE
+
+        i++;
+        // Collect the CREATE TABLE body
+        while (i < lines.length) {
+            const bLine = lines[i];
+
+            // Closing paren: ") ON [fg];" or ");" at column 0
+            const closeMatch = bLine.match(/^\)\s*(ON\s+[^\s;)]+)?\s*;?\s*$/i);
+            if (closeMatch && bLine.trimStart().startsWith(')')) {
+                tableFg = closeMatch[1] ?? '';
+                i++;
+                break;
+            }
+
+            const stripped = bLine.replace(/,\s*$/, '').trim();
+            if (!stripped) { i++; continue; }
+
+            // Standalone WITH keyword (sql-formatter splits it)
+            if (/^WITH\s*$/i.test(stripped)) {
+                i++;
+                if (i < lines.length) {
+                    const woLine = lines[i].trim();
+                    const woMatch = woLine.match(/^\(([^)]*)\)\s*(ON\s+\S+)?$/i);
+                    if (woMatch) {
+                        withOpts = woMatch[1].split(',').map(o => o.trim()).filter(Boolean);
+                        indexFg = woMatch[2] ?? '';
+                    }
+                    i++;
+                }
+                continue;
+            }
+
+            // Inline WITH (opts) ON [fg]
+            const withInline = stripped.match(/^WITH\s*\(([^)]*)\)\s*(ON\s+\S+)?$/i);
+            if (withInline) {
+                withOpts = withInline[1].split(',').map(o => o.trim()).filter(Boolean);
+                indexFg = withInline[2] ?? '';
+                i++;
+                continue;
+            }
+
+            // CONSTRAINT line
+            if (/^CONSTRAINT\b/i.test(stripped)) {
+                constraintRaw = stripped;
+                i++;
+                continue;
+            }
+
+            if (stripped) cols.push(stripped);
+            i++;
+        }
+
+        // ── Emit compact output ─────────────────────────────────────────────
+        // First column inline with `(`
+        if (cols.length > 0) {
+            result.push(`${tablePrefix} (${cols[0]},`);
+            for (let ci = 1; ci < cols.length; ci++) {
+                result.push(`${cols[ci]},`);
+            }
+        } else {
+            result.push(`${tablePrefix} (`);
+        }
+
+        // CONSTRAINT + WITH
+        if (constraintRaw) {
+            if (withOpts.length === 0) {
+                // No WITH — just the constraint; closing paren follows
+                result.push(constraintRaw);
+                const close = tableFg ? `) ${tableFg};` : ');';
+                result.push(close);
+            } else {
+                // WITH options: first on same line as CONSTRAINT, rest on continuation
+                const constraintNameMatch = constraintRaw.match(/^CONSTRAINT\s+(\S+)/i);
+                const contIndent = constraintNameMatch
+                    ? 'CONSTRAINT '.length + constraintNameMatch[1].length + 1
+                    : 0;
+                const contPad = ' '.repeat(contIndent);
+
+                const withPrefix = `${constraintRaw} WITH (`;
+                const line1 = withPrefix + withOpts[0] + (withOpts.length > 1 ? ',' : '');
+
+                const closeSuffix = (indexFg ? `) ${indexFg}` : ')') +
+                    (tableFg ? `) ${tableFg};` : ');');
+
+                if (withOpts.length === 1) {
+                    result.push(line1.replace(/,$/, '') + closeSuffix);
+                } else {
+                    result.push(line1);
+                    // All remaining opts on one continuation line (SSMS compact style)
+                    const rest = withOpts.slice(1).join(', ');
+                    result.push(contPad + rest + closeSuffix);
+                }
+            }
+        } else if (cols.length > 0) {
+            // No CONSTRAINT — fix trailing comma on last col and add closing
+            const last = result[result.length - 1];
+            result[result.length - 1] = last.replace(/,$/, '');
+            result.push(tableFg ? `) ${tableFg};` : ');');
+        }
+    }
+
+    return result.join('\n');
+}
+
+/**
+ * Reformats CREATE TABLE blocks from sql-formatter's raw tabularLeft output
+ * into the expected leading-comma column-list style.
+ *
+ * Handles:
+ *  - Normalising the `CREATE    TABLE` keyword padding
+ *  - Moving the opening `(` to its own line with tabWidth indentation
+ *  - Converting trailing-comma column lines to leading-comma format
+ *  - CONSTRAINT PRIMARY KEY: inline (default) or expanded per-line
+ *    (`ddl.placeConstraintColumnsOnNewLines: 'ifLongerOrMultipleColumns'`)
+ *  - WITH index options: vertically aligned (inline keys) or inline (expanded keys)
+ *  - Normalising the closing `) ON [filegroup];` indentation
+ */
+export function applyDdlTableFormatting(sql: string, style: SqlPromptStyleJson): string {
+    if (!style.ddl?.parenthesisStyle) {
+        // Compact mode: first column inline with `(`, subsequent columns at col 0.
+        if (style.ddl?.collapseShortStatements) {
+            return applyDdlTableCompactFormatting(sql, style);
+        }
+        return sql;
+    }
+
+    const tabWidth = style.whitespace?.numberOfSpacesInTabs ?? 4;
+    const indentParens = style.ddl?.indentParenthesesContents === true;
+    const expandConstraint =
+        style.ddl?.placeConstraintColumnsOnNewLines === 'ifLongerOrMultipleColumns';
+    const spacesInside = style.parentheses?.addSpacesInsideParentheses ?? false;
+    const sp = spacesInside ? ' ' : '';
+
+    // Column indent inside the table body
+    const colIndent = indentParens ? tabWidth * 2 : tabWidth;
+    const firstColPad = ' '.repeat(colIndent);
+    const commaPad = ' '.repeat(colIndent - 2); // spaces before ', '
+    const parenPad = ' '.repeat(tabWidth);       // indent for the '(' line
+
+    const lines = sql.split('\n');
+    const result: string[] = [];
+    let i = 0;
+
+    while (i < lines.length) {
+        const line = lines[i];
+
+        // Match "CREATE    TABLE schema.table (" at column 0
+        const ctMatch = line.match(/^CREATE\s+TABLE\s+(\S+)\s*\(\s*$/i);
+        if (!ctMatch) {
+            result.push(line);
+            i++;
+            continue;
+        }
+
+        const tableName = ctMatch[1];
+        const cols: string[] = [];
+        let constraintDef: string | null = null;
+        let constraintKeys: string[] = [];
+        let withOpts: string[] = [];
+        let onFilegroup = '';
+        let closingSuffix = '';
+
+        i++;
+        while (i < lines.length) {
+            const bLine = lines[i];
+            i++;
+
+            // WITH line at column 0: "WITH (opt=val, ...) ON [fg]"
+            const withMatch = bLine.match(/^WITH\s*\(([^)]+)\)\s+(ON\s+\S+)/i);
+            if (withMatch) {
+                withOpts = withMatch[1].split(',').map(o => o.trim()).filter(Boolean);
+                onFilegroup = withMatch[2];
+                continue;
+            }
+
+            // Closing paren: "     ) ON [fg];" or "     );"
+            const closeMatch = bLine.match(/^\s+\)\s*(ON\s+\S+)?\s*;$/i);
+            if (closeMatch) {
+                closingSuffix = closeMatch[1] ?? '';
+                break;
+            }
+
+            // Column / constraint content lines (trim trailing comma)
+            const stripped = bLine.replace(/,\s*$/, '').trim();
+            if (!stripped) continue;
+
+            // Check for CONSTRAINT PRIMARY KEY CLUSTERED (key_list)
+            const constMatch = stripped.match(
+                /^(CONSTRAINT\s+\S+\s+PRIMARY\s+KEY\s+CLUSTERED)\s*\(([^)]+)\)/i,
+            );
+            if (constMatch) {
+                constraintDef = constMatch[1].trim();
+                constraintKeys = constMatch[2].split(',').map(k => k.trim()).filter(Boolean);
+            } else {
+                cols.push(stripped);
+            }
+        }
+
+        // ── Emit reformatted block ──────────────────────────────────────────
+        result.push(`CREATE TABLE ${tableName}`);
+        result.push(`${parenPad}(`);
+
+        // Regular columns (leading-comma style)
+        for (let ci = 0; ci < cols.length; ci++) {
+            result.push(ci === 0 ? `${firstColPad}${cols[ci]}` : `${commaPad}, ${cols[ci]}`);
+        }
+
+        // CONSTRAINT + WITH
+        if (constraintDef) {
+            if (expandConstraint && constraintKeys.length > 1) {
+                // Expand PRIMARY KEY columns onto separate lines.
+                // The last key line also carries the closing ) and the WITH clause.
+                const maxKeyLen = Math.max(...constraintKeys.map(k => k.length));
+                // Position of "WITH" on the last-key line.
+                // Derived so that: WITH ends at colIndent + maxKeyLen + 2*tabWidth.
+                const withStartCol = colIndent + maxKeyLen + tabWidth * 4 - 3;
+
+                result.push(`${commaPad}, ${constraintDef} (`);
+                for (let ki = 0; ki < constraintKeys.length; ki++) {
+                    const key = constraintKeys[ki];
+                    if (ki === 0) {
+                        result.push(`${firstColPad}${key}`);
+                    } else if (ki < constraintKeys.length - 1) {
+                        result.push(`${commaPad}, ${key}`);
+                    } else {
+                        // Last key: append ") WITH (...) ON [fg]" on same line
+                        const closePart = `${commaPad}, ${key} )`;
+                        const spaces = Math.max(1, withStartCol - closePart.length);
+                        const opts = withOpts.join(', ');
+                        result.push(
+                            `${closePart}${' '.repeat(spaces)}WITH (${sp}${opts}${sp}) ${onFilegroup}`,
+                        );
+                    }
+                }
+            } else {
+                // Inline PRIMARY KEY column list; WITH options use vertical alignment.
+                const pkList = `${sp}${constraintKeys.join(', ')}${sp}`;
+                const constraintLine = `${commaPad}, ${constraintDef} (${pkList})`;
+
+                if (withOpts.length === 0) {
+                    result.push(constraintLine);
+                } else if (withOpts.length === 1) {
+                    result.push(
+                        `${constraintLine} WITH (${sp}${withOpts[0]}${sp}) ${onFilegroup}`,
+                    );
+                } else {
+                    // First WITH option on the constraint line; rest vertically aligned
+                    const withOpened = ` WITH (${sp}`;
+                    const alignCol = constraintLine.length + withOpened.length;
+                    const alignPad = ' '.repeat(alignCol - 2);
+
+                    result.push(`${constraintLine}${withOpened}${withOpts[0]}`);
+                    for (let wi = 1; wi < withOpts.length; wi++) {
+                        if (wi < withOpts.length - 1) {
+                            result.push(`${alignPad}, ${withOpts[wi]}`);
+                        } else {
+                            result.push(`${alignPad}, ${withOpts[wi]}${sp}) ${onFilegroup}`);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Closing paren
+        result.push(closingSuffix ? `${parenPad}) ${closingSuffix};` : `${parenPad});`);
+    }
+
+    return result.join('\n');
+}
+
+/**
  * Post-processes sql-formatter output to apply DDL column definition formatting:
  *
  * - `ddl.verticallyAlignDataTypes: true` — in CREATE TABLE / ALTER TABLE column
@@ -37,7 +334,7 @@ export function applyDdlFormatting(sql: string, style: SqlPromptStyleJson): stri
  *   SELECT …
  */
 export function applyDdlViewFormatting(sql: string, style: SqlPromptStyleJson): string {
-    if (!style.ddl?.indentClauses) return sql;
+    if (!style.ddl?.indentClauses && !style.controlFlow?.indentBeginAndEndKeywords) return sql;
     // Match CREATE [whitespace] VIEW [whitespace] <name> [whitespace] AS
     // preserving any leading indentation on the line.
     return sql.replace(
@@ -51,18 +348,33 @@ export function applyDdlViewFormatting(sql: string, style: SqlPromptStyleJson): 
  * its own line so later passes can indent the procedure body consistently.
  */
 export function applyDdlParameterlessProcAsFormatting(sql: string, style: SqlPromptStyleJson): string {
-    if (!style.ddl?.indentClauses) return sql;
+    if (!style.ddl?.indentClauses && !style.controlFlow?.indentBeginAndEndKeywords) return sql;
 
+    // Matches CREATE/ALTER PROCEDURE/FUNCTION headers that have no parameter list `(`.
+    // Captures everything after the AS keyword so we can handle sql-formatter's
+    // tendency to collapse "AS BEGIN body" onto the same line as the proc name.
+    // Uses [^(]+ to avoid matching procs that have a parameter list.
     return sql.replace(
-        /^([ \t]*)(CREATE|ALTER)\s+(OR\s+REPLACE\s+)?(PROCEDURE|FUNCTION|PROC)\s+(.+?)\s+AS(?:\s+(BEGIN))?[ \t]*$/gim,
-        (_match, indent, op, orReplace, kind, namePart, beginKw) => {
+        /^([ \t]*)(CREATE|ALTER)\s+(OR\s+REPLACE\s+)?(PROCEDURE|FUNCTION|PROC)\s+([^(]+?)\s+AS\b(.*)$/gim,
+        (_match, indent, op, orReplace, kind, namePart, afterAs) => {
             const name = String(namePart).trim();
             const head = `${op.toUpperCase()} ${(orReplace ?? '').toUpperCase()}${kind.toUpperCase()} ${name}`
                 .replace(/\s+/g, ' ')
                 .trim();
-            if (beginKw) {
-                return `${indent}${head}\n${indent}AS\n${indent}${String(beginKw).toUpperCase()}`;
+            const rest = String(afterAs).trim();
+            if (!rest) {
+                // Nothing after AS — place AS on its own line.
+                return `${indent}${head}\n${indent}AS`;
             }
+            // sql-formatter may collapse "AS BEGIN body..." onto the same line.
+            // Split BEGIN (and any body content on that line) onto separate lines.
+            const beginMatch = rest.match(/^BEGIN\b(.*)/i);
+            if (beginMatch) {
+                const bodyContent = String(beginMatch[1]).trim();
+                const out = `${indent}${head}\n${indent}AS\n${indent}BEGIN`;
+                return bodyContent ? `${out}\n${bodyContent}` : out;
+            }
+            // Unexpected trailing content — normalise spacing and place AS on its own line.
             return `${indent}${head}\n${indent}AS`;
         },
     );
@@ -89,20 +401,26 @@ export function applyProcBodyIndentation(
     style: SqlPromptStyleJson,
     tabWidth: number,
 ): string {
-    if (!style.ddl?.indentClauses) return sql;
+    if (!style.ddl?.indentClauses && !style.controlFlow?.indentBeginAndEndKeywords) return sql;
+
+    // When triggered only by indentBeginAndEndKeywords (not indentClauses), only
+    // indent bodies that begin with BEGIN — bodies that start directly with SQL
+    // statements (e.g. SET ANSI_NULLS ON) are left unindented.
+    const requireBegin = !style.ddl?.indentClauses && !!style.controlFlow?.indentBeginAndEndKeywords;
 
     const lines = sql.split('\n');
     const result: string[] = [];
     let inBody = false;
+    let active = false; // whether we're actively indenting the body
     const pad = ' '.repeat(tabWidth);
 
     for (const line of lines) {
         if (!inBody) {
             result.push(line);
             // A standalone `AS` line signals the start of the procedure body.
-            // This is only produced by applyDdlProcFormatting for PROC/FUNC headers.
             if (line.trim() === 'AS') {
                 inBody = true;
+                active = !requireBegin; // start immediately unless we must see BEGIN first
             }
             continue;
         }
@@ -110,6 +428,24 @@ export function applyProcBodyIndentation(
         if (/^[ \t]*GO\s*$/i.test(line)) {
             result.push(line.trim());
             inBody = false;
+            active = false;
+            continue;
+        }
+        if (!active) {
+            const trimmed = line.trim();
+            if (trimmed === '') {
+                result.push(line);
+                continue;
+            }
+            if (/^BEGIN\b/i.test(trimmed)) {
+                // Body starts with BEGIN — indent this and all subsequent lines
+                active = true;
+                result.push(line === '' ? '' : pad + line);
+            } else {
+                // Body does not start with BEGIN — do not indent
+                result.push(line);
+                inBody = false;
+            }
             continue;
         }
         // Indent every line in the procedure body (blank lines stay blank)
@@ -209,7 +545,8 @@ export function applyDdlProcFormatting(
     style: SqlPromptStyleJson,
     tabWidth: number,
 ): string {
-    if (style.ddl?.placeFirstProcedureParameterOnNewLine !== 'always') return sql;
+    const paramPlacement = style.ddl?.placeFirstProcedureParameterOnNewLine;
+    if (paramPlacement !== 'always' && paramPlacement !== 'never') return sql;
 
     const lines = sql.split('\n');
     const result: string[] = [];
@@ -272,22 +609,151 @@ export function applyDdlProcFormatting(
             continue;
         }
 
-        const bodyIndent = ' '.repeat(tabWidth);
-        const commaIndent = ' '.repeat(Math.max(0, tabWidth - 2));
+        const maxLineLen = style.whitespace?.wrapLongLines === false
+            ? 9999
+            : (style.whitespace?.wrapLinesLongerThan ?? 200);
+
+        // ── 'never' mode: first param inline after proc name, continuation at col 0 ──
+        if (paramPlacement === 'never') {
+            const prefix = lineIndent + procHead + ' (';
+            // Greedy pack params: first line starts with prefix, continuation at lineIndent
+            let currentPackLine = prefix + params[0];
+            for (let p = 1; p < params.length; p++) {
+                const addition = ', ' + params[p];
+                if (currentPackLine.length + addition.length + 1 <= maxLineLen) {
+                    currentPackLine += addition;
+                } else {
+                    result.push(currentPackLine + ',');
+                    currentPackLine = lineIndent + params[p];
+                }
+            }
+            // Close paren on the last param line
+            result.push(currentPackLine + ')');
+
+            // Handle afterClose (e.g. "RETURNS @tmp" or "AS")
+            const returnsOnlyMatch2 = afterClose.match(/^(RETURNS\s+\S+)$/i);
+            if (returnsOnlyMatch2 && tempI < lines.length) {
+                // TABLE-valued function: collect multi-line TABLE (columns) block
+                const tableLine = lines[tempI];
+                const tableOpenMatch = tableLine.match(/^([ \t]*)TABLE\s*\(\s*$/i);
+                const tableInlineMatch = tableLine.match(/^([ \t]*)TABLE\s*\((.+)\)([ \t]*)?(AS\b.*)?$/i);
+                if (tableOpenMatch) {
+                    // Multi-line: TABLE (\n    col1,\n    ...\n) AS
+                    tempI++;
+                    const tableCols: string[] = [];
+                    let asClause2 = '';
+                    while (tempI < lines.length) {
+                        const tl = lines[tempI];
+                        const closeMatch2 = tl.match(/^\s*\)\s*(AS\b.*)?$/i);
+                        if (closeMatch2) {
+                            asClause2 = closeMatch2[1]?.trim() ?? '';
+                            tempI++;
+                            break;
+                        }
+                        const colStr = tl.trim().replace(/,\s*$/, '');
+                        if (colStr) tableCols.push(colStr);
+                        tempI++;
+                    }
+                    // Emit: "RETURNS @tmp TABLE (col1,\ncol2,...\ncolN)"
+                    if (tableCols.length > 0) {
+                        result.push(lineIndent + returnsOnlyMatch2[1] + ' TABLE (' + tableCols[0] + (tableCols.length > 1 ? ',' : ')'));
+                        for (let ci = 1; ci < tableCols.length; ci++) {
+                            const isLast = ci === tableCols.length - 1;
+                            result.push(lineIndent + tableCols[ci] + (isLast ? ')' : ','));
+                        }
+                    } else {
+                        result.push(lineIndent + returnsOnlyMatch2[1] + ' TABLE ()');
+                    }
+                    if (asClause2) {
+                        const asBodyMatch2 = asClause2.match(/^AS\s+(.*)/i);
+                        if (asBodyMatch2) {
+                            result.push(lineIndent + 'AS');
+                            const bodyStart = asBodyMatch2[1].trim();
+                            if (bodyStart) result.push(bodyStart);
+                        } else {
+                            result.push(lineIndent + asClause2);
+                        }
+                    }
+                } else if (tableInlineMatch) {
+                    // Single-line: TABLE (columns) AS
+                    const tableColumns2 = splitParamList(tableInlineMatch[2]);
+                    const asClause2 = tableInlineMatch[4]?.trim() ?? '';
+                    if (tableColumns2.length > 0) {
+                        result.push(lineIndent + returnsOnlyMatch2[1] + ' TABLE (' + tableColumns2[0] + (tableColumns2.length > 1 ? ',' : ')'));
+                        for (let ci = 1; ci < tableColumns2.length; ci++) {
+                            const isLast = ci === tableColumns2.length - 1;
+                            result.push(lineIndent + tableColumns2[ci] + (isLast ? ')' : ','));
+                        }
+                    } else {
+                        result.push(lineIndent + returnsOnlyMatch2[1] + ' TABLE ()');
+                    }
+                    if (asClause2) {
+                        const asBodyMatch2 = asClause2.match(/^AS\s+(.*)/i);
+                        if (asBodyMatch2) {
+                            result.push(lineIndent + 'AS');
+                            const bodyStart = asBodyMatch2[1].trim();
+                            if (bodyStart) result.push(bodyStart);
+                        } else {
+                            result.push(lineIndent + asClause2);
+                        }
+                    }
+                    tempI++;
+                } else {
+                    result.push(lineIndent + returnsOnlyMatch2[1]);
+                }
+            } else if (afterClose) {
+                result.push(lineIndent + afterClose);
+            }
+            i = tempI;
+            continue;
+        }
+
+        // ── 'always' mode ──
+        // When ddl.indentParenthesesContents is true the param content is
+        // indented by 2×tabWidth; the opening/closing parens stay at tabWidth.
+        const paramsBodyWidth = style.ddl?.indentParenthesesContents ? tabWidth * 2 : tabWidth;
+        const parenIndent = ' '.repeat(tabWidth);
+        const bodyIndent = ' '.repeat(paramsBodyWidth);
+        const commaIndent = ' '.repeat(Math.max(0, paramsBodyWidth - 2));
+
+        const placeSubsequent = style.lists?.placeSubsequentItemsOnNewLines;
+
+        // FUNCTION params are always one per line; PROCEDURE params may be batched.
+        const isFunction = /\bFUNCTION\b/i.test(procHead);
+        const useBatch = !isFunction &&
+            (placeSubsequent === 'never' || placeSubsequent === 'ifLongerThanMaxLineLength');
 
         result.push(lineIndent + procHead);
-        result.push(lineIndent + bodyIndent + '(');
+        result.push(lineIndent + parenIndent + '(');
 
-        for (let p = 0; p < params.length; p++) {
-            const param = params[p];
-            if (p === 0) {
-                result.push(lineIndent + bodyIndent + param);
-            } else {
-                result.push(lineIndent + commaIndent + ', ' + param);
+        if (useBatch) {
+            // Batch multiple params per line up to maxLineLen.
+            // Each new batch line after the first starts with commaIndent + ', '.
+            let currentLine = lineIndent + bodyIndent + params[0];
+            for (let p = 1; p < params.length; p++) {
+                const candidate = currentLine + ', ' + params[p];
+                if (candidate.length > maxLineLen) {
+                    result.push(currentLine);
+                    currentLine = lineIndent + commaIndent + ', ' + params[p];
+                } else {
+                    currentLine = candidate;
+                }
+            }
+            result.push(currentLine);
+        } else {
+        // One param per line (FUNCTION always; PROCEDURE when placeSubsequent is
+        // undefined or 'always').
+            for (let p = 0; p < params.length; p++) {
+                const param = params[p];
+                if (p === 0) {
+                    result.push(lineIndent + bodyIndent + param);
+                } else {
+                    result.push(lineIndent + commaIndent + ', ' + param);
+                }
             }
         }
 
-        result.push(lineIndent + bodyIndent + ')');
+        result.push(lineIndent + parenIndent + ')');
 
         // Handle RETURNS @name TABLE (columns) for table-valued functions.
         // sql-formatter places "RETURNS @name" at the end of the proc header line
@@ -301,7 +767,7 @@ export function applyDdlProcFormatting(
                 const tableColumns = splitParamList(tableLineMatch[2]);
                 const asClause = tableLineMatch[4]?.trim() ?? '';
                 result.push(lineIndent + returnsOnlyMatch[1] + ' TABLE');
-                result.push(lineIndent + bodyIndent + '(');
+                result.push(lineIndent + parenIndent + '(');
                 for (let p = 0; p < tableColumns.length; p++) {
                     if (p === 0) {
                         result.push(lineIndent + bodyIndent + tableColumns[p]);
@@ -309,7 +775,7 @@ export function applyDdlProcFormatting(
                         result.push(lineIndent + commaIndent + ', ' + tableColumns[p]);
                     }
                 }
-                result.push(lineIndent + bodyIndent + ')');
+                result.push(lineIndent + parenIndent + ')');
                 if (asClause) {
                     // Split "AS BEGIN" → "AS" on its own line + "BEGIN" on the next,
                     // so that applyProcBodyIndentation can detect the standalone "AS"

@@ -173,6 +173,26 @@ function rePadBlock(block: string, oldWidth: number): string {
 
     if (indentMaxLen.size === 0) return block;
 
+    // Normalize singleton-indent blocks at the tabularLeft absolute column.
+    // sql-formatter places keywords inside an inline `AND … BEGIN` block at
+    // SQL_FORMATTER_KW_WIDTH (10) from the outer base rather than at 0.
+    // If every clause keyword in the block is at exactly that column, the block
+    // is a nested BEGIN body — strip the column offset so that
+    // applyControlFlowIndentation can add the correct extra indent without
+    // double-counting the 10 leading spaces.
+    // indentRemap maps the old indent (e.g. 10) to the new indent (0) so the
+    // re-emit loop can strip leading spaces from the affected keyword lines.
+    const indentRemap = new Map<number, number>();
+    if (indentMaxLen.size === 1) {
+        const soleIndent = [...indentMaxLen.keys()][0];
+        if (soleIndent === SQL_FORMATTER_KW_WIDTH) {
+            const soleLen = indentMaxLen.get(soleIndent)!;
+            indentMaxLen.clear();
+            indentMaxLen.set(0, soleLen);
+            indentRemap.set(soleIndent, 0);
+        }
+    }
+
     // New width for each indent level
     const indentNewWidth = new Map<number, number>();
     for (const [indent, maxLen] of indentMaxLen) {
@@ -184,7 +204,9 @@ function rePadBlock(block: string, oldWidth: number): string {
         // 1. Keyword line — adjust spacing after the keyword token
         const kw = detectKeyword(line);
         if (kw) {
-            const newWidth = indentNewWidth.get(kw.indent);
+            // Apply indent normalization (e.g. 10 → 0 for AND…BEGIN nested blocks)
+            const effectiveIndent = indentRemap.get(kw.indent) ?? kw.indent;
+            const newWidth = indentNewWidth.get(effectiveIndent);
             const kwUpper = kw.token.replace(/\s+/g, ' ').toUpperCase();
 
             // AND/OR and JOIN keywords render at the content column (indent + newWidth)
@@ -193,12 +215,12 @@ function rePadBlock(block: string, oldWidth: number): string {
             if (CONDITION_OPERATORS.has(kwUpper) || JOIN_CLAUSE_KEYWORDS.has(kwUpper)) {
                 if (newWidth === undefined) return line; // no clause keywords in block
                 const normToken = kw.token.replace(/\s+/g, ' ');
-                return ' '.repeat(kw.indent + newWidth) + normToken + ' ' + kw.content;
+                return ' '.repeat(effectiveIndent + newWidth) + normToken + ' ' + kw.content;
             }
 
-            if (newWidth === undefined || newWidth === oldWidth) return line;
+            if (newWidth === undefined || (newWidth === oldWidth && effectiveIndent === kw.indent)) return line;
             const padding = ' '.repeat(newWidth - kw.token.replace(/\s+/g, ' ').length);
-            return ' '.repeat(kw.indent) + kw.token + padding + kw.content;
+            return ' '.repeat(effectiveIndent) + kw.token + padding + kw.content;
         }
 
         // 2. Continuation line — its leading spaces = indent + oldWidth
@@ -225,8 +247,14 @@ function rePadBlock(block: string, oldWidth: number): string {
  * Processes each blank-line-separated query block independently so that
  * two-clause queries (SELECT/FROM only) get width 7, while queries with
  * ORDER BY get width 9, etc.
+ *
+ * @param useTabular - When false, skip re-padding (only strip trailing spaces).
+ *   Pass false for styles that do not use sql-formatter tabularLeft output.
  */
-export function applyKeywordRePadding(sql: string): string {
+export function applyKeywordRePadding(sql: string, useTabular = true): string {
+    if (!useTabular) {
+        return sql.replace(/[ \t]+(?=\n|$)/gm, '');
+    }
     // Split on blank lines, preserving the separators
     const parts = sql.split(/(\n{2,})/);
     const repaded = parts
