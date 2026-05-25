@@ -31,6 +31,7 @@ export function applyJoinOnFormatting(sql: string, style: SqlPromptStyleJson, ta
     // a new line whenever a keyword-alignment rule is present).
     const placeOnNewLine = onCfg?.placeOnNewLine ?? (onCfg?.keywordAlignment !== undefined);
     const shouldTransformJoinIndent = joinAlignment === 'toTable';
+    const maxLen = style.whitespace?.wrapLinesLongerThan ?? 9999;
 
     // Nothing to do
     if (!shouldTransformJoinIndent && !placeOnNewLine) return sql;
@@ -65,16 +66,43 @@ export function applyJoinOnFormatting(sql: string, style: SqlPromptStyleJson, ta
                 // ON is inline — split it out
                 const tableOnly = inlineOnMatch[1].trimEnd();
                 const condition = inlineOnMatch[2];
-                result.push(' '.repeat(effectiveIndent) + joinKeyword + ' ' + tableOnly);
                 if (placeOnNewLine) {
+                    result.push(' '.repeat(effectiveIndent) + joinKeyword + ' ' + tableOnly);
                     const onIndent = computeOnIndent(effectiveIndent, joinKeyword, keywordAlignment, tabWidth);
                     result.push(' '.repeat(onIndent) + 'ON ' + condition);
                     i++;
                     // Re-indent AND/OR condition continuations after ON
                     i = reindentConditions(lines, i, onIndent, conditionAlignment, result);
                 } else {
-                    result[result.length - 1] += ' ON ' + condition;
+                    const joinOnLine = ' '.repeat(effectiveIndent) + joinKeyword + ' ' + tableOnly + ' ON ' + condition;
                     i++;
+                    // For toInner alignment, collect AND/OR conditions and either join or re-indent.
+                    if (conditionAlignment === 'toInner') {
+                        const andConds: string[] = [];
+                        while (i < lines.length) {
+                            const am = lines[i].match(/^\s*((?:AND|OR)\b.*)/i);
+                            if (!am) break;
+                            andConds.push(am[1].trimStart());
+                            i++;
+                        }
+                        if (andConds.length === 0) {
+                            result.push(joinOnLine);
+                        } else {
+                            const fullLine = joinOnLine + ' ' + andConds.join(' ');
+                            if (fullLine.length <= maxLen) {
+                                result.push(fullLine);
+                            } else {
+                                result.push(joinOnLine);
+                                // condCol: column where the first condition starts (after "ON ")
+                                const condCol = joinOnLine.lastIndexOf(' ON ') + ' ON '.length;
+                                for (const cond of andConds) {
+                                    result.push(' '.repeat(condCol) + cond);
+                                }
+                            }
+                        }
+                    } else {
+                        result.push(joinOnLine);
+                    }
                 }
                 continue;
             }
@@ -212,4 +240,279 @@ function computeOnIndent(
     if (alignment === 'toTable') return joinIndent + joinKeyword.length + 1;
     // default: "indented"
     return joinIndent + tabWidth;
+}
+
+/**
+ * Collapses OUTER APPLY (or CROSS APPLY) subqueries into an inline format where
+ * SELECT follows the opening parenthesis on the same line, body lines are
+ * re-indented to align with SELECT, AND ( … ) condition groups are collapsed,
+ * and the closing ) AS alias is merged onto the last body line.
+ *
+ * This runs after applyProcBodyIndentation so indentation levels are final.
+ */
+export function applyOuterApplyInlineFormat(sql: string, spacesInside = true): string {
+    const lines = sql.split('\n');
+    const result: string[] = [];
+    let i = 0;
+
+    while (i < lines.length) {
+        const line = lines[i];
+
+        // Match: whitespace + "OUTER APPLY" or "CROSS APPLY" + optional whitespace + "(" + EOL
+        const applyMatch = line.match(/^(\s+)((?:OUTER|CROSS)\s+APPLY)\s*\(\s*$/i);
+        if (!applyMatch) {
+            result.push(line);
+            i++;
+            continue;
+        }
+
+        const outerIndent = applyMatch[1];          // e.g. "     " (5 spaces after applyJoinOnFormatting)
+        const keyword = applyMatch[2];              // "OUTER APPLY"
+        const sp = spacesInside ? ' ' : '';
+        const prefix = outerIndent + keyword + ' (' + sp; // "     OUTER APPLY ( " or "     OUTER APPLY ("
+        const contentIndentLen = prefix.length;
+        i++;
+
+        // Next line should be the first body line (SELECT)
+        if (i >= lines.length) {
+            result.push(line);
+            continue;
+        }
+
+        const selectLine = lines[i];
+        const origIndentMatch = selectLine.match(/^(\s+)/);
+        if (!origIndentMatch) {
+            // No leading indent — give up on this APPLY block
+            result.push(line);
+            continue;
+        }
+        const origIndentLen = origIndentMatch[1].length;
+        i++; // consume SELECT line; it will be inlined
+
+        // Collect body lines until closing ) which is at indent <= outerIndent.length.
+        // NOTE: applyJoinOnFormatting may re-indent OUTER APPLY (e.g. 4→5 spaces) while the
+        // closing ")" stays at the original sql-formatter indent (4 spaces). Use actualIndent
+        // to detect the closing paren correctly.
+        const bodyLines: string[] = [];
+        let aliasSuffix = '';
+        while (i < lines.length) {
+            const bl = lines[i];
+            const blActualIndent = bl.length - bl.trimStart().length;
+            // Closing: a line whose first non-space char is ")" at indent <= outerIndent
+            if (bl.trimStart().charAt(0) === ')' && blActualIndent <= outerIndent.length) {
+                aliasSuffix = bl.slice(blActualIndent + 1); // everything after ")"
+                i++;
+                break;
+            }
+            bodyLines.push(bl);
+            i++;
+        }
+
+        // Re-indent body lines: add (contentIndentLen - origIndentLen) spaces
+        const delta = contentIndentLen - origIndentLen;
+        const reindented = bodyLines.map(bl => {
+            const blIndentLen = (bl.match(/^(\s*)/)?.[1] ?? '').length;
+            if (blIndentLen >= origIndentLen) {
+                return ' '.repeat(blIndentLen + delta) + bl.trimStart();
+            }
+            return bl;
+        });
+
+        // Inline SELECT items, FROM clause items, and WHERE with conditions.
+        const inlined = inlineBodyClauses(reindented, contentIndentLen, spacesInside);
+
+        // Build first (inline) line: SELECT keyword + any SELECT items
+        let firstLine = prefix + selectLine.trimStart();
+        if (inlined.selectExtras.length > 0) {
+            firstLine += ' ' + inlined.selectExtras.join(', ');
+        }
+
+        // Append outer closing ")" and alias to last line
+        const body = inlined.rest;
+        if (body.length > 0) {
+            body[body.length - 1] += ')' + aliasSuffix;
+        } else {
+            result.push(firstLine + ')' + aliasSuffix);
+            continue;
+        }
+
+        result.push(firstLine, ...body);
+    }
+
+    return result.join('\n');
+}
+
+/**
+ * After re-indenting the OUTER APPLY body, inline SELECT items onto the firstLine,
+ * collapse FROM/WHERE keywords with their items, and re-align AND conditions for WHERE
+ * using "toInner" alignment (AND at WHERE_indent + 'WHERE '.length).
+ * AND ( … ) paren groups are collapsed to one line when spacesInside=false.
+ */
+function inlineBodyClauses(
+    body: string[],
+    baseIndentLen: number,
+    spacesInside: boolean,
+): { selectExtras: string[]; rest: string[] } {
+    const tabWidth = 4; // body items are at baseIndentLen + tabWidth
+    const itemIndentLen = baseIndentLen + tabWidth;
+
+    // Collect SELECT item lines at the top (at baseIndentLen + tabWidth or deeper)
+    const selectExtras: string[] = [];
+    let i = 0;
+    while (i < body.length) {
+        const bl = body[i];
+        const blInd = (bl.match(/^(\s*)/)?.[1] ?? '').length;
+        if (blInd < itemIndentLen) break;
+        const trimmed = bl.trimStart();
+        // Stop if this is a clause keyword (FROM/WHERE/GROUP BY etc.)
+        if (/^(FROM|WHERE|GROUP\s+BY|HAVING|ORDER\s+BY)\b/i.test(trimmed)) break;
+        selectExtras.push(trimmed.replace(/,\s*$/, ''));
+        i++;
+    }
+
+    // Process FROM / WHERE clauses
+    const rest: string[] = [];
+    while (i < body.length) {
+        const bl = body[i];
+        const blInd = (bl.match(/^(\s*)/)?.[1] ?? '').length;
+
+        const fromMatch = blInd === baseIndentLen ? bl.trimStart().match(/^(FROM)\s*$/i) : null;
+        const whereMatch = blInd === baseIndentLen ? bl.trimStart().match(/^(WHERE)\s*$/i) : null;
+
+        if (fromMatch || whereMatch) {
+            i++;
+
+            // Collect items at baseIndentLen + tabWidth (and deeper for paren groups)
+            const items: string[] = [];
+            while (i < body.length) {
+                const item = body[i];
+                const itemInd = (item.match(/^(\s*)/)?.[1] ?? '').length;
+                if (itemInd < itemIndentLen) break;
+                items.push(item.trimStart().replace(/,\s*$/, ''));
+                i++;
+            }
+
+            if (items.length === 0) {
+                rest.push(bl.trimEnd()); // emit keyword-only line without trailing spaces
+                continue;
+            }
+
+            // Use the original keyword line (bl) as the prefix to preserve padding.
+            // If bl ends with a space (padded keyword), append item directly.
+            // Otherwise append with an extra space.
+            const kwPrefix = bl.endsWith(' ') ? bl : bl + ' ';
+            const condCol = kwPrefix.length; // AND conditions align at this column
+
+            if (fromMatch) {
+                rest.push(kwPrefix + items.join(' '));
+            } else {
+                // WHERE: first condition inline, AND/OR conditions at condCol
+                rest.push(kwPrefix + items[0]);
+                for (let k = 1; k < items.length; k++) {
+                    const item = items[k];
+                    // Collapse AND ( … ) paren groups
+                    if (item.match(/^AND\s*\(\s*$/i)) {
+                        // Collect group content until closing ")"
+                        const groupContent: string[] = [];
+                        k++;
+                        while (k < items.length && !items[k].match(/^\)\s*$/)) {
+                            groupContent.push(items[k]);
+                            k++;
+                        }
+                        if (!spacesInside) {
+                            // Collapse to one line: AND (content)
+                            rest.push(' '.repeat(condCol) + 'AND (' + groupContent.join(' ') + ')');
+                        } else {
+                            // Multi-line with spaces inside: AND ( firstContent\n  OR ... )
+                            const andPrefix = ' '.repeat(condCol) + 'AND ( ';
+                            const innerIndent = ' '.repeat(andPrefix.length);
+                            rest.push(andPrefix + groupContent[0]);
+                            for (let g = 1; g < groupContent.length; g++) {
+                                rest.push(innerIndent + groupContent[g]);
+                            }
+                            if (rest.length > 0) {
+                                rest[rest.length - 1] += ' )';
+                            }
+                        }
+                    } else {
+                        rest.push(' '.repeat(condCol) + item);
+                    }
+                }
+            }
+            continue;
+        }
+
+        rest.push(bl);
+        i++;
+    }
+
+    return { selectExtras, rest: collapseAndParenGroups(rest, spacesInside) };
+}
+
+/**
+ * Within a block of re-indented lines, collapses patterns like:
+ *   <indent>AND (
+ *   <indent><content>
+ *   <indent>OR <content>
+ *   <indent>)
+ * into:
+ *   <indent>AND ( <content>
+ *   <indent+6>OR <content> )
+ */
+function collapseAndParenGroups(lines: string[], spacesInside = true): string[] {
+    const result: string[] = [];
+    let i = 0;
+
+    while (i < lines.length) {
+        const line = lines[i];
+
+        // Match: indent + "AND" + whitespace + "(" + EOL
+        const andMatch = line.match(/^(\s+)(AND\s*)\(\s*$/i);
+        if (andMatch) {
+            const andIndent = andMatch[1];  // spaces before AND
+            const andKey = andMatch[2];     // "AND " or "AND  "
+            const sp = spacesInside ? ' ' : '';
+            const andPrefix = andIndent + andKey + '(' + sp; // "                                AND ( "
+            const innerIndentLen = andPrefix.length;
+            i++;
+
+            const innerLines: string[] = [];
+            let hasClosing = false;
+            while (i < lines.length) {
+                const inner = lines[i];
+                // Closing: same indent as AND + ")" + EOL
+                if (inner.startsWith(andIndent) && inner.slice(andIndent.length).match(/^\)\s*$/)) {
+                    hasClosing = true;
+                    i++;
+                    break;
+                }
+                innerLines.push(inner);
+                i++;
+            }
+
+            if (innerLines.length === 0) {
+                result.push(line);
+                continue;
+            }
+
+            // First inner line goes inline with "AND ("
+            result.push(andPrefix + innerLines[0].trimStart());
+
+            // Subsequent inner lines align at innerIndentLen
+            for (let j = 1; j < innerLines.length; j++) {
+                result.push(' '.repeat(innerIndentLen) + innerLines[j].trimStart());
+            }
+
+            // Append closing ")" to last pushed line
+            if (hasClosing && result.length > 0) {
+                result[result.length - 1] += spacesInside ? ' )' : ')';
+            }
+            continue;
+        }
+
+        result.push(line);
+        i++;
+    }
+
+    return result;
 }

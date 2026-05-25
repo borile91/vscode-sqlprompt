@@ -88,6 +88,45 @@ export function applyExecParamFormatting(sql: string, style: SqlPromptStyleJson)
             params[params.length - 1] = params[params.length - 1].replace(/;\s*$/, '').trimEnd();
         }
 
+        // For 'ifLongerThanMaxLineLength': collapse all params to one line.
+        // For 'never': greedy-pack params onto lines <= wrapLinesLongerThan.
+        const listBreakMode = style.lists?.placeSubsequentItemsOnNewLines;
+        if (listBreakMode === 'ifLongerThanMaxLineLength') {
+            const singleLine =
+                lineIndent + execKw + ' ' + procName + ' ' + params.join(', ') +
+                (hasSemicolon ? ';' : '');
+            result.push(singleLine);
+            i = j;
+            continue;
+        }
+
+        if (listBreakMode === 'never') {
+            const maxLen = style.whitespace?.wrapLinesLongerThan;
+            const prefix0 = lineIndent + execKw + ' ' + procName + ' ';
+            const contPrefix = ' '.repeat(commaIndent) + ', ';
+            const singleLine = prefix0 + params.join(', ') + (hasSemicolon ? ';' : '');
+            if (maxLen === undefined || !isFinite(maxLen) || singleLine.length <= maxLen) {
+                result.push(singleLine);
+            } else {
+                // Greedy-pack params onto lines up to maxLen.
+                const packedLines: string[] = [];
+                let currentLine = prefix0 + params[0];
+                for (let pi = 1; pi < params.length; pi++) {
+                    const addition = ', ' + params[pi];
+                    if (currentLine.length + addition.length <= maxLen) {
+                        currentLine += addition;
+                    } else {
+                        packedLines.push(currentLine);
+                        currentLine = contPrefix + params[pi];
+                    }
+                }
+                packedLines.push(currentLine + (hasSemicolon ? ';' : ''));
+                result.push(...packedLines);
+            }
+            i = j;
+            continue;
+        }
+
         const emittedLines = params.map((p, idx) => {
             if (idx === 0) {
                 return lineIndent + execKw + ' ' + procName + ' ' + p;

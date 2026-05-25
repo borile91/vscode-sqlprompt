@@ -36,8 +36,10 @@ export function mapToFormatterOptions(style: SqlPromptStyleJson): FormatOptionsW
         opts.expressionWidth = style.whitespace.wrapLinesLongerThan;
     }
 
-    // "toTable" keyword alignment implies a tabular (vertical) indentation style
-    if (style.joinStatements?.join?.keywordAlignment === 'toTable') {
+    // "toTable" keyword alignment implies a tabular (vertical) indentation style,
+    // but only when leading-comma layout is also requested (the two features work
+    // together to produce the vertically-aligned style).
+    if (style.joinStatements?.join?.keywordAlignment === 'toTable' && style.lists?.placeCommasBeforeItems === true) {
         opts.indentStyle = 'tabularLeft';
     }
 

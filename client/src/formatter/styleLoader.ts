@@ -64,8 +64,10 @@ export interface SqlPromptStyleJson {
         overrideParenthesesForCreateAlter?: boolean;
         indentClauses?: boolean;
         indentContents?: boolean;
+        indentParenthesesContents?: boolean;
         placeClosingParenthesisOnNewLine?: boolean;
         placeFirstProcedureParameterOnNewLine?: 'always' | 'never' | 'ifMultiple';
+        placeConstraintColumnsOnNewLines?: string;
         firstDefinitionBreakType?: 'always' | 'never' | 'whenLong';
         placeFirstDefinitionOnNewLine?: boolean;
         collapseStatementsShorterThan?: number;
@@ -83,11 +85,13 @@ export interface SqlPromptStyleJson {
         indentBeginAndEndKeywords?: boolean;
         indentContentsOfStatements?: boolean;
         collapseStatementsShorterThan?: number;
+        collapseShortStatements?: boolean;
     };
     cte?: {
         asAlignment?: 'indented' | 'aligned';
     };
     variables?: {
+        alignDataTypesAndValues?: boolean;
         placeAssignedValueOnNewLineIfLongerThanMaxLineLength?: boolean;
     };
     joinStatements?: {

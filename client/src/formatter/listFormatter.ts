@@ -256,6 +256,8 @@ export function applyLeadingCommaFormat(
     const alignAliases = style.lists.alignAliases ?? false;
     const spacesInside = style.parentheses?.addSpacesInsideParentheses ?? false;
     const columnsBreakMode = style.insertStatements?.columns?.placeSubsequentColumnsOnNewLines;
+    const tabWidth = style.whitespace?.numberOfSpacesInTabs ?? 4;
+    const maxLineLen = style.whitespace?.wrapLinesLongerThan ?? Infinity;
     const lines = sql.split('\n');
     const result: string[] = [];
     let i = 0;
@@ -277,21 +279,39 @@ export function applyLeadingCommaFormat(
                 const columns = columnListStr.split(',').map(c => c.trim()).filter(Boolean);
 
                 if (columnsBreakMode === 'never') {
-                    const openParen = spacesInside ? '( ' : '(';
-                    const closeSuffix = spacesInside ? ' )' : ')';
-                    result.push(
-                        `${lineIndent}INSERT ${intoClause ? 'INTO ' : ''}${tableName} ${openParen}${columns.join(', ')}${closeSuffix}`,
-                    );
-                    i++;
-                    // For INSERT … SELECT: collapse the SELECT values to one line
-                    if (i < lines.length) {
-                        const nextLine = lines[i];
-                        const selMatch = nextLine.match(/^([ \t]*)SELECT\s+(.*?),\s*$/i);
-                        if (selMatch) {
-                            const collapsed = collapseSelectItems(lines, i, selMatch[1], selMatch[2]);
-                            if (collapsed) {
-                                result.push(collapsed.line);
-                                i = collapsed.nextIndex;
+                    const intoStr = intoClause ? 'INTO ' : '';
+                    const insertParenStyle = style.insertStatements?.columns?.parenthesisStyle;
+                    if (
+                        insertParenStyle === 'expandedSplit' ||
+                        insertParenStyle === 'expandedSimple' ||
+                        insertParenStyle === 'expandedIndented'
+                    ) {
+                        // ( on its own line; columns at openParenCol + tabWidth; ) at openParenCol
+                        const openParenCol =
+                            lineIndent.length + 'INSERT '.length + intoStr.length + tableName.length + 1;
+                        const colIndent = ' '.repeat(openParenCol + tabWidth);
+                        const parenClose = ' '.repeat(openParenCol) + ')';
+                        result.push(`${lineIndent}INSERT ${intoStr}${tableName} (`);
+                        result.push(`${colIndent}${columns.join(', ')}`);
+                        result.push(parenClose);
+                        i++;
+                    } else {
+                        const openParen = spacesInside ? '( ' : '(';
+                        const closeSuffix = spacesInside ? ' )' : ')';
+                        result.push(
+                            `${lineIndent}INSERT ${intoStr}${tableName} ${openParen}${columns.join(', ')}${closeSuffix}`,
+                        );
+                        i++;
+                        // For INSERT … SELECT: collapse the SELECT values to one line
+                        if (i < lines.length) {
+                            const nextLine = lines[i];
+                            const selMatch = nextLine.match(/^([ \t]*)SELECT\s+(.*?),\s*$/i);
+                            if (selMatch) {
+                                const collapsed = collapseSelectItems(lines, i, selMatch[1], selMatch[2]);
+                                if (collapsed) {
+                                    result.push(collapsed.line);
+                                    i = collapsed.nextIndex;
+                                }
                             }
                         }
                     }
@@ -373,6 +393,58 @@ export function applyLeadingCommaFormat(
         // ── Leading-comma layout for SELECT / ORDER BY / GROUP BY / SET ──────
         // Only applied when forceLeadingCommaLayout is true.
         if (!forceLeadingCommaLayout) {
+            // For 'never' and 'ifLongerThanMaxLineLength', pack tabularLeft
+            // continuation lines into wrapped lines with leading commas.
+            if (listBreakMode === 'never' || listBreakMode === 'ifLongerThanMaxLineLength') {
+                const clauseCollapseMatch = line.match(LIST_CLAUSE_RE);
+                if (clauseCollapseMatch) {
+                    const kwPrefix = clauseCollapseMatch[1];
+                    const firstItemText = clauseCollapseMatch[2];
+                    const kwWidthBase = kwPrefix.length;
+                    i++;
+                    const { items, nextIndex } = collectItems(lines, i, firstItemText, kwWidthBase);
+                    i = nextIndex;
+                    const allExprs = items.map(it =>
+                        it.expression + (it.comment ? ' ' + it.comment : ''),
+                    );
+                    const oneLine = kwPrefix + allExprs.join(', ');
+
+                    if (listBreakMode === 'ifLongerThanMaxLineLength') {
+                        // Keep inline if fits; otherwise fall back to vertical.
+                        if (isFinite(maxLineLen) && oneLine.length > maxLineLen) {
+                            result.push(...formatItems(kwPrefix, kwWidthBase, items, alignComments, alignAliases));
+                        } else {
+                            result.push(oneLine);
+                        }
+                    } else {
+                        // 'never': pack items greedily onto lines ≤ maxLineLen.
+                        if (!isFinite(maxLineLen) || oneLine.length <= maxLineLen) {
+                            result.push(oneLine);
+                        } else {
+                            const commaIndent = Math.max(0, kwWidthBase - 2);
+                            const commaPad = ' '.repeat(commaIndent);
+                            let currentLine = kwPrefix;
+                            let first = true;
+                            for (const expr of allExprs) {
+                                if (first) {
+                                    currentLine += expr;
+                                    first = false;
+                                } else {
+                                    const candidate = currentLine + ', ' + expr;
+                                    if (candidate.length >= maxLineLen - tabWidth) {
+                                        result.push(currentLine);
+                                        currentLine = commaPad + ', ' + expr;
+                                    } else {
+                                        currentLine = candidate;
+                                    }
+                                }
+                            }
+                            if (currentLine.trim()) result.push(currentLine);
+                        }
+                    }
+                    continue;
+                }
+            }
             result.push(line);
             i++;
             continue;

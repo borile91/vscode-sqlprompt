@@ -112,6 +112,8 @@ export function applyControlFlowIndentation(
             continue;
         }
 
+
+
         if (STANDALONE_END_RE.test(trimmed)) {
             // Bare END: matches same indent as its opening bare BEGIN
             const savedExtra = stack.length > 0 ? stack.pop()! : 0;
@@ -132,20 +134,40 @@ export function applyControlFlowIndentation(
             const savedExtra = stack.length > 0 ? stack.pop()! : 0;
             pendingSingleBodyIndent = 0;
             pendingSingleBodyKeywordWidth = 0;
-            result.push(' '.repeat(savedExtra) + applyKeywordCasing(trimmed, style));
+            if (style.ddl?.indentClauses) {
+            // tabular mode: applyProcBodyIndentation adds the base shift;
+            // END TRY/CATCH must align with the matching BEGIN TRY/CATCH.
+                result.push(' '.repeat(savedExtra) + applyKeywordCasing(trimmed, style));
+            } else {
+                // scripting mode: no applyProcBodyIndentation shift;
+                // add tabWidth so END TRY/CATCH sits at the BEGIN TRY/CATCH column.
+                result.push(' '.repeat(savedExtra + tabWidth) + applyKeywordCasing(trimmed, style));
+            }
             contentExtraIndent = savedExtra;
 
         } else if (COMPOUND_BEGIN_RE.test(trimmed)) {
-            // BEGIN TRY / BEGIN CATCH: stays at current level, opens indented block
+            // BEGIN TRY / BEGIN CATCH: placement depends on whether
+            // applyProcBodyIndentation will later add a base tabWidth shift.
             pendingSingleBodyIndent = 0;
             pendingSingleBodyKeywordWidth = 0;
-            result.push(' '.repeat(contentExtraIndent) + applyKeywordCasing(trimmed, style));
-            stack.push(contentExtraIndent);
-            contentExtraIndent += tabWidth;
+            if (style.ddl?.indentClauses) {
+            // tabular mode: emit at current level; applyProcBodyIndentation
+            // adds the base shift, so we must not double-add here.
+                result.push(' '.repeat(contentExtraIndent) + applyKeywordCasing(trimmed, style));
+                stack.push(contentExtraIndent);
+                contentExtraIndent += tabWidth;
+            } else {
+                // scripting mode: applyProcBodyIndentation won't shift;
+                // add tabWidth explicitly so BEGIN TRY/CATCH is indented.
+                const beginTryIndent = contentExtraIndent + tabWidth;
+                result.push(' '.repeat(beginTryIndent) + applyKeywordCasing(trimmed, style));
+                stack.push(contentExtraIndent);
+                contentExtraIndent = beginTryIndent + tabWidth;
+            }
 
         } else if (STANDALONE_BEGIN_RE.test(trimmed)) {
             // Bare BEGIN: normally indented one level beyond the owning statement.
-            // Special case: a bare BEGIN at contentExtraIndent === 0 with no active
+            // A bare BEGIN at contentExtraIndent === 0 with no active
             // pending single-body context is the outermost function-body BEGIN
             // (e.g. ALTER FUNCTION … AS BEGIN … END).  Treat it as a compound opener
             // so that applyProcBodyIndentation can add the base tabWidth offset
@@ -198,10 +220,6 @@ export function applyControlFlowIndentation(
                 // IF/WHILE/ELSE that has no BEGIN), strip the original leading whitespace
                 // and replace it with the computed indent to avoid double-counting
                 // sql-formatter's base indent.
-                // For lines placed because of contentExtraIndent (inside a BEGIN block),
-                // prepend the extra spaces and keep the existing alignment whitespace,
-                // because those lines may have tabularLeft-aligned WHERE/AND conditions
-                // that must not be re-indented.
                 if (pendingSingleBodyIndent > 0) {
                     result.push(' '.repeat(effectiveIndent) + trimmed);
                 } else if (effectiveIndent > 0) {
@@ -219,8 +237,16 @@ export function applyControlFlowIndentation(
 
                 // Mark that the NEXT non-blank line should be indented as a single-statement
                 // body (applies to IF, WHILE, and ELSE / ELSE IF not followed by BEGIN).
+                // NOTE: ELSE is only treated as a control-flow marker when it is
+                // standalone ("ELSE" on its own line, optionally with a comment) or
+                // "ELSE IF …" — never when it is a CASE ELSE expression like "ELSE NULL".
                 if (!isComment) {
-                    const cfm = trimmed.match(/^(IF|WHILE|ELSE(?:\s+IF)?)\b/i);
+                    const isControlFlowElse =
+                        /^ELSE\b/i.test(trimmed) &&
+                        (/^ELSE\s*(?:--.*)?$/i.test(trimmed) || /^ELSE\s+IF\b/i.test(trimmed));
+                    const cfm =
+                        trimmed.match(/^(IF|WHILE)\b/i) ??
+                        (isControlFlowElse ? trimmed.match(/^(ELSE(?:\s+IF)?)/) : null);
                     if (cfm) {
                         // The body must be tabWidth deeper than the IF/WHILE/ELSE line.
                         // When effectiveIndent > 0 the line is being placed there; otherwise
