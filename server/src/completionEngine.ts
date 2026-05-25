@@ -183,12 +183,13 @@ export function buildCompletions(
         tables.forEach((table, idx) => {
           const alias = generateAlias(table.name, new Set(usedAliases));
           const fullName = `${table.schema}.${table.name}`;
+          const quotedFullName = `${quoteIdentifier(table.schema)}.${quoteIdentifier(table.name)}`;
           items.push({
             label: fullName,
             kind: CompletionItemKind.Class,
             detail: `Table (${table.schema}) — alias: ${alias}`,
             filterText: fullName,
-            textEdit: TextEdit.replace(replaceRange, `${fullName} AS ${alias}`),
+            textEdit: TextEdit.replace(replaceRange, `${quotedFullName} AS ${alias}`),
             insertTextFormat: InsertTextFormat.PlainText,
             sortText: `01_table_${table.name}`,
             data: { type: 'table', index: idx },
@@ -198,6 +199,7 @@ export function buildCompletions(
         routines.tableValuedFunctions.forEach((fn) => {
           const alias = generateAlias(fn.name, new Set(usedAliases));
           const fullName = `${fn.schema}.${fn.name}`;
+          const quotedFullName = `${quoteIdentifier(fn.schema)}.${quoteIdentifier(fn.name)}`;
           items.push({
             label: fullName,
             kind: CompletionItemKind.Function,
@@ -205,7 +207,7 @@ export function buildCompletions(
             filterText: fullName,
             textEdit: TextEdit.replace(
               replaceRange,
-              `${buildFunctionCallText(fullName, fn.parameters)} AS ${alias}`,
+              `${buildFunctionCallText(quotedFullName, fn.parameters)} AS ${alias}`,
             ),
             insertTextFormat: InsertTextFormat.Snippet,
             sortText: `02_tvf_${fn.name}`,
@@ -315,12 +317,13 @@ export function buildCompletions(
         if (tables.length > 0) {
           tables.forEach((table, idx) => {
             const fullName = `${table.schema}.${table.name}`;
+            const quotedFullName = `${quoteIdentifier(table.schema)}.${quoteIdentifier(table.name)}`;
             items.push({
               label: fullName,
               kind: CompletionItemKind.Class,
               detail: `Table (${table.columns.length} columns)`,
               filterText: fullName,
-              insertText: fullName,
+              insertText: quotedFullName,
               insertTextFormat: InsertTextFormat.PlainText,
               sortText: `01_table_${table.name}`,
               data: { type: 'table', index: idx },
@@ -385,9 +388,9 @@ function buildDotCompletions(
       label: col,
       kind: CompletionItemKind.Field,
       detail: `${matchingSource.schema ? `${matchingSource.schema}.` : ""}${matchingSource.objectName}`,
-      insertText: col,
+      insertText: quoteIdentifier(col),
       insertTextFormat: InsertTextFormat.PlainText,
-      textEdit: TextEdit.replace(replaceRange, col),
+      textEdit: TextEdit.replace(replaceRange, quoteIdentifier(col)),
       sortText: `02_col_${qualifier}_${col}`,
     }));
 
@@ -429,9 +432,9 @@ function buildDotCompletions(
         label: col,
         kind: CompletionItemKind.Field,
         detail: `CTE: ${src.objectName}`,
-        insertText: col,
+        insertText: quoteIdentifier(col),
         insertTextFormat: InsertTextFormat.PlainText,
-        textEdit: TextEdit.replace(replaceRange, col),
+        textEdit: TextEdit.replace(replaceRange, quoteIdentifier(col)),
         sortText: `02_col_${qualifier}_${col}`,
       }));
     }
@@ -476,7 +479,7 @@ function buildDotCompletions(
         kind: CompletionItemKind.Class,
         detail: `Table (${table.schema}) — alias: ${alias}`,
         filterText: table.name,
-        textEdit: TextEdit.replace(replaceRange, `${table.name} AS ${alias}`),
+        textEdit: TextEdit.replace(replaceRange, `${quoteIdentifier(table.name)} AS ${alias}`),
         insertTextFormat: InsertTextFormat.PlainText,
         sortText: `01_table_${table.name}`,
         data: { type: 'table', index: tables.indexOf(table) },
@@ -492,7 +495,7 @@ function buildDotCompletions(
         filterText: `${fn.name} ${fn.schema}.${fn.name}`,
         textEdit: TextEdit.replace(
           replaceRange,
-          `${buildFunctionCallText(fn.name, fn.parameters)} AS ${alias}`,
+          `${buildFunctionCallText(quoteIdentifier(fn.name), fn.parameters)} AS ${alias}`,
         ),
         insertTextFormat: InsertTextFormat.Snippet,
         sortText: `02_tvf_${fn.name}`,
@@ -506,7 +509,7 @@ function buildDotCompletions(
       filterText: `${proc.name} ${proc.schema}.${proc.name}`,
       textEdit: TextEdit.replace(
         replaceRange,
-        buildProcedureCallText(proc.name, proc.parameters),
+        buildProcedureCallText(quoteIdentifier(proc.name), proc.parameters),
       ),
       insertTextFormat: InsertTextFormat.Snippet,
       sortText: `02_proc_${proc.name}`,
@@ -522,9 +525,9 @@ function buildDotCompletions(
       label: col.name,
       kind: CompletionItemKind.Field,
       detail: `${tableMatch.schema}.${tableMatch.name}`,
-      insertText: col.name,
+      insertText: quoteIdentifier(col.name),
       insertTextFormat: InsertTextFormat.PlainText,
-      textEdit: TextEdit.replace(replaceRange, col.name),
+      textEdit: TextEdit.replace(replaceRange, quoteIdentifier(col.name)),
       sortText: `02_col_${col.name}`,
     }));
   }
@@ -577,12 +580,13 @@ function buildDotCompletions(
       const tableItems = tablesForDb.map((table) => {
         const alias = generateAlias(table.name, new Set(usedAliases));
         const fullName = `${table.schema}.${table.name}`;
+        const quotedFullName = `${quoteIdentifier(table.schema)}.${quoteIdentifier(table.name)}`;
         return {
           label: fullName,
           kind: CompletionItemKind.Class,
           detail: `Table (${table.schema}) — alias: ${alias}`,
           filterText: fullName,
-          textEdit: TextEdit.replace(replaceRange, `${fullName} AS ${alias}`),
+          textEdit: TextEdit.replace(replaceRange, `${quotedFullName} AS ${alias}`),
           insertTextFormat: InsertTextFormat.PlainText,
           sortText: `02_table_${table.schema}_${table.name}`,
         };
@@ -800,15 +804,30 @@ function buildColumnCompletionsForSources(sources: VisibleSource[]): CompletionI
 }
 
 function normalizeColumnName(raw: unknown): string | undefined {
-  if (typeof raw === 'string') return raw;
-  if (typeof raw === 'number' || typeof raw === 'boolean') return String(raw);
-  if (!raw || typeof raw !== 'object') return undefined;
+  let result: string | undefined;
 
-  const obj = raw as Record<string, unknown>;
-  const candidate = obj.name ?? obj.column_name ?? obj.displayValue ?? obj.value;
-  if (typeof candidate === 'string') return candidate;
-  if (typeof candidate === 'number' || typeof candidate === 'boolean') return String(candidate);
-  return undefined;
+  if (typeof raw === 'string') result = raw;
+  else if (typeof raw === 'number' || typeof raw === 'boolean') result = String(raw);
+  else if (!raw || typeof raw !== 'object') return undefined;
+  else {
+    const obj = raw as Record<string, unknown>;
+    const candidate = obj.name ?? obj.column_name ?? obj.displayValue ?? obj.value;
+    if (typeof candidate === 'string') result = candidate;
+    else if (typeof candidate === 'number' || typeof candidate === 'boolean') result = String(candidate);
+  }
+
+  return result !== undefined ? quoteIdentifier(result) : undefined;
+}
+
+/**
+ * Wraps a T-SQL identifier in square brackets when it contains spaces,
+ * starts with a digit, or contains characters outside the safe set
+ * (letters, digits, _, @, #, $). Already-bracketed names are returned as-is.
+ */
+export function quoteIdentifier(name: string): string {
+  if (name.startsWith('[') && name.endsWith(']')) return name;
+  if (/^[a-zA-Z_#@][a-zA-Z0-9_#@$]*$/.test(name)) return name;
+  return `[${name}]`;
 }
 
 // ── Routine completions ──────────────────────────────────────────────────────
@@ -920,12 +939,13 @@ const BINARY_TYPES = new Set(['binary', 'varbinary', 'image', 'rowversion', 'tim
 function buildScalarFunctionCompletions(functions: ScalarFunctionInfo[]): CompletionItem[] {
   return functions.map((fn) => {
     const fullName = `${fn.schema}.${fn.name}`;
+    const quotedFullName = `${quoteIdentifier(fn.schema)}.${quoteIdentifier(fn.name)}`;
     return {
       label: fullName,
       kind: CompletionItemKind.Function,
       detail: 'Scalar function',
       filterText: `${fn.name} ${fullName}`,
-      insertText: buildFunctionCallText(fullName, fn.parameters),
+      insertText: buildFunctionCallText(quotedFullName, fn.parameters),
       insertTextFormat: InsertTextFormat.Snippet,
       sortText: `03_scalar_${fn.schema}_${fn.name}`,
     };
@@ -935,6 +955,7 @@ function buildScalarFunctionCompletions(functions: ScalarFunctionInfo[]): Comple
 function buildStoredProcedureCompletions(procedures: StoredProcedureInfo[]): CompletionItem[] {
   return procedures.map((proc) => {
     const fullName = `${proc.schema}.${proc.name}`;
+    const quotedFullName = `${quoteIdentifier(proc.schema)}.${quoteIdentifier(proc.name)}`;
     const paramList = proc.parameters.length > 0
       ? ` (${proc.parameters.map((p) => normalizeParameterName(p.name)).join(', ')})`
       : '';
@@ -943,7 +964,7 @@ function buildStoredProcedureCompletions(procedures: StoredProcedureInfo[]): Com
       kind: CompletionItemKind.Method,
       detail: `Stored procedure${paramList}`,
       filterText: `${proc.name} ${fullName}`,
-      insertText: buildProcedureCallText(fullName, proc.parameters),
+      insertText: buildProcedureCallText(quotedFullName, proc.parameters),
       insertTextFormat: InsertTextFormat.Snippet,
       sortText: `03_proc_${proc.schema}_${proc.name}`,
     };
