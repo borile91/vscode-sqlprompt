@@ -1,5 +1,31 @@
 import type { SqlPromptStyleJson } from './styleLoader';
 
+/**
+ * Counts net open parentheses in a string, skipping paren characters inside
+ * single-quoted string literals and after `--` line comments.
+ */
+function computeNetParens(s: string): number {
+    let depth = 0;
+    let inStr = false;
+    for (let i = 0; i < s.length; i++) {
+        const ch = s[i];
+        if (inStr) {
+            if (ch === "'") {
+                // Escaped quote ''
+                if (s[i + 1] === "'") { i++; continue; }
+                inStr = false;
+            }
+            continue;
+        }
+        // Line comment: rest of this string segment is a comment
+        if (ch === '-' && s[i + 1] === '-') break;
+        if (ch === "'") { inStr = true; continue; }
+        if (ch === '(') depth++;
+        else if (ch === ')') depth--;
+    }
+    return depth;
+}
+
 /** Splits a content string into [expression, inline_comment]. */
 function splitComment(text: string): [string, string] {
     const idx = text.indexOf('--');
@@ -40,6 +66,11 @@ const LIST_CLAUSE_RE =
  * Collects a comma-separated item list starting at line `start` in `lines`,
  * given that the first item is `firstItemText` at column `kwWidth`.
  *
+ * Tracks parenthesis depth so that a function call whose arguments are spread
+ * across multiple lines by sql-formatter (e.g. `STUFF(` on one line, `(` on
+ * the next) is treated as a single multi-line item rather than separate items.
+ * Subsequent SELECT items after the closing paren are collected normally.
+ *
  * Returns { items, nextIndex }.
  */
 function collectItems(
@@ -57,6 +88,10 @@ function collectItems(
     items.push({ expression: fExpr, comment: fComment });
 
     let i = start;
+    // Track net open parentheses from the last collected item.
+    // When > 0, the next lines at kwWidth belong to that item (they are inside
+    // the open function call) rather than being new SELECT list items.
+    let openDepth = computeNetParens(fExpr);
 
     // A comment-bearing first item may have its comma on the very next line
     if (!firstHasTrailing && i < lines.length && STANDALONE_COMMA_RE.test(lines[i])) {
@@ -75,8 +110,31 @@ function collectItems(
             continue;
         }
 
-        // Must be a continuation line (exactly kwWidth leading spaces)
+        // Must start with at least kwWidth spaces
         if (!contLine.startsWith(continuationPrefix)) break;
+
+        if (openDepth > 0) {
+            // We are inside an open parenthesis from the last item.
+            // Consume this line as a continuation of that item regardless of
+            // whether it is at kwWidth or deeper indentation.
+            const lineDepth = computeNetParens(contLine);
+            const newDepth = openDepth + lineDepth;
+            const lastItem = items[items.length - 1];
+
+            if (newDepth <= 0) {
+                // This line closes the outermost paren — strip the trailing
+                // SELECT-list comma (the item separator) but keep the rest.
+                lastItem.expression += '\n' + contLine.replace(/,\s*$/, '');
+                openDepth = 0;
+            } else {
+                lastItem.expression += '\n' + contLine;
+                openDepth = newDepth;
+            }
+            i++;
+            continue;
+        }
+
+        // openDepth === 0: normal new-item collection.
         // Guard: an extra space beyond kwWidth means this is a deeper-indented
         // line (e.g. a sub-expression) — stop collecting to avoid corruption
         const afterPrefix = contLine.charAt(kwWidth);
@@ -87,6 +145,7 @@ function collectItems(
         const expr = hasTrailing ? rawExpr.trimEnd().slice(0, -1).trimEnd() : rawExpr.trimEnd();
         items.push({ expression: expr, comment });
         i++;
+        openDepth = computeNetParens(expr);
 
         // Consume a standalone comma line that follows this item
         if (!hasTrailing && i < lines.length && STANDALONE_COMMA_RE.test(lines[i])) {

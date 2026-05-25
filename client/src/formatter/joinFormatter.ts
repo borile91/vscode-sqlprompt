@@ -166,8 +166,8 @@ function inferKeywordColumnWidth(lines: string[]): number {
  */
 function getLocalKwColWidth(lines: string[], joinIdx: number): number {
     for (let i = joinIdx - 1; i >= 0; i--) {
-        const m = lines[i].match(/^(FROM|SELECT)(\s+)\S/i);
-        if (m) return m[1].length + m[2].length;
+        const m = lines[i].match(/^(\s*)(FROM|SELECT)(\s+)\S/i);
+        if (m) return m[1].length + m[2].length + m[3].length;
     }
     return inferKeywordColumnWidth(lines);
 }

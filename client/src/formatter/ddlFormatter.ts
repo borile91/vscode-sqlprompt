@@ -523,6 +523,107 @@ function splitParamList(s: string): string[] {
 }
 
 /**
+ * Finds the index of the `)` that closes the already-open parenthesis,
+ * starting with depth = 1. Handles line comments (`--`) and single-quoted
+ * string literals.  Returns -1 if not found.
+ */
+function findMatchingCloseFromOpen(text: string): number {
+    let depth = 1;
+    let inLineComment = false;
+
+    for (let i = 0; i < text.length; i++) {
+        const ch = text[i];
+
+        if (inLineComment) {
+            if (ch === '\n') inLineComment = false;
+            continue;
+        }
+        if (ch === '-' && text[i + 1] === '-') {
+            inLineComment = true;
+            i++;
+            continue;
+        }
+        if (ch === "'") {
+            i++;
+            while (i < text.length) {
+                if (text[i] === "'" && text[i + 1] === "'") { i += 2; continue; }
+                if (text[i] === "'") break;
+                i++;
+            }
+            continue;
+        }
+        if (ch === '(') depth++;
+        else if (ch === ')') {
+            depth--;
+            if (depth === 0) return i;
+        }
+    }
+    return -1;
+}
+
+/**
+ * Emits the normalised form of an inline table-valued function's RETURN body:
+ *
+ *   RETURNS TABLE
+ *   AS
+ *   RETURN (
+ *          <body lines re-indented>
+ *   )
+ *
+ * `startLineIndex` points to the `TABLE AS RETURN (` line in `lines`.
+ * `initialBodyText` is the text that appears after the `(` on that same line
+ * (typically empty when sql-formatter places the body on the next line).
+ *
+ * Returns the new line index (past all consumed lines) on success, or `null`
+ * when the matching `)` cannot be found.
+ */
+function emitInlineTableValuedFunctionReturn(
+    result: string[],
+    lines: string[],
+    startLineIndex: number,
+    lineIndent: string,
+    returnsPrefix: string,
+    initialBodyText: string,
+): number | null {
+    let collected = initialBodyText;
+    let tempI = startLineIndex + 1;
+    let closeIdx = findMatchingCloseFromOpen(collected);
+
+    while (closeIdx === -1 && tempI < lines.length) {
+        collected += '\n' + lines[tempI];
+        tempI++;
+        closeIdx = findMatchingCloseFromOpen(collected);
+    }
+
+    if (closeIdx === -1) return null;
+
+    const body = collected.slice(0, closeIdx);
+    const closeSuffix = collected.slice(closeIdx + 1).trim();
+    const bodyLines = body.split('\n');
+    while (bodyLines.length > 0 && bodyLines[0] === '') bodyLines.shift();
+    while (bodyLines.length > 0 && bodyLines[bodyLines.length - 1] === '') bodyLines.pop();
+
+    const minIndent = bodyLines
+        .filter(l => l.trim().length > 0)
+        .reduce((min, l) => Math.min(min, (l.match(/^ */) ?? [''])[0].length), Infinity);
+    const baseIndent = Number.isFinite(minIndent) ? minIndent : 0;
+    const continuationIndent = lineIndent + ' '.repeat('RETURN '.length);
+
+    result.push(lineIndent + returnsPrefix + ' TABLE');
+    result.push(lineIndent + 'AS');
+    result.push(lineIndent + 'RETURN (');
+    for (const bodyLine of bodyLines) {
+        if (bodyLine.trim().length === 0) {
+            result.push('');
+        } else {
+            result.push(continuationIndent + bodyLine.slice(baseIndent));
+        }
+    }
+    result.push(lineIndent + ')' + (closeSuffix ? closeSuffix : ''));
+    return tempI;
+}
+
+/**
  * Post-processes sql-formatter output to reformat CREATE PROCEDURE / FUNCTION
  * parameter lists when `ddl.placeFirstProcedureParameterOnNewLine === "always"`:
  *
@@ -631,6 +732,22 @@ export function applyDdlProcFormatting(
             result.push(currentPackLine + ')');
 
             // Handle afterClose (e.g. "RETURNS @tmp" or "AS")
+            // Inline TVF: sql-formatter emits bare "RETURNS" on the closing-paren
+            // line and "TABLE AS RETURN (" on the next line.
+            const bareReturnsMatch2 = afterClose.match(/^RETURNS$/i);
+            if (bareReturnsMatch2 && tempI < lines.length) {
+                const tvfLine2 = lines[tempI];
+                const inlineTvfMatch2 = tvfLine2.match(/^([ \t]*)TABLE\s+AS\s+RETURN\s*\((.*)$/i);
+                if (inlineTvfMatch2) {
+                    const nextIndex = emitInlineTableValuedFunctionReturn(
+                        result, lines, tempI, lineIndent, bareReturnsMatch2[0], inlineTvfMatch2[2],
+                    );
+                    if (nextIndex !== null) {
+                        i = nextIndex;
+                        continue;
+                    }
+                }
+            }
             const returnsOnlyMatch2 = afterClose.match(/^(RETURNS\s+\S+)$/i);
             if (returnsOnlyMatch2 && tempI < lines.length) {
                 // TABLE-valued function: collect multi-line TABLE (columns) block
@@ -792,6 +909,23 @@ export function applyDdlProcFormatting(
                 tempI++;
                 i = tempI;
                 continue;
+            }
+        }
+
+        // Inline TVF: sql-formatter emits bare "RETURNS" on the closing-paren
+        // line and "TABLE AS RETURN (" on the next line.
+        const bareReturnsMatch = afterClose.match(/^RETURNS$/i);
+        if (bareReturnsMatch && tempI < lines.length) {
+            const tvfLine = lines[tempI];
+            const inlineTvfMatch = tvfLine.match(/^([ \t]*)TABLE\s+AS\s+RETURN\s*\((.*)$/i);
+            if (inlineTvfMatch) {
+                const nextIndex = emitInlineTableValuedFunctionReturn(
+                    result, lines, tempI, lineIndent, bareReturnsMatch[0], inlineTvfMatch[2],
+                );
+                if (nextIndex !== null) {
+                    i = nextIndex;
+                    continue;
+                }
             }
         }
 
