@@ -21,6 +21,7 @@ import { applyJoinOnFormatting, applyOuterApplyInlineFormat } from '../joinForma
 import { applyControlFlowIndentation, removeBlankLinesBeforeEnd } from '../controlFlowFormatter.js';
 import { applySemicolonFormatting } from '../semicolonFormatter.js';
 import { applyExecParamFormatting } from '../execFormatter.js';
+import { applyStuffForXmlFormatting } from '../stuffFormatter.js';
 
 // Same pipeline as SqlFormattingProvider.provideDocumentFormattingEdits
 function formatSql(text: string, options: SqlPromptStyleJson): string {    const tabWidth = options.whitespace?.numberOfSpacesInTabs ?? 4;
@@ -60,6 +61,7 @@ function formatSql(text: string, options: SqlPromptStyleJson): string {    const
     formatted = applyDdlParameterlessProcAsFormatting(formatted, options);
     formatted = applyDdlViewFormatting(formatted, options);
     formatted = applyDdlTableFormatting(formatted, options);
+    formatted = applyStuffForXmlFormatting(formatted, options);
     formatted = applyLeadingCommaFormat(formatted, options);
     formatted = collapseCaseToSingleLine(formatted, options);
     // For non-leading-comma styles (placeSubsequentItemsOnNewLines === 'never'),
@@ -155,7 +157,11 @@ function formatSql(text: string, options: SqlPromptStyleJson): string {    const
             },
         );
     }
-    formatted = applyOuterApplyInlineFormat(formatted, spacesInside);
+    formatted = applyOuterApplyInlineFormat(
+        formatted,
+        spacesInside,
+        options.lists?.placeCommasBeforeItems === true,
+    );
     // For scripting styles, greedily repack EXEC/EXECUTE named parameters onto
     // lines within wrapLinesLongerThan. sql-formatter puts each @param on its
     // own line at col 0; we join them and repack at maxLen.

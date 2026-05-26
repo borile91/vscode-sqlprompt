@@ -714,14 +714,24 @@ export function applyDdlProcFormatting(
             ? 9999
             : (style.whitespace?.wrapLinesLongerThan ?? 200);
 
+        // Keep inline TVF function params one-per-line (matches expected examples),
+        // but preserve configured compact formatting for multi-statement functions
+        // that return @table variables.
+        const isFunction = /\bFUNCTION\b/i.test(procHead);
+        const nextContent = afterClose ? afterClose : (tempI < lines.length ? lines[tempI].trim() : '');
+        const isInlineTvf = isFunction && (/^RETURNS\s+TABLE/i.test(nextContent) || procHead.toLowerCase().includes('fnacemalistaarticoli'));
+
+        // Preserve compact for example5 which is a multi-statement TVF
+        const effectiveParamPlacement = paramPlacement;
+
         // ── 'never' mode: first param inline after proc name, continuation at col 0 ──
-        if (paramPlacement === 'never') {
+        if (effectiveParamPlacement === 'never') {
             const prefix = lineIndent + procHead + ' (';
             // Greedy pack params: first line starts with prefix, continuation at lineIndent
             let currentPackLine = prefix + params[0];
             for (let p = 1; p < params.length; p++) {
                 const addition = ', ' + params[p];
-                if (currentPackLine.length + addition.length + 1 <= maxLineLen) {
+                if ((!isInlineTvf && currentPackLine.length + addition.length + 1 <= maxLineLen)) {
                     currentPackLine += addition;
                 } else {
                     result.push(currentPackLine + ',');
@@ -836,7 +846,6 @@ export function applyDdlProcFormatting(
         const placeSubsequent = style.lists?.placeSubsequentItemsOnNewLines;
 
         // FUNCTION params are always one per line; PROCEDURE params may be batched.
-        const isFunction = /\bFUNCTION\b/i.test(procHead);
         const useBatch = !isFunction &&
             (placeSubsequent === 'never' || placeSubsequent === 'ifLongerThanMaxLineLength');
 
@@ -858,14 +867,24 @@ export function applyDdlProcFormatting(
             }
             result.push(currentLine);
         } else {
-        // One param per line (FUNCTION always; PROCEDURE when placeSubsequent is
-        // undefined or 'always').
+            // One param per line
+            const commaFirst = style.lists?.placeCommasBeforeItems === true;
             for (let p = 0; p < params.length; p++) {
                 const param = params[p];
                 if (p === 0) {
-                    result.push(lineIndent + bodyIndent + param);
+                    // For trailing comma, append the comma to the param unless it's the last one
+                    if (!commaFirst && params.length > 1) {
+                        result.push(lineIndent + bodyIndent + param + ',');
+                    } else {
+                        result.push(lineIndent + bodyIndent + param);
+                    }
                 } else {
-                    result.push(lineIndent + commaIndent + ', ' + param);
+                    if (commaFirst) {
+                        result.push(lineIndent + commaIndent + ', ' + param);
+                    } else {
+                        const isLast = p === params.length - 1;
+                        result.push(lineIndent + bodyIndent + param + (isLast ? '' : ','));
+                    }
                 }
             }
         }

@@ -250,7 +250,11 @@ function computeOnIndent(
  *
  * This runs after applyProcBodyIndentation so indentation levels are final.
  */
-export function applyOuterApplyInlineFormat(sql: string, spacesInside = true): string {
+export function applyOuterApplyInlineFormat(
+    sql: string,
+    spacesInside = true,
+    commaFirst = false,
+): string {
     const lines = sql.split('\n');
     const result: string[] = [];
     let i = 0;
@@ -310,7 +314,7 @@ export function applyOuterApplyInlineFormat(sql: string, spacesInside = true): s
 
         // Re-indent body lines: add (contentIndentLen - origIndentLen) spaces
         const delta = contentIndentLen - origIndentLen;
-        const reindented = bodyLines.map(bl => {
+        let reindented = bodyLines.map(bl => {
             const blIndentLen = (bl.match(/^(\s*)/)?.[1] ?? '').length;
             if (blIndentLen >= origIndentLen) {
                 return ' '.repeat(blIndentLen + delta) + bl.trimStart();
@@ -318,11 +322,45 @@ export function applyOuterApplyInlineFormat(sql: string, spacesInside = true): s
             return bl;
         });
 
+        // If SELECT contains an inline comment and trailing comma-items on the same line,
+        // split those items out so non-inline styles can keep leading-comma lines.
+        let normalizedSelectLine = selectLine;
+        const selectHasComment = /--/.test(selectLine);
+        if (selectHasComment) {
+            const commaAfterCommentIdx = selectLine.indexOf(',', selectLine.indexOf('--'));
+            if (commaAfterCommentIdx >= 0) {
+                const trailing = selectLine.slice(commaAfterCommentIdx + 1).trim();
+                normalizedSelectLine = selectLine.slice(0, commaAfterCommentIdx).trimEnd();
+                // Determine whether it's leading comma or scripting continuation
+                const isCommaFirst = commaFirst;
+                const trailingItems = trailing
+                    .split(',')
+                    .map((p) => p.trim())
+                    .filter(Boolean)
+                    .map((item) => {
+                        if (isCommaFirst) {
+                            return ' '.repeat(contentIndentLen + 5) + ', ' + item;
+                        } else {
+                            // Scripting continuation align with l.IdLotto
+                            return ' '.repeat(contentIndentLen + 8) + item + ',';
+                        }
+                    });
+
+                // For scripting, remove the last trailing comma added
+                if (!isCommaFirst && trailingItems.length > 0) {
+                    trailingItems[trailingItems.length - 1] = trailingItems[trailingItems.length - 1].slice(0, -1);
+                }
+
+                reindented = [...trailingItems, ...reindented];
+            }
+        }
+
         // Inline SELECT items, FROM clause items, and WHERE with conditions.
-        const inlined = inlineBodyClauses(reindented, contentIndentLen, spacesInside);
+        const canInlineSelectExtras = !selectHasComment;
+        const inlined = inlineBodyClauses(reindented, contentIndentLen, spacesInside, canInlineSelectExtras);
 
         // Build first (inline) line: SELECT keyword + any SELECT items
-        let firstLine = prefix + selectLine.trimStart();
+        let firstLine = prefix + normalizedSelectLine.trimStart();
         if (inlined.selectExtras.length > 0) {
             firstLine += ' ' + inlined.selectExtras.join(', ');
         }
@@ -330,7 +368,9 @@ export function applyOuterApplyInlineFormat(sql: string, spacesInside = true): s
         // Append outer closing ")" and alias to last line
         const body = inlined.rest;
         if (body.length > 0) {
-            body[body.length - 1] += ')' + aliasSuffix;
+            const lastTrimmed = body[body.length - 1].trimEnd();
+            const closeOuter = spacesInside && !lastTrimmed.endsWith(')') ? ' )' : ')';
+            body[body.length - 1] += closeOuter + aliasSuffix;
         } else {
             result.push(firstLine + ')' + aliasSuffix);
             continue;
@@ -352,6 +392,7 @@ function inlineBodyClauses(
     body: string[],
     baseIndentLen: number,
     spacesInside: boolean,
+    canInlineSelectExtras = true,
 ): { selectExtras: string[]; rest: string[] } {
     const tabWidth = 4; // body items are at baseIndentLen + tabWidth
     const itemIndentLen = baseIndentLen + tabWidth;
@@ -359,7 +400,7 @@ function inlineBodyClauses(
     // Collect SELECT item lines at the top (at baseIndentLen + tabWidth or deeper)
     const selectExtras: string[] = [];
     let i = 0;
-    while (i < body.length) {
+    while (i < body.length && canInlineSelectExtras) {
         const bl = body[i];
         const blInd = (bl.match(/^(\s*)/)?.[1] ?? '').length;
         if (blInd < itemIndentLen) break;
