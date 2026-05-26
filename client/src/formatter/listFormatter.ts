@@ -102,21 +102,19 @@ function collectItems(
     while (i < lines.length) {
         const contLine = lines[i];
 
-        if (CLAUSE_RE.test(contLine)) break;
-
-        // Standalone comma: belongs to the previous item, skip
+        // Standalone comma: belongs to the previous item, skip (always, even
+        // when openDepth > 0, e.g. comment-bearing items in a function call).
         if (STANDALONE_COMMA_RE.test(contLine)) {
             i++;
             continue;
         }
 
-        // Must start with at least kwWidth spaces
-        if (!contLine.startsWith(continuationPrefix)) break;
-
         if (openDepth > 0) {
             // We are inside an open parenthesis from the last item.
             // Consume this line as a continuation of that item regardless of
-            // whether it is at kwWidth or deeper indentation.
+            // clause keywords and indentation level — sub-clauses like FROM,
+            // WHERE inside a subquery argument are not top-level list
+            // terminators.
             const lineDepth = computeNetParens(contLine);
             const newDepth = openDepth + lineDepth;
             const lastItem = items[items.length - 1];
@@ -135,6 +133,11 @@ function collectItems(
         }
 
         // openDepth === 0: normal new-item collection.
+        if (CLAUSE_RE.test(contLine)) break;
+
+        // Must start with at least kwWidth spaces
+        if (!contLine.startsWith(continuationPrefix)) break;
+
         // Guard: an extra space beyond kwWidth means this is a deeper-indented
         // line (e.g. a sub-expression) — stop collecting to avoid corruption
         const afterPrefix = contLine.charAt(kwWidth);

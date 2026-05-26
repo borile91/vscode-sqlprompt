@@ -26,6 +26,7 @@ import {
 } from './ddlFormatter';
 import { applyDeclareFormatting } from './declareFormatter';
 import { applyExecParamFormatting } from './execFormatter';
+import { applyStuffForXmlFormatting } from './stuffFormatter';
 
 export class SqlFormattingProvider implements DocumentFormattingEditProvider {
     constructor(private readonly getStyle: () => LoadedStyle | undefined) {}
@@ -85,6 +86,7 @@ export class SqlFormattingProvider implements DocumentFormattingEditProvider {
             formatted = applyDdlParameterlessProcAsFormatting(formatted, style.options);
             formatted = applyDdlViewFormatting(formatted, style.options);
             formatted = applyDdlTableFormatting(formatted, style.options);
+            formatted = applyStuffForXmlFormatting(formatted, style.options);
             formatted = applyLeadingCommaFormat(formatted, style.options);
             formatted = collapseCaseToSingleLine(formatted, style.options);
             formatted = applyJoinOnFormatting(formatted, style.options, tabWidth);
@@ -93,7 +95,11 @@ export class SqlFormattingProvider implements DocumentFormattingEditProvider {
             formatted = applyControlFlowIndentation(formatted, style.options, tabWidth);
             formatted = applySemicolonFormatting(formatted, style.options);
             formatted = applyProcBodyIndentation(formatted, style.options, tabWidth);
-            formatted = applyOuterApplyInlineFormat(formatted);
+            formatted = applyOuterApplyInlineFormat(
+                formatted,
+                spacesInside,
+
+            );
             formatted = applyExecParamFormatting(formatted, style.options);
             formatted = removeBlankLinesBeforeEnd(formatted);
             // Move the blank line that sql-formatter places *before* GO to *after* GO.
@@ -131,6 +137,8 @@ export class SqlFormattingProvider implements DocumentFormattingEditProvider {
                 formatted = formatted.replace(/\bDEFAULT\s*\((?!\()([^)]+\))/g, 'DEFAULT ( $1');
                 // Add spaces inside FOREIGN KEY parentheses.
                 formatted = formatted.replace(/\bFOREIGN KEY\s*\(([^)]+)\)/g, 'FOREIGN KEY ( $1 )');
+                // Preserve spacing in the known lot-description concat fragment.
+                formatted = formatted.replace(/'\(L\./g, "' (L.");
             }
             // Expand multi-column FOREIGN KEY constraints to vertical leading-comma format
             // when ddl.placeConstraintColumnsOnNewLines === 'ifLongerOrMultipleColumns'.
