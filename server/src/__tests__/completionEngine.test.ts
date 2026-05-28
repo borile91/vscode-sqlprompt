@@ -359,3 +359,91 @@ describe('completionEngine — bracket-quoting for stored procedure names', () =
     );
   });
 });
+
+// ── db.schema. qualified completions (bug: schema name was doubled) ───────────
+
+const crossDbTables: TableInfo[] = [
+  {
+    schema: 'imp',
+    name: 'Tabella',
+    database: 'DB',
+    columns: [
+      { name: 'Id', dataType: 'int', maxLength: null, isNullable: false, isPrimaryKey: true },
+    ],
+    foreignKeys: [],
+  },
+  {
+    schema: 'dbo',
+    name: 'LocalTable',
+    columns: [
+      { name: 'Id', dataType: 'int', maxLength: null, isNullable: false, isPrimaryKey: true },
+    ],
+    foreignKeys: [],
+  },
+];
+
+function getCrossDbItems(sql: string) {
+  const document = TextDocument.create('file:///test.sql', 'sql', 1, sql);
+  const position = document.positionAt(sql.length);
+  const context = resolveContext(sql, 0, sql.length, crossDbTables);
+  return buildCompletions(
+    context,
+    crossDbTables,
+    emptyRoutines,
+    document,
+    position,
+    { text: sql, start: 0, end: sql.length, cursorOffset: sql.length },
+    ['DB'],
+  );
+}
+
+describe('completionEngine — db.schema. qualified completions', () => {
+  it('after DB.imp. (dot) inserts only table name, not schema.table', () => {
+    const items = getCrossDbItems('SELECT * FROM DB.imp.');
+    const table = items.find((i) => i.label === 'Tabella');
+    assert.ok(table, 'Expected Tabella in completion list after DB.imp.');
+    const newText = typeof table?.textEdit === 'object' ? (table?.textEdit as any).newText : '';
+    assert.ok(
+      String(newText).startsWith('Tabella'),
+      `Expected insertion to start with "Tabella", got: ${newText}`,
+    );
+    assert.ok(
+      !String(newText).includes('imp.Tabella'),
+      `Schema must not be duplicated — got: ${newText}`,
+    );
+  });
+
+  it('while typing DB.imp.Tab (partial) inserts only table name, not imp.Table', () => {
+    const sql = 'SELECT * FROM DB.imp.Tab';
+    const items = getCrossDbItems(sql);
+    const table = items.find((i) => i.label === 'Tabella');
+    assert.ok(table, 'Expected Tabella in completion list while typing DB.imp.Tab');
+    const newText = typeof table?.textEdit === 'object' ? (table?.textEdit as any).newText : '';
+    assert.ok(
+      String(newText).startsWith('Tabella'),
+      `Expected insertion to start with "Tabella" (no schema prefix), got: ${newText}`,
+    );
+    assert.ok(
+      !String(newText).includes('imp.'),
+      `Schema must not appear in insertion — got: ${newText}`,
+    );
+  });
+
+  it('while typing dbo.Local (single-level schema) still works correctly', () => {
+    const items = getCrossDbItems('SELECT * FROM dbo.Local');
+    const table = items.find((i) => i.label === 'LocalTable');
+    assert.ok(table, 'Expected LocalTable in completion list for dbo.Local');
+    const newText = typeof table?.textEdit === 'object' ? (table?.textEdit as any).newText : '';
+    assert.ok(
+      String(newText).startsWith('LocalTable'),
+      `Expected plain table name insertion, got: ${newText}`,
+    );
+  });
+
+  it('tables from a different database are excluded when db qualifier is present', () => {
+    // LocalTable has no database tag, so it should not appear when asking for DB.imp.
+    const items = getCrossDbItems('SELECT * FROM DB.imp.Tab');
+    const localTable = items.find((i) => i.label === 'LocalTable');
+    assert.equal(localTable, undefined, 'LocalTable must not appear in DB.imp. completions');
+  });
+});
