@@ -183,13 +183,12 @@ export function buildCompletions(
         tables.forEach((table, idx) => {
           const alias = generateAlias(table.name, new Set(usedAliases));
           const fullName = `${table.schema}.${table.name}`;
-          const quotedFullName = `${quoteIdentifier(table.schema)}.${quoteIdentifier(table.name)}`;
           items.push({
             label: fullName,
             kind: CompletionItemKind.Class,
             detail: `Table (${table.schema}) — alias: ${alias}`,
             filterText: fullName,
-            textEdit: TextEdit.replace(replaceRange, `${quotedFullName} AS ${alias}`),
+            textEdit: TextEdit.replace(replaceRange, `${fullName} AS ${alias}`),
             insertTextFormat: InsertTextFormat.PlainText,
             sortText: `01_table_${table.name}`,
             data: { type: 'table', index: idx },
@@ -199,7 +198,6 @@ export function buildCompletions(
         routines.tableValuedFunctions.forEach((fn) => {
           const alias = generateAlias(fn.name, new Set(usedAliases));
           const fullName = `${fn.schema}.${fn.name}`;
-          const quotedFullName = `${quoteIdentifier(fn.schema)}.${quoteIdentifier(fn.name)}`;
           items.push({
             label: fullName,
             kind: CompletionItemKind.Function,
@@ -207,7 +205,7 @@ export function buildCompletions(
             filterText: fullName,
             textEdit: TextEdit.replace(
               replaceRange,
-              `${buildFunctionCallText(quotedFullName, fn.parameters)} AS ${alias}`,
+              `${buildFunctionCallText(fullName, fn.parameters)} AS ${alias}`,
             ),
             insertTextFormat: InsertTextFormat.Snippet,
             sortText: `02_tvf_${fn.name}`,
@@ -317,13 +315,12 @@ export function buildCompletions(
         if (tables.length > 0) {
           tables.forEach((table, idx) => {
             const fullName = `${table.schema}.${table.name}`;
-            const quotedFullName = `${quoteIdentifier(table.schema)}.${quoteIdentifier(table.name)}`;
             items.push({
               label: fullName,
               kind: CompletionItemKind.Class,
               detail: `Table (${table.columns.length} columns)`,
               filterText: fullName,
-              insertText: quotedFullName,
+              insertText: fullName,
               insertTextFormat: InsertTextFormat.PlainText,
               sortText: `01_table_${table.name}`,
               data: { type: 'table', index: idx },
@@ -580,13 +577,12 @@ function buildDotCompletions(
       const tableItems = tablesForDb.map((table) => {
         const alias = generateAlias(table.name, new Set(usedAliases));
         const fullName = `${table.schema}.${table.name}`;
-        const quotedFullName = `${quoteIdentifier(table.schema)}.${quoteIdentifier(table.name)}`;
         return {
           label: fullName,
           kind: CompletionItemKind.Class,
           detail: `Table (${table.schema}) — alias: ${alias}`,
           filterText: fullName,
-          textEdit: TextEdit.replace(replaceRange, `${quotedFullName} AS ${alias}`),
+          textEdit: TextEdit.replace(replaceRange, `${fullName} AS ${alias}`),
           insertTextFormat: InsertTextFormat.PlainText,
           sortText: `02_table_${table.schema}_${table.name}`,
         };
@@ -939,13 +935,12 @@ const BINARY_TYPES = new Set(['binary', 'varbinary', 'image', 'rowversion', 'tim
 function buildScalarFunctionCompletions(functions: ScalarFunctionInfo[]): CompletionItem[] {
   return functions.map((fn) => {
     const fullName = `${fn.schema}.${fn.name}`;
-    const quotedFullName = `${quoteIdentifier(fn.schema)}.${quoteIdentifier(fn.name)}`;
     return {
       label: fullName,
       kind: CompletionItemKind.Function,
       detail: 'Scalar function',
       filterText: `${fn.name} ${fullName}`,
-      insertText: buildFunctionCallText(quotedFullName, fn.parameters),
+      insertText: buildFunctionCallText(fullName, fn.parameters),
       insertTextFormat: InsertTextFormat.Snippet,
       sortText: `03_scalar_${fn.schema}_${fn.name}`,
     };

@@ -13,6 +13,8 @@ import {
     Range,
     EventEmitter,
     TextDocumentContentProvider,
+    StatusBarAlignment,
+    StatusBarItem,
     ProgressLocation,
 } from "vscode";
 
@@ -23,6 +25,9 @@ import {
     ServerOptions,
     TransportKind,
 } from "vscode-languageclient/node";
+
+import { loadStylesFromFolder, LoadedStyle } from './formatter/styleLoader';
+import { SqlFormattingProvider } from './formatter/sqlFormattingProvider';
 
 let client: LanguageClient | undefined;
 let connectionSyncDebounce: ReturnType<typeof setTimeout> | undefined;
@@ -47,6 +52,10 @@ const schemaSnapshotCache = new Map<
     }
 >();
 const inFlightSchemaSyncs = new Map<string, Promise<boolean>>();
+
+// ── Formatting state ──────────────────────────────────────────────────────────
+let loadedStyles: LoadedStyle[] = [];
+let formatterStatusBarItem: StatusBarItem | undefined;
 
 type ColumnInfo = {
     name: string;
@@ -1247,6 +1256,85 @@ export async function activate(context: ExtensionContext) {
             },
         }),
     );
+
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ── Formatting ────────────────────────────────────────────────────────────
+
+    const initialStylesFolder = workspace
+        .getConfiguration('sqlPrompt.formatting')
+        .get<string>('stylesFolder', '');
+    if (initialStylesFolder) {
+        loadedStyles = await loadStylesFromFolder(initialStylesFolder);
+    }
+
+    function getActiveStyle(): LoadedStyle | undefined {
+        const name = workspace
+            .getConfiguration('sqlPrompt.formatting')
+            .get<string>('activeStyle', '');
+        return loadedStyles.find(s => s.name === name);
+    }
+
+    function updateFormatterStatusBar(): void {
+        if (!formatterStatusBarItem) { return; }
+        const style = getActiveStyle();
+        formatterStatusBarItem.text = style
+            ? `$(symbol-string) ${style.name}`
+            : `$(symbol-string) No SQL style`;
+        formatterStatusBarItem.tooltip = style
+            ? `SQL Prompt: formatting with "${style.name}" — click to change`
+            : 'SQL Prompt: click to select a formatting style';
+    }
+
+    formatterStatusBarItem = window.createStatusBarItem(StatusBarAlignment.Right, 90);
+    formatterStatusBarItem.command = 'sqlPrompt.selectFormattingStyle';
+    context.subscriptions.push(formatterStatusBarItem);
+
+    context.subscriptions.push(
+        languages.registerDocumentFormattingEditProvider(
+            [{ scheme: 'file', language: 'sql' }, { scheme: 'untitled', language: 'sql' }],
+            new SqlFormattingProvider(getActiveStyle),
+        ),
+        commands.registerCommand('sqlPrompt.selectFormattingStyle', async () => {
+            const stylesFolder = workspace
+                .getConfiguration('sqlPrompt.formatting')
+                .get<string>('stylesFolder', '');
+            if (stylesFolder) {
+                loadedStyles = await loadStylesFromFolder(stylesFolder);
+            }
+            if (loadedStyles.length === 0) {
+                window.showWarningMessage(
+                    'SQL Prompt: no style files found. Set sqlPrompt.formatting.stylesFolder to a folder containing .json style files.',
+                );
+                return;
+            }
+            const items = loadedStyles.map(s => ({ label: s.name, description: s.filePath }));
+            const picked = await window.showQuickPick(items, {
+                placeHolder: 'Select a SQL formatting style',
+            });
+            if (!picked) { return; }
+            await workspace.getConfiguration('sqlPrompt.formatting').update(
+                'activeStyle',
+                picked.label,
+                ConfigurationTarget.Workspace,
+            );
+            updateFormatterStatusBar();
+        }),
+        workspace.onDidChangeConfiguration(async (event) => {
+            if (event.affectsConfiguration('sqlPrompt.formatting.stylesFolder')) {
+                const newFolder = workspace
+                    .getConfiguration('sqlPrompt.formatting')
+                    .get<string>('stylesFolder', '');
+                loadedStyles = newFolder ? await loadStylesFromFolder(newFolder) : [];
+                updateFormatterStatusBar();
+            } else if (event.affectsConfiguration('sqlPrompt.formatting.activeStyle')) {
+                updateFormatterStatusBar();
+            }
+        }),
+    );
+
+    updateFormatterStatusBar();
+    formatterStatusBarItem.show();
 
     // ─────────────────────────────────────────────────────────────────────────
 

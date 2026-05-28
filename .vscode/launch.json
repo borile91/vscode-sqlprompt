@@ -7,7 +7,7 @@
             "request": "launch",
             "args": [
                 "--extensionDevelopmentPath=${workspaceFolder}",
-                "${workspaceFolder}/.vscode/sqlprompt-debug.sql"
+                "${workspaceFolder}/.vscode/debug/sqlprompt-debug.code-workspace"
             ],
             "outFiles": [
                 "${workspaceFolder}/client/dist/**/*.js",
