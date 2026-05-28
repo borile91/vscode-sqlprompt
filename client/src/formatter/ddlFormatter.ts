@@ -867,17 +867,14 @@ export function applyDdlProcFormatting(
             }
             result.push(currentLine);
         } else {
-            // One param per line
-            const commaFirst = style.lists?.placeCommasBeforeItems === true;
+            // One param per line.
+            // Default is comma-first; only use trailing commas when explicitly
+            // configured with placeCommasBeforeItems: false.
+            const commaFirst = style.lists?.placeCommasBeforeItems !== false;
             for (let p = 0; p < params.length; p++) {
                 const param = params[p];
                 if (p === 0) {
-                    // For trailing comma, append the comma to the param unless it's the last one
-                    if (!commaFirst && params.length > 1) {
-                        result.push(lineIndent + bodyIndent + param + ',');
-                    } else {
-                        result.push(lineIndent + bodyIndent + param);
-                    }
+                    result.push(lineIndent + bodyIndent + param);
                 } else {
                     if (commaFirst) {
                         result.push(lineIndent + commaIndent + ', ' + param);

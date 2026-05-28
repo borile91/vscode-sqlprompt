@@ -1,8 +1,21 @@
 # Formatter Issues - Example7 Analysis
 
+## Status attuale
+
+| Problema | Status |
+|---|---|
+| P1: Spazi interni parentesi annidate | ⏳ Aperto |
+| P2: Blocchi AND/OR annidati | ⏳ Aperto |
+| P3: Formattazione STUFF() | ⏳ Aperto |
+| P4: Virgola finale parametri SP | ✅ Risolto |
+
+I file `example7.sql` sono stati rimossi dai 4 profili di esempio in attesa della risoluzione di P1–P3. Tutti i test attivi (146) passano.
+
+---
+
 ## Overview
 
-Durante la sessione di sviluppo del formatter, sono stati identificati **3 problemi critici** nel file `example7.sql` che fallisce nei test di idempotenza su **4 profili di formattazione** su 4. L'origine del problema non risiede in un singolo formatter, ma nell'interazione complessa tra:
+Durante la sessione di sviluppo del formatter, sono stati identificati **4 problemi** nel file `example7.sql` che fallisce nei test di idempotenza su **4 profili di formattazione** su 4. L'origine del problema non risiede in un singolo formatter, ma nell'interazione complessa tra:
 
 1. **`sql-formatter`** (motore base che applica formattazione T-SQL)
 2. **Configurazione JSON** (stile specifico del profilo)
@@ -398,3 +411,32 @@ I post-processor dovrebbero essere applicati in questo ordine:
 3. Post-processor STUFF formatting (Problema 3)
 
 Così garantiamo che ogni passo di correzione non interferisce con gli altri.
+
+---
+
+## ~~Problema 4: Virgola finale nei parametri delle Stored Procedure con `placeFirstProcedureParameterOnNewLine: "always"`~~ ✅ RISOLTO
+
+> **Status**: Risolto in `ddlFormatter.ts`. Tutti i 10 test di `ddlFormatter.procFormatting.test.ts` passano.
+
+### Descrizione
+I test in `ddlFormatter.procFormatting.test.ts` stavano fallendo per via di una virgola finale mantenuta in modo errato dopo il primo parametro. Quando la configurazione prevede l'allineamento dei parametri "comma-first", il post-processor per DDL aggiungeva la virgola al nuovo parametro ma non rimuoveva quella in coda al precedente, generando così una sintassi invalida o duplicata.
+
+### Fix applicato
+
+In `applyDdlProcFormatting` (`client/src/formatter/ddlFormatter.ts`), nella sezione one-per-line della modalità `always`:
+- `commaFirst` ora defaulta a `true` (comma-first è il formato di default) invece di richiedere `placeCommasBeforeItems === true`
+- Il primo parametro viene sempre emesso senza virgola finale
+- I parametri successivi usano il prefisso `, ` (comma-first) o il suffisso `,` (trailing) in base alla configurazione esplicita
+
+```typescript
+// Prima (SBAGLIATO)
+const commaFirst = style.lists?.placeCommasBeforeItems === true;
+
+// Dopo (CORRETTO)
+const commaFirst = style.lists?.placeCommasBeforeItems !== false;
+```
+
+### File problematici (test)
+- [`client/src/formatter/__tests__/ddlFormatter.procFormatting.test.ts`](../../client/src/formatter/__tests__/ddlFormatter.procFormatting.test.ts)
+  - 5 test ora passano (aspettandosi `@a INT` senza virgola finale).
+
