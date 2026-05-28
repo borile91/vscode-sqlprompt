@@ -142,10 +142,15 @@ export function buildCompletions(
       items.push(...buildSnippetCompletions(context.clause, position));
       const schemaMatch = SCHEMA_DOT_PATTERN.exec(lineText);
       if (schemaMatch) {
-        const schemaName = schemaMatch[1];
+        const dbName = schemaMatch[1]?.toLowerCase();   // undefined when no db qualifier
+        const schemaName = schemaMatch[2];
         const replaceRange = replaceRangeWordOnly(lineText, position);
         tables
-          .filter((t) => t.schema.toLowerCase() === schemaName.toLowerCase())
+          .filter(
+            (t) =>
+              t.schema.toLowerCase() === schemaName.toLowerCase() &&
+              (dbName === undefined || (t.database ?? '').toLowerCase() === dbName),
+          )
           .forEach((table) => {
             // Pass a copy so that sibling items don't affect each other.
             const alias = generateAlias(table.name, new Set(usedAliases));
@@ -1223,9 +1228,13 @@ function replaceRangeWordOnly(lineText: string, position: Position): Range {
   return Range.create(position.line, start, position.line, end);
 }
 
-/** Regex: `FROM schema.` or `JOIN schema.` — schema-qualified table context. */
+/**
+ * Regex: `FROM [db.]schema.` or `JOIN [db.]schema.` — schema-qualified table context.
+ * Group 1: optional database qualifier (e.g. `DB` in `FROM DB.imp.Tab`).
+ * Group 2: schema name (e.g. `imp`).
+ */
 const SCHEMA_DOT_PATTERN =
-  /\b(?:FROM|JOIN|INNER\s+JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|CROSS\s+JOIN|LEFT\s+OUTER\s+JOIN|RIGHT\s+OUTER\s+JOIN|FULL\s+JOIN|FULL\s+OUTER\s+JOIN|APPLY|OUTER\s+APPLY|CROSS\s+APPLY)\s+(\w+)\.\s*\w*$/i;
+  /\b(?:FROM|JOIN|INNER\s+JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|CROSS\s+JOIN|LEFT\s+OUTER\s+JOIN|RIGHT\s+OUTER\s+JOIN|FULL\s+JOIN|FULL\s+OUTER\s+JOIN|APPLY|OUTER\s+APPLY|CROSS\s+APPLY)\s+(?:(\w+)\.)?(\w+)\.\s*\w*$/i;
 
 function buildDatabaseCompletions(
   databases: string[],
