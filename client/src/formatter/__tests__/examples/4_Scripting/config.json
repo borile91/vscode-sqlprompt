@@ -1,0 +1,100 @@
+{
+  "metadata": {
+    "id": "ccfd7faf-1c3a-4777-a0aa-462476296795",
+    "name": "Scripting"
+  },
+  "whitespace": {
+    "wrapLinesLongerThan": 160,
+    "newLines": {
+      "emptyLinesBetweenStatements": 0,
+      "emptyLinesAfterBatchSeparator": 0
+    }
+  },
+  "lists": {
+    "placeSubsequentItemsOnNewLines": "never",
+    "alignSubsequentItemsWithFirstItem": false,
+    "alignItemsAcrossClauses": false
+  },
+  "parentheses": {
+    "collapseShortParenthesisContents": true,
+    "collapseParenthesesShorterThan": 160
+  },
+  "casing": {
+    "reservedKeywords": "uppercase",
+    "builtInFunctions": "uppercase",
+    "builtInDataTypes": "uppercase",
+    "useObjectDefinitionCase": true
+  },
+  "dml": {
+    "collapseShortStatements": true,
+    "collapseStatementsShorterThan": 78,
+    "collapseShortSubqueries": true,
+    "collapseSubqueriesShorterThan": 78,
+    "listItems": {
+      "placeGroupByAndOrderByOnNewLine": "ifMultiple"
+    }
+  },
+  "ddl": {
+    "placeFirstProcedureParameterOnNewLine": "never",
+    "collapseShortStatements": true,
+    "collapseStatementsShorterThan": 100
+  },
+  "controlFlow": {
+    "indentBeginAndEndKeywords": true,
+    "collapseShortStatements": true,
+    "collapseStatementsShorterThan": 78
+  },
+  "cte": {
+    "placeAsOnNewLine": false
+  },
+  "variables": {
+    "alignDataTypesAndValues": false,
+    "placeAssignedValueOnNewLineIfLongerThanMaxLineLength": false,
+    "placeEqualsSignOnNewLine": true
+  },
+  "joinStatements": {
+    "join": {
+      "keywordAlignment": "toTable",
+      "indentJoinTable": false
+    },
+    "on": {
+      "placeOnNewLine": false,
+      "keywordAlignment": "indented",
+      "conditionAlignment": "toInner"
+    }
+  },
+  "insertStatements": {
+    "columns": {
+      "parenthesisStyle": "expandedSplit",
+      "placeSubsequentColumnsOnNewLines": "never"
+    },
+    "values": {
+      "parenthesisStyle": "compactSimple"
+    }
+  },
+  "functionCalls": {
+    "placeArgumentsOnNewLines": "never"
+  },
+  "caseExpressions": {
+    "placeExpressionOnNewLine": false,
+    "placeFirstWhenOnNewLine": "never",
+    "whenAlignment": "toCase",
+    "placeElseOnNewLine": false,
+    "placeEndOnNewLine": false,
+    "collapseShortCaseExpressions": true,
+    "collapseCaseExpressionsShorterThan": 75
+  },
+  "operators": {
+    "andOr": {
+      "placeOnNewLine": "ifLongerThanMaxLineLength",
+      "alignment": "toFirstListItem"
+    },
+    "between": {
+      "placeOnNewLine": false
+    },
+    "in": {
+      "placeFirstValueOnNewLine": "never",
+      "placeSubsequentValuesOnNewLines": "never"
+    }
+  }
+}

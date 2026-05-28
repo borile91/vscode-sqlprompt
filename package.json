@@ -12,7 +12,8 @@
         "vscode": "^1.75.0"
     },
     "categories": [
-        "Programming Languages"
+        "Programming Languages",
+        "Formatters"
     ],
     "extensionDependencies": [
         "ms-mssql.mssql"
@@ -54,6 +55,18 @@
                     "type": "boolean",
                     "default": true,
                     "description": "When connected, automatically disable the mssql extension's IntelliSense so that SQL Prompt completions appear exclusively. Connection features (Script As, Alter Procedure, etc.) are unaffected. Set to false to let both providers coexist."
+                },
+                "sqlPrompt.formatting.stylesFolder": {
+                    "scope": "resource",
+                    "type": "string",
+                    "default": "",
+                    "description": "Absolute path to the folder containing SQL Prompt style files (.json). All .json files in the folder are loaded as formatting profiles."
+                },
+                "sqlPrompt.formatting.activeStyle": {
+                    "scope": "resource",
+                    "type": "string",
+                    "default": "",
+                    "description": "Name of the active formatting style (the style's metadata.name, or the filename without .json). Set via the 'SQL Prompt: Select Formatting Style' command."
                 }
             }
         },
@@ -69,6 +82,10 @@
             {
                 "command": "sqlPrompt.reloadSchema",
                 "title": "SQL Prompt: Reload Schema"
+            },
+            {
+                "command": "sqlPrompt.selectFormattingStyle",
+                "title": "SQL Prompt: Select Formatting Style"
             }
         ]
     },

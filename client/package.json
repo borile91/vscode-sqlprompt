@@ -1,14 +1,19 @@
 {
-  "name": "sqlprompt-client",
-  "version": "0.1.0",
-  "private": true,
-  "engines": {
-    "vscode": "^1.75.0"
-  },
-  "dependencies": {
-    "vscode-languageclient": "^9.0.1"
-  },
-  "devDependencies": {
-    "@types/vscode": "^1.75.0"
-  }
+    "name": "sqlprompt-client",
+    "version": "0.1.0",
+    "private": true,
+    "engines": {
+        "vscode": "^1.75.0"
+    },
+    "scripts": {
+        "compile": "tsc -b",
+        "test": "tsc -b && node --test out/formatter/__tests__/formatOptionsMapper.test.js out/formatter/__tests__/keywordPaddingFormatter.test.js out/formatter/__tests__/keywordPaddingFormatter.setJoining.test.js out/formatter/__tests__/listFormatter.test.js out/formatter/__tests__/controlFlowFormatter.test.js out/formatter/__tests__/controlFlowFormatter.removeBlankLines.test.js out/formatter/__tests__/semicolonFormatter.test.js out/formatter/__tests__/joinFormatter.test.js out/formatter/__tests__/caseFormatter.test.js out/formatter/__tests__/ddlFormatter.test.js out/formatter/__tests__/ddlFormatter.procFormatting.test.js out/formatter/__tests__/ddlFormatter.procBodyIndentation.test.js out/formatter/__tests__/declareFormatter.test.js out/formatter/__tests__/execFormatter.test.js out/formatter/__tests__/examples.test.js"
+    },
+    "dependencies": {
+        "sql-formatter": "^15.0.0",
+        "vscode-languageclient": "^9.0.1"
+    },
+    "devDependencies": {
+        "@types/vscode": "^1.75.0"
+    }
 }

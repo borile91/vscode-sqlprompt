@@ -7,4 +7,5 @@ server/out/
 *.tsbuildinfo
 .DS_Store
 **/dist/**
-.vscode/sqlprompt-debug.sql
+.vscode/**
+client/src/formatter/__tests__/examples/.vs/**
