@@ -6,7 +6,7 @@
 |---|---|
 | [IMPLEMENTATION.md](IMPLEMENTATION.md) | Feature-by-feature implementation guide with test cases |
 | [configurations/](configurations/) | Per-category option docs with examples |
-| [AllOptions.json](AllOptions.json) | Reference profile listing every supported option |
+| [Defaults.json](Defaults.json) | Reference profile listing every supported option |
 
 ---
 
@@ -56,7 +56,7 @@ Style files are JSON exports from Redgate SQL Prompt (portable `.json` format, n
 }
 ```
 
-See [AllOptions.json](AllOptions.json) for the full set of supported keys.
+See [Defaults.json](Defaults.json) for the full set of supported keys.
 
 ---
 
