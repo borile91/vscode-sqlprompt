@@ -91,7 +91,7 @@ The folder is scanned immediately — no reload required. Every `.json` file in 
 }
 ```
 
-See [docs/formatting/AllOptions.json](docs/formatting/AllOptions.json) for the full set of supported keys, and [docs/formatting/FORMATTING.md](docs/formatting/FORMATTING.md) for the complete option reference.
+See [docs/formatting/Defaults.json](docs/formatting/Defaults.json) for the full set of supported keys, and [docs/formatting/FORMATTING.md](docs/formatting/FORMATTING.md) for the complete option reference.
 
 ## Commands
 
