@@ -43,7 +43,7 @@ describe('findStatementBoundaries — GO separator', () => {
   });
 
   it('does not split on GOTO keyword', () => {
-    const text = '\nGOTO label\nSELECT 1';
+    const text = 'SELECT 1\nGOTO label';
     const bounds = findStatementBoundaries(text);
     assert.equal(bounds.length, 1);
   });
@@ -53,6 +53,104 @@ describe('findStatementBoundaries — GO separator', () => {
     const text = 'SELECT ALGO FROM t';
     const bounds = findStatementBoundaries(text);
     assert.equal(bounds.length, 1);
+  });
+
+  it('splits on an indented GO', () => {
+    const text = 'SELECT 1\n   GO\nSELECT 2';
+    const bounds = findStatementBoundaries(text);
+    assert.equal(bounds.length, 2);
+    assert.equal(text.slice(bounds[1]), 'SELECT 2');
+  });
+});
+
+// ── implicit boundaries (issue #12) ───────────────────────────────────────────
+
+describe('findStatementBoundaries — unterminated statements', () => {
+  it('splits before a line-initial SELECT', () => {
+    const text = 'SELECT * FROM Orders\nSELECT * FROM Customers';
+    const bounds = findStatementBoundaries(text);
+    assert.deepEqual(bounds, [0, text.indexOf('SELECT * FROM Customers')]);
+  });
+
+  it('splits before UPDATE / DELETE / EXEC', () => {
+    const text = 'SELECT 1\nUPDATE t SET a = 1\nDELETE FROM t\nEXEC dbo.Proc';
+    const bounds = findStatementBoundaries(text);
+    assert.deepEqual(bounds, [
+      0,
+      text.indexOf('UPDATE'),
+      text.indexOf('DELETE'),
+      text.indexOf('EXEC'),
+    ]);
+  });
+
+  it('does not split a statement spread over several lines', () => {
+    const text = 'SELECT a, b\nFROM Orders o\nWHERE o.Id = 1';
+    assert.deepEqual(findStatementBoundaries(text), [0]);
+  });
+
+  it('does not split a UNION', () => {
+    const text = 'SELECT a FROM t1\nUNION ALL\nSELECT a FROM t2';
+    assert.deepEqual(findStatementBoundaries(text), [0]);
+  });
+
+  it('does not split INSERT … SELECT', () => {
+    const text = 'INSERT INTO dbo.Target\nSELECT * FROM dbo.Source';
+    assert.deepEqual(findStatementBoundaries(text), [0]);
+  });
+
+  it('does not split INSERT with a column list followed by SELECT', () => {
+    const text = 'INSERT INTO dbo.Target (a, b)\nSELECT a, b FROM dbo.Source';
+    assert.deepEqual(findStatementBoundaries(text), [0]);
+  });
+
+  it('does not split the main query of a CTE', () => {
+    const text = 'WITH c AS (\n  SELECT 1 AS x\n)\nSELECT * FROM c';
+    assert.deepEqual(findStatementBoundaries(text), [0]);
+  });
+
+  it('does not split a subquery', () => {
+    const text = 'SELECT *\nFROM t\nWHERE Id IN (\nSELECT Id FROM u\n)';
+    assert.deepEqual(findStatementBoundaries(text), [0]);
+  });
+
+  it('does not split MERGE actions', () => {
+    const text =
+      'MERGE dbo.T AS t\nUSING dbo.S AS s ON t.Id = s.Id\n' +
+      'WHEN MATCHED THEN\nUPDATE SET t.a = s.a\n' +
+      'WHEN NOT MATCHED THEN\nINSERT (a) VALUES (s.a);';
+    const bounds = findStatementBoundaries(text);
+    assert.deepEqual(bounds, [0, text.length]);
+  });
+
+  it('does not treat a table hint as a CTE preamble', () => {
+    const text = 'SELECT * FROM dbo.T\nWITH (NOLOCK)';
+    assert.deepEqual(findStatementBoundaries(text), [0]);
+  });
+
+  it('does not split inside a string or comment', () => {
+    const text = "SELECT 'x\nSELECT y'\n-- SELECT z\n/*\nSELECT w\n*/";
+    assert.deepEqual(findStatementBoundaries(text), [0]);
+  });
+
+  it('does not add a duplicate boundary after a semicolon', () => {
+    const text = 'SELECT 1;\nSELECT 2';
+    const bounds = findStatementBoundaries(text);
+    // The ';' already opened the new statement — the line-initial SELECT
+    // must not add a second boundary one character later.
+    assert.deepEqual(bounds, [0, text.indexOf(';') + 1]);
+  });
+
+  it('keeps the CREATE PROCEDURE header attached to its body', () => {
+    const text = 'CREATE PROCEDURE dbo.P\nAS\nBEGIN\n  SELECT 1\nEND';
+    assert.deepEqual(findStatementBoundaries(text), [0]);
+  });
+
+  it('scopes completion to the statement under the cursor', () => {
+    const text = 'SELECT * FROM Orders o\nSELECT  FROM Customers c';
+    const cursor = text.indexOf('SELECT  FROM') + 7;
+    const result = extractStatementAtOffset(text, cursor);
+    assert.ok(!result.text.includes('Orders'), `Got: "${result.text}"`);
+    assert.equal(result.start, text.indexOf('SELECT  FROM'));
   });
 });
 
