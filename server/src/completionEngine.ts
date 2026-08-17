@@ -293,6 +293,14 @@ export function buildCompletions(
       break;
     }
 
+    // Inside `VALUES (...)` an expression is expected. Without this branch the
+    // fallback offered every table in the database plus the statement snippets,
+    // so accepting one wrote `VALUES (2, SELECT COUNT(*) FROM )`.
+    case 'values':
+      items.push(...buildScalarFunctionCompletions(routines.scalarFunctions));
+      items.push(...buildValueKeywordCompletions(position));
+      break;
+
     case 'insertColumns':
       // Inside `INSERT INTO t (...)` only bare column names are valid.
       items.push(...buildColumnCompletionsForRefs(refs, false, true));
@@ -541,6 +549,27 @@ function buildTableSourceCompletions(
   });
 
   return items;
+}
+
+/** Literals and functions that make sense as a value inside `VALUES (...)`. */
+function buildValueKeywordCompletions(position: Position): CompletionItem[] {
+  const range = Range.create(position, position);
+  const values: Array<[string, string]> = [
+    ['NULL', 'NULL'],
+    ['DEFAULT', 'DEFAULT'],
+    ['GETDATE()', 'current date and time'],
+    ['SYSDATETIME()', 'current date and time, higher precision'],
+    ['NEWID()', 'new uniqueidentifier'],
+    ['SUSER_SNAME()', 'current login name'],
+  ];
+  return values.map(([text, detail]) => ({
+    label: text,
+    kind: CompletionItemKind.Value,
+    detail,
+    insertTextFormat: InsertTextFormat.PlainText,
+    textEdit: TextEdit.replace(range, text),
+    sortText: `02_value_${text}`,
+  }));
 }
 
 /**

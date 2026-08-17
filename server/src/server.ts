@@ -44,6 +44,21 @@ const loadedDatabaseNames = new Set<string>();
 /** Lowercase database names whose schema load is in progress (to avoid duplicate requests). */
 const loadingDatabaseNames = new Set<string>();
 
+/**
+ * Appends demand-loaded tables, dropping any that is already known.
+ *
+ * The same table can arrive twice — most easily by demand-loading the database
+ * that is already connected — and a duplicate is not harmless: it shows up as a
+ * repeated entry in every completion list.
+ */
+function appendTables(existing: TableInfo[], incoming: TableInfo[]): TableInfo[] {
+  const key = (t: TableInfo) =>
+    `${(t.database ?? '').toLowerCase()}|${t.schema.toLowerCase()}|${t.name.toLowerCase()}`;
+  const known = new Set(existing.map(key));
+  const fresh = incoming.filter((t) => !known.has(key(t)));
+  return fresh.length === incoming.length ? [...existing, ...incoming] : [...existing, ...fresh];
+}
+
 function preloadCrossDatabaseSchemas(currentDatabase: string | undefined): void {
   if (!schemaLoader || databases.length === 0) {
     return;
@@ -68,7 +83,7 @@ function preloadCrossDatabaseSchemas(currentDatabase: string | undefined): void 
 
   void schemaLoader.loadAllDatabaseSchemas(targetDatabases)
     .then((extraTables) => {
-      tables = [...tables, ...extraTables];
+      tables = appendTables(tables, extraTables);
       targetDatabases.forEach((db) => {
         const lower = db.toLowerCase();
         loadingDatabaseNames.delete(lower);
@@ -204,6 +219,17 @@ connection.onRequest(
       tables = sanitizeTableSnapshot(Array.isArray(params?.tables) ? params.tables : []);
       routines = sanitizeRoutineSnapshot(params);
       databases = Array.isArray(params?.databases) ? params.databases.filter((d) => typeof d === 'string' && d.length > 0) : [];
+
+      // A fresh snapshot replaces everything, so the demand-load bookkeeping has
+      // to start over — and the databases this snapshot already covers must be
+      // marked as loaded. Without this, typing the name of the *connected*
+      // database triggered a demand-load that appended its tables a second time,
+      // and every table appeared twice in the completions.
+      loadedDatabaseNames.clear();
+      loadingDatabaseNames.clear();
+      for (const table of tables) {
+        if (table.database) loadedDatabaseNames.add(table.database.toLowerCase());
+      }
       connection.console.info(
         `SQL Prompt: schema updated via connectionSharing snapshot. Loaded ${tables.length} tables, ${routines.scalarFunctions.length} scalar function(s), ${routines.tableValuedFunctions.length} table-valued function(s), ${routines.storedProcedures.length} procedure(s), ${databases.length} database(s).`,
       );
@@ -419,7 +445,7 @@ connection.onCompletion(
           schemaLoader
             .loadSchemaForDatabase(knownDb)
             .then((extraTables) => {
-              tables = [...tables, ...extraTables];
+              tables = appendTables(tables, extraTables);
               loadedDatabaseNames.add(topLower);
               loadingDatabaseNames.delete(topLower);
               connection.console.info(
@@ -447,7 +473,7 @@ connection.onCompletion(
           connection.sendRequest<{ tables: TableInfo[] }>('sqlPrompt/loadCrossDatabaseSchema', { database: knownDb })
             .then((result) => {
               const extraTables = result.tables ?? [];
-              tables = [...tables, ...extraTables];
+              tables = appendTables(tables, extraTables);
               loadingDatabaseNames.delete(topLower);
               // An empty result is not a loaded database: the client answers
               // `{ tables: [] }` both when no editor is active and when the
