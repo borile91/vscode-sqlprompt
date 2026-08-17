@@ -23,6 +23,7 @@ vscode-sqlprompt/
 │       ├── documentTextService.ts
 │       ├── schemaLoader.ts
 │       ├── scopeBuilder.ts
+│       ├── aliasRename.ts
 │       ├── sqlLexer.ts
 │       ├── types.ts
 │       ├── utils.ts
@@ -37,6 +38,7 @@ vscode-sqlprompt/
 - `server/src/schemaLoader.ts`: SQL Server schema loading and refresh logic.
 - `server/src/completionEngine.ts`: completion generation based on context and schema.
 - `server/src/cursorContextResolver.ts`: determines SQL cursor context around current position.
+- `server/src/aliasRename.ts`: finds every occurrence of a table alias inside a statement (rename support).
 
 ## Local development setup
 
