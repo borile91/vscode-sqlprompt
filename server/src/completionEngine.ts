@@ -28,6 +28,7 @@ import { TextDocument } from 'vscode-languageserver-textdocument';
 
 import { QueryContext, VisibleSource } from './types';
 import {
+  ColumnInfo,
   TableInfo,
   RoutineSnapshot,
   RoutineParameterInfo,
@@ -238,6 +239,11 @@ export function buildCompletions(
     // does not allow aliasing it here, so nothing is appended to the name.
     case 'insertTarget':
     case 'updateTarget':
+      // Once the target is written, the useful next step is the column list and
+      // its VALUES, not another table name.
+      if (context.clause === 'insertTarget') {
+        items.push(...buildInsertStatementItems(refs, position));
+      }
       items.push(
         ...buildTableSourceCompletions(context, tables, routines, position, lineText, databases, {
           withAlias: false,
@@ -538,13 +544,103 @@ function buildTableSourceCompletions(
 }
 
 /**
+ * Columns an INSERT may write to: what the server computes for itself can never
+ * appear in the column list.
+ */
+function insertableColumns(columns: ColumnInfo[]): ColumnInfo[] {
+  return columns.filter((c) => !c.isIdentity && !c.isComputed);
+}
+
+/** Columns a valid INSERT has to provide: no default, and NOT NULL. */
+function requiredColumns(columns: ColumnInfo[]): ColumnInfo[] {
+  return insertableColumns(columns).filter((c) => !c.hasDefault && !c.isNullable);
+}
+
+/** `varchar(50)`, `decimal` … as shown next to a column in the preview. */
+function describeType(column: ColumnInfo): string {
+  const type = column.dataType;
+  if (column.maxLength === null || column.maxLength === undefined) return type;
+  if (!/char|binary/i.test(type)) return type;
+  // nchar/nvarchar store two bytes per character; -1 is MAX.
+  if (column.maxLength === -1) return `${type}(max)`;
+  const length = /^n/i.test(type) ? column.maxLength / 2 : column.maxLength;
+  return `${type}(${length})`;
+}
+
+/**
+ * `INSERT INTO t |` → a ready-made column list plus its `VALUES (…)`, with one
+ * tab stop per column so the values can be filled in by tabbing through.
+ *
+ * Two variants are offered: every writable column, and only the ones an INSERT
+ * cannot omit. The second is the one that matters on wide tables — most of the
+ * 103 columns of dbo.ARTICOLI have a default.
+ */
+function buildInsertStatementItems(refs: ResolvedRef[], position: Position): CompletionItem[] {
+  if (refs.length !== 1) return [];
+
+  const table = refs[0].table;
+  const fullName = `${table.schema}.${table.name}`;
+  const writable = insertableColumns(table.columns);
+  if (writable.length === 0) return [];
+  const required = requiredColumns(table.columns);
+
+  const build = (columns: ColumnInfo[], label: string, sortText: string, note: string) => {
+    const names = columns.map((c) => c.name);
+    // $1…$n are the tab stops; $0 leaves the cursor after the statement.
+    const values = columns.map((c, i) => `\${${i + 1}:${describeType(c)}}`);
+    const snippet = `(${names.join(', ')})\nVALUES (${values.join(', ')})$0`;
+    const preview = `(${names.join(', ')})\nVALUES (${columns.map((c) => describeType(c)).join(', ')})`;
+    const skipped = table.columns.length - columns.length;
+
+    return {
+      label,
+      kind: CompletionItemKind.Snippet,
+      detail: `${columns.length} column(s) of ${fullName}${skipped > 0 ? `, ${skipped} skipped` : ''}`,
+      documentation: {
+        kind: 'markdown' as const,
+        value: `${note}\n\n\`\`\`sql\nINSERT INTO ${fullName}\n${preview}\n\`\`\``,
+      },
+      textEdit: TextEdit.replace(Range.create(position, position), snippet),
+      insertTextFormat: InsertTextFormat.Snippet,
+      filterText: 'insert columns values',
+      sortText,
+    };
+  };
+
+  const items: CompletionItem[] = [
+    build(
+      writable,
+      '★ Columns + VALUES (all)',
+      '00_insert_all',
+      'Every column that can be written to. IDENTITY and computed columns are left out.',
+    ),
+  ];
+
+  // Only worth a second entry when it is actually a shorter list.
+  if (required.length > 0 && required.length < writable.length) {
+    items.push(
+      build(
+        required,
+        '★ Columns + VALUES (required only)',
+        '00_insert_required',
+        'Only the columns an INSERT cannot omit: NOT NULL and without a DEFAULT.',
+      ),
+    );
+  }
+
+  return items;
+}
+
+/**
  * Single item that fills an `INSERT INTO t (...)` list with every column of
  * the target table.
  */
 function buildInsertColumnListItem(refs: ResolvedRef[], position: Position): CompletionItem[] {
   if (refs.length !== 1) return [];
 
-  const columns = refs[0].table.columns
+  // IDENTITY and computed columns cannot be written to, so they must not end up
+  // in the list either.
+  const columns = insertableColumns(refs[0].table.columns)
     .map((c) => normalizeColumnName((c as any)?.name ?? c))
     .filter((name): name is string => Boolean(name));
   if (columns.length === 0) return [];

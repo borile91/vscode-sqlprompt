@@ -63,6 +63,11 @@ type ColumnInfo = {
     maxLength: number | null;
     isNullable: boolean;
     isPrimaryKey: boolean;
+    /** Filled by the server itself: must stay out of an INSERT column list. */
+    isIdentity?: boolean;
+    isComputed?: boolean;
+    /** Has a DEFAULT constraint, so it may be omitted from an INSERT. */
+    hasDefault?: boolean;
 };
 
 type TableInfo = {
@@ -282,6 +287,9 @@ function mapRowsToSchemaSnapshot(rows: any[]): TableInfo[] {
         const maxLengthRaw = normalizeCellValue(row.max_length);
         const isNullableRaw = normalizeCellValue(row.is_nullable);
         const isPrimaryKeyRaw = normalizeCellValue(row.is_primary_key);
+        const isIdentityRaw = normalizeCellValue(row.is_identity);
+        const isComputedRaw = normalizeCellValue(row.is_computed);
+        const hasDefaultRaw = normalizeCellValue(row.has_default);
 
         tableMap.get(key)!.columns.push({
             name: columnName,
@@ -291,6 +299,9 @@ function mapRowsToSchemaSnapshot(rows: any[]): TableInfo[] {
             isNullable: isNullableRaw === true || isNullableRaw === 1,
             isPrimaryKey:
                 isPrimaryKeyRaw === true || isPrimaryKeyRaw === 1,
+            isIdentity: isIdentityRaw === true || isIdentityRaw === 1,
+            isComputed: isComputedRaw === true || isComputedRaw === 1,
+            hasDefault: hasDefaultRaw === true || hasDefaultRaw === 1,
         });
     }
 
@@ -465,6 +476,9 @@ async function loadSchemaViaConnectionSharing(ownerUri: string): Promise<SchemaS
                 ty.name AS data_type,
                 c.max_length,
                 c.is_nullable,
+                c.is_identity,
+                c.is_computed,
+                CASE WHEN c.default_object_id <> 0 THEN 1 ELSE 0 END AS has_default,
                 CASE WHEN so.type = 'U' AND pk.column_id IS NOT NULL THEN 1 ELSE 0 END AS is_primary_key
             FROM schema_objects so
             INNER JOIN sys.schemas s ON so.schema_id = s.schema_id
@@ -1376,6 +1390,9 @@ async function loadSchemaForDatabaseViaConnectionSharing(ownerUri: string, datab
                 ty.name AS data_type,
                 c.max_length,
                 c.is_nullable,
+                c.is_identity,
+                c.is_computed,
+                CASE WHEN c.default_object_id <> 0 THEN 1 ELSE 0 END AS has_default,
                 CASE WHEN so.type = 'U' AND pk.column_id IS NOT NULL THEN 1 ELSE 0 END AS is_primary_key
             FROM ${dbBracketed}.sys.objects so
             INNER JOIN ${dbBracketed}.sys.schemas s ON so.schema_id = s.schema_id
