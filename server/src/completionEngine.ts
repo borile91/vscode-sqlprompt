@@ -170,6 +170,7 @@ export function buildCompletions(
         ...buildTableSourceCompletions(context, tables, routines, position, lineText, databases, {
           withAlias: true,
           includeFunctions: true,
+          refs,
         }),
       );
 
@@ -318,6 +319,37 @@ interface TableSourceOptions {
   withAlias: boolean;
   /** Offer table-valued functions and CTEs (FROM / JOIN only). */
   includeFunctions: boolean;
+  /** Tables already in scope, used to rank FK-related tables first. */
+  refs?: ResolvedRef[];
+}
+
+/**
+ * Keys (`schema.table`) of the tables tied by a foreign key to a table already
+ * in the query, in either direction.  Those are the ones a JOIN is most likely
+ * about, so they are ranked first (issue #9).
+ */
+function collectRelatedTableKeys(refs: ResolvedRef[], tables: TableInfo[]): Set<string> {
+  const related = new Set<string>();
+  if (refs.length === 0) return related;
+
+  const key = (schema: string, name: string) => `${schema.toLowerCase()}.${name.toLowerCase()}`;
+  const inScope = new Set(refs.map((r) => key(r.table.schema, r.table.name)));
+
+  for (const ref of refs) {
+    for (const fk of ref.table.foreignKeys ?? []) {
+      related.add(key(fk.referencedSchema, fk.referencedTable));
+    }
+  }
+
+  for (const table of tables) {
+    for (const fk of table.foreignKeys ?? []) {
+      if (inScope.has(key(fk.referencedSchema, fk.referencedTable))) {
+        related.add(key(table.schema, table.name));
+      }
+    }
+  }
+
+  return related;
 }
 
 /**
@@ -341,6 +373,15 @@ function buildTableSourceCompletions(
   // deduplicated alias (e.g. o2) only when o is really taken.
   const usedAliases = collectUsedAliases(context);
   const replaceRange = replaceRangeWordOnly(lineText, position);
+  const relatedKeys = collectRelatedTableKeys(options.refs ?? [], tables);
+
+  /** FK-related tables first, then the rest, alphabetically within each group. */
+  const tableSortText = (table: TableInfo): string => {
+    const group = relatedKeys.has(`${table.schema.toLowerCase()}.${table.name.toLowerCase()}`)
+      ? '0'
+      : '1';
+    return `01_table_${group}_${table.name}`;
+  };
 
   /** ` AS <alias>` suffix plus the matching detail fragment. */
   const aliasFor = (objectName: string): { suffix: string; detail: string } => {
@@ -371,7 +412,7 @@ function buildTableSourceCompletions(
           filterText: table.name,
           textEdit: TextEdit.replace(replaceRange, `${table.name}${alias.suffix}`),
           insertTextFormat: InsertTextFormat.PlainText,
-          sortText: `01_table_${table.name}`,
+          sortText: tableSortText(table),
           data: { type: 'table', index: tables.indexOf(table) },
         });
       });
@@ -409,7 +450,7 @@ function buildTableSourceCompletions(
       filterText: fullName,
       textEdit: TextEdit.replace(replaceRange, `${fullName}${alias.suffix}`),
       insertTextFormat: InsertTextFormat.PlainText,
-      sortText: `01_table_${table.name}`,
+      sortText: tableSortText(table),
       data: { type: 'table', index: idx },
     });
   });
@@ -515,14 +556,14 @@ function buildDotCompletions(
     (s) => s.alias?.toLowerCase() === qualifier.toLowerCase(),
   );
   if (matchingSource?.columns?.length) {
-    const items: CompletionItem[] = matchingSource.columns.map((col) => ({
+    const items: CompletionItem[] = matchingSource.columns.map((col, columnIndex) => ({
       label: col,
       kind: CompletionItemKind.Field,
       detail: `${matchingSource.schema ? `${matchingSource.schema}.` : ""}${matchingSource.objectName}`,
       insertText: quoteIdentifier(col),
       insertTextFormat: InsertTextFormat.PlainText,
       textEdit: TextEdit.replace(replaceRange, quoteIdentifier(col)),
-      sortText: `02_col_${qualifier}_${col}`,
+      sortText: columnSortText(0, columnIndex),
     }));
 
     // Also offer "Expand alias.*" when there are many columns.
@@ -559,14 +600,14 @@ function buildDotCompletions(
       (s) => s.objectName.toLowerCase() === qualifier.toLowerCase(),
     );
     if (src?.columns?.length) {
-      return src.columns.map((col) => ({
+      return src.columns.map((col, columnIndex) => ({
         label: col,
         kind: CompletionItemKind.Field,
         detail: `CTE: ${src.objectName}`,
         insertText: quoteIdentifier(col),
         insertTextFormat: InsertTextFormat.PlainText,
         textEdit: TextEdit.replace(replaceRange, quoteIdentifier(col)),
-        sortText: `02_col_${qualifier}_${col}`,
+        sortText: columnSortText(0, columnIndex),
       }));
     }
     return [];
@@ -655,14 +696,14 @@ function buildDotCompletions(
   // Is it a table name? → offer columns
   const tableMatch = tables.find((t) => t.name.toLowerCase() === qualifier.toLowerCase());
   if (tableMatch) {
-    return tableMatch.columns.map((col) => ({
+    return tableMatch.columns.map((col, columnIndex) => ({
       label: col.name,
       kind: CompletionItemKind.Field,
       detail: `${tableMatch.schema}.${tableMatch.name}`,
       insertText: quoteIdentifier(col.name),
       insertTextFormat: InsertTextFormat.PlainText,
       textEdit: TextEdit.replace(replaceRange, quoteIdentifier(col.name)),
-      sortText: `02_col_${col.name}`,
+      sortText: columnSortText(0, columnIndex),
     }));
   }
 
@@ -874,13 +915,26 @@ function buildExpandAllColumnsItem(
 
 // ── Column completions ────────────────────────────────────────────────────────
 
+/**
+ * Sort key of a column completion.
+ *
+ * Two criteria, in this order (issue #9):
+ *  1. the source it belongs to — the table of the FROM comes before the joined
+ *     ones, because that is where the user is most likely looking;
+ *  2. its position in the table, so that the list mirrors the schema instead of
+ *     being alphabetical.
+ */
+function columnSortText(sourceIndex: number, columnIndex: number): string {
+  return `02_col_${String(sourceIndex).padStart(2, '0')}_${String(columnIndex).padStart(4, '0')}`;
+}
+
 function buildColumnCompletionsForRefs(
   refs: ResolvedRef[],
   includeAlias: boolean,
   aliasAlreadyTyped: boolean,
 ): CompletionItem[] {
   return refs.flatMap((ref) =>
-    ref.table.columns.flatMap((column) => {
+    ref.table.columns.flatMap((column, columnIndex) => {
       const colName = normalizeColumnName((column as any)?.name ?? column);
       if (!colName) return [];
 
@@ -896,7 +950,7 @@ function buildColumnCompletionsForRefs(
         documentation: { kind: 'markdown', value: `Inserts: \`${insertValue}\`` },
         insertText: insertValue,
         insertTextFormat: InsertTextFormat.PlainText,
-        sortText: `02_col_${qualifier}_${colName}`,
+        sortText: columnSortText(ref.sourceIndex, columnIndex),
       }];
     }),
   );
@@ -910,26 +964,26 @@ function buildColumnCompletionsForRefs(
  * CTE body.  These complement the schema-resolved `buildColumnCompletionsForRefs`.
  */
 function buildColumnCompletionsForSources(sources: VisibleSource[]): CompletionItem[] {
-  return sources
-    .filter((s) => !s.schema && s.columns?.length)
-    .flatMap((s) =>
-      (s.columns ?? []).flatMap((col) => {
-        const colName = normalizeColumnName(col);
-        if (!colName) return [];
+  return sources.flatMap((s, sourceIndex) => {
+    if (s.schema || !s.columns?.length) return [];
 
-        const alias = s.alias ?? s.objectName;
-        const insertValue = `${alias}.${colName}`;
-        return [{
-          label: insertValue,
-          kind: CompletionItemKind.Field,
-          detail: `CTE: ${s.objectName}`,
-          documentation: { kind: 'markdown', value: `Inserts: \`${insertValue}\`` },
-          insertText: insertValue,
-          insertTextFormat: InsertTextFormat.PlainText,
-          sortText: `02_col_${alias}_${colName}`,
-        }];
-      }),
-    );
+    return s.columns.flatMap((col, columnIndex) => {
+      const colName = normalizeColumnName(col);
+      if (!colName) return [];
+
+      const alias = s.alias ?? s.objectName;
+      const insertValue = `${alias}.${colName}`;
+      return [{
+        label: insertValue,
+        kind: CompletionItemKind.Field,
+        detail: `CTE: ${s.objectName}`,
+        documentation: { kind: 'markdown', value: `Inserts: \`${insertValue}\`` },
+        insertText: insertValue,
+        insertTextFormat: InsertTextFormat.PlainText,
+        sortText: columnSortText(sourceIndex, columnIndex),
+      }];
+    });
+  });
 }
 
 function normalizeColumnName(raw: unknown): string | undefined {
@@ -1278,11 +1332,17 @@ function buildSqlKeywordCompletions(position: Position): CompletionItem[] {
  * Maps visible sources back to their full `TableInfo` (needed for FK logic).
  * Sources without a schema (CTEs, unresolved subqueries) are skipped.
  */
-type ResolvedRef = { table: TableInfo; alias: string; isAutoAlias: boolean };
+type ResolvedRef = {
+  table: TableInfo;
+  alias: string;
+  isAutoAlias: boolean;
+  /** Position of the source in the statement: 0 is the table of the FROM. */
+  sourceIndex: number;
+};
 
 function resolveRefs(sources: VisibleSource[], tables: TableInfo[]): ResolvedRef[] {
   const result: ResolvedRef[] = [];
-  for (const s of sources) {
+  for (const [sourceIndex, s] of sources.entries()) {
     if (!s.schema) continue; // CTE or unresolved
     const table = tables.find(
       (t) =>
@@ -1299,6 +1359,7 @@ function resolveRefs(sources: VisibleSource[], tables: TableInfo[]): ResolvedRef
         table,
         alias: s.alias ?? generateAlias(table.name),
         isAutoAlias: !(s.explicitAlias ?? false),
+        sourceIndex,
       });
     }
   }
