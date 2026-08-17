@@ -600,3 +600,90 @@ describe('completionEngine — UPDATE and INSERT', () => {
     assert.equal(items.find((i) => i.label === 'OrderId'), undefined);
   });
 });
+
+// ── completion priority (issue #9) ────────────────────────────────────────────
+
+function sortedLabels(items: any[], kind: CompletionItemKind) {
+  return items
+    .filter((i) => i.kind === kind)
+    .sort((a, b) => String(a.sortText).localeCompare(String(b.sortText)))
+    .map((i) => String(i.label));
+}
+
+describe('completionEngine — priority', () => {
+  it('lists columns in schema order, not alphabetically', () => {
+    const sql = 'SELECT  FROM dbo.Orders o';
+    const items = getItemsAt(sql, sql.indexOf('SELECT ') + 7);
+
+    // Schema order is OrderId, CustomerId — alphabetical would swap them.
+    assert.deepEqual(sortedLabels(items, CompletionItemKind.Field), [
+      'o.OrderId',
+      'o.CustomerId',
+    ]);
+  });
+
+  it('puts the columns of the FROM table before the joined ones', () => {
+    const sql = 'SELECT  FROM dbo.Orders o JOIN dbo.OrderSummaryView s ON s.OrderId = o.OrderId';
+    const items = getItemsAt(sql, sql.indexOf('SELECT ') + 7);
+
+    assert.deepEqual(sortedLabels(items, CompletionItemKind.Field), [
+      'o.OrderId',
+      'o.CustomerId',
+      's.OrderId',
+      's.CustomerId',
+    ]);
+  });
+
+  it('keeps schema order after a dot qualifier', () => {
+    const sql = 'SELECT o. FROM dbo.Orders o';
+    const items = getItemsAt(sql, sql.indexOf('o.') + 2);
+
+    assert.deepEqual(sortedLabels(items, CompletionItemKind.Field), ['OrderId', 'CustomerId']);
+  });
+
+  it('ranks FK-related tables first in a JOIN', () => {
+    const parent: TableInfo = {
+      schema: 'dbo',
+      name: 'Parent',
+      columns: [{ name: 'Id', dataType: 'int', maxLength: null, isNullable: false, isPrimaryKey: true }],
+      foreignKeys: [],
+    };
+    const child: TableInfo = {
+      schema: 'dbo',
+      name: 'Zebra',
+      columns: [{ name: 'ParentId', dataType: 'int', maxLength: null, isNullable: false, isPrimaryKey: false }],
+      foreignKeys: [
+        {
+          name: 'FK_Zebra_Parent',
+          parentSchema: 'dbo',
+          parentTable: 'Zebra',
+          referencedSchema: 'dbo',
+          referencedTable: 'Parent',
+          mappings: [{ column: 'ParentId', referencedColumn: 'Id' }],
+        },
+      ],
+    };
+    const unrelated: TableInfo = {
+      schema: 'dbo',
+      name: 'Alpha',
+      columns: [{ name: 'Id', dataType: 'int', maxLength: null, isNullable: false, isPrimaryKey: true }],
+      foreignKeys: [],
+    };
+    const fkTables = [parent, unrelated, child];
+
+    const sql = 'SELECT * FROM dbo.Parent p JOIN ';
+    const document = TextDocument.create('file:///fk.sql', 'sql', 1, sql);
+    const context = resolveContext(sql, 0, sql.length, fkTables);
+    const items = buildCompletions(
+      context,
+      fkTables,
+      routines,
+      document,
+      document.positionAt(sql.length),
+      { text: sql, start: 0, end: sql.length, cursorOffset: sql.length },
+    );
+
+    const tableLabels = sortedLabels(items, CompletionItemKind.Class);
+    assert.equal(tableLabels[0], 'dbo.Zebra', `Expected the FK-related table first, got: ${tableLabels.join(', ')}`);
+  });
+});
