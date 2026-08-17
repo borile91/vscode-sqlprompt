@@ -6,6 +6,18 @@ export interface ColumnInfo {
   maxLength: number | null;
   isNullable: boolean;
   isPrimaryKey: boolean;
+  /**
+   * The three below drive the INSERT snippets: a column the server fills in by
+   * itself must stay out of the column list, and one that has no default and
+   * cannot be null has to be in it.
+   *
+   * Optional because a snapshot sent by an older client does not carry them;
+   * absent is read as "false" everywhere, which degrades to listing every
+   * column — the previous behaviour.
+   */
+  isIdentity?: boolean;
+  isComputed?: boolean;
+  hasDefault?: boolean;
 }
 
 export interface TableInfo {
@@ -172,6 +184,9 @@ export class SchemaLoader {
                 ty.name AS data_type,
                 c.max_length,
                 c.is_nullable,
+                c.is_identity,
+                c.is_computed,
+                CASE WHEN c.default_object_id <> 0 THEN 1 ELSE 0 END AS has_default,
                 CASE WHEN so.type = 'U' AND pk.column_id IS NOT NULL THEN 1 ELSE 0 END AS is_primary_key
             FROM schema_objects so
             INNER JOIN sys.schemas s ON so.schema_id = s.schema_id
@@ -206,6 +221,9 @@ export class SchemaLoader {
                 maxLength: row.max_length,
                 isNullable: row.is_nullable,
                 isPrimaryKey: row.is_primary_key === 1,
+                isIdentity: row.is_identity === 1 || row.is_identity === true,
+                isComputed: row.is_computed === 1 || row.is_computed === true,
+                hasDefault: row.has_default === 1 || row.has_default === true,
             });
         }
 
@@ -431,6 +449,9 @@ export class SchemaLoader {
                 ty.name AS data_type,
                 c.max_length,
                 c.is_nullable,
+                c.is_identity,
+                c.is_computed,
+                CASE WHEN c.default_object_id <> 0 THEN 1 ELSE 0 END AS has_default,
                 CASE WHEN so.type = 'U' AND pk.column_id IS NOT NULL THEN 1 ELSE 0 END AS is_primary_key
             FROM ${dbBracketed}.sys.objects so
             INNER JOIN ${dbBracketed}.sys.schemas s ON so.schema_id = s.schema_id
@@ -467,6 +488,9 @@ export class SchemaLoader {
                 maxLength: row.max_length,
                 isNullable: row.is_nullable,
                 isPrimaryKey: row.is_primary_key === 1,
+                isIdentity: row.is_identity === 1 || row.is_identity === true,
+                isComputed: row.is_computed === 1 || row.is_computed === true,
+                hasDefault: row.has_default === 1 || row.has_default === true,
             });
         }
 

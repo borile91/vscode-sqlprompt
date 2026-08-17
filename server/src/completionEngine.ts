@@ -28,6 +28,7 @@ import { TextDocument } from 'vscode-languageserver-textdocument';
 
 import { QueryContext, VisibleSource } from './types';
 import {
+  ColumnInfo,
   TableInfo,
   RoutineSnapshot,
   RoutineParameterInfo,
@@ -36,6 +37,7 @@ import {
 } from './schemaLoader';
 import { StatementRange } from './documentTextService';
 import { generateAlias } from './utils';
+import { isReservedWord } from './sqlLexer';
 
 // ── Alias bookkeeping ─────────────────────────────────────────────────────────
 
@@ -72,6 +74,51 @@ function collectUsedAliases(context: QueryContext): Set<string> {
 }
 
 // ── Snippet completions ───────────────────────────────────────────────────────
+
+/**
+ * Snippets that open a whole statement (`ssf` → `SELECT * FROM `).
+ */
+function buildStatementSnippets(lineText: string, position: Position): CompletionItem[] {
+  const replaceRange = replaceRangeWordOnly(lineText, position);
+  return [
+    {
+      label: 'ssf',
+      kind: CompletionItemKind.Snippet,
+      insertText: 'SELECT * FROM ',
+      insertTextFormat: InsertTextFormat.PlainText,
+      detail: 'SELECT * FROM',
+      sortText: '01_snippet_ssf',
+      textEdit: TextEdit.replace(replaceRange, 'SELECT * FROM '),
+    },
+    {
+      label: 'scf',
+      kind: CompletionItemKind.Snippet,
+      insertText: 'SELECT COUNT(*) FROM ',
+      insertTextFormat: InsertTextFormat.PlainText,
+      detail: 'SELECT COUNT(*) FROM',
+      sortText: '01_snippet_scf',
+      textEdit: TextEdit.replace(replaceRange, 'SELECT COUNT(*) FROM '),
+    },
+  ];
+}
+
+/**
+ * True when the cursor sits on a line holding nothing but the word being typed,
+ * and that word is not SQL.
+ *
+ * Statement snippets belong to a statement-level context, but a query left
+ * without `;` or `GO` keeps the next line inside its own FROM clause, so typing
+ * `ssf` under it never reached the statement-level branch. A line whose only
+ * content is a non-keyword word is the user starting something new, whatever
+ * the parser still believes about the statement above.
+ */
+function isStartingANewLine(lineText: string, position: Position, currentWord?: string): boolean {
+  const beforeCursor = lineText.slice(0, position.character).trim();
+  if (beforeCursor.length === 0) return false;
+  // Only the word being typed may precede the cursor on this line.
+  if (beforeCursor !== (currentWord ?? '')) return false;
+  return !isReservedWord(beforeCursor);
+}
 
 function buildSnippetCompletions(clause: string, position: Position): CompletionItem[] {
   const items: CompletionItem[] = [];
@@ -153,6 +200,13 @@ export function buildCompletions(
   }
 
   // ── 3. Clause-specific completions ──────────────────────────────────────
+  // A statement that was left unterminated keeps the following line inside its
+  // own clause, so offer the statement snippets whenever the cursor is alone on
+  // a line with a non-SQL word — that is the user starting a new statement.
+  if (context.clause !== 'unknown' && isStartingANewLine(lineText, position, context.currentWord)) {
+    items.push(...buildStatementSnippets(lineText, position));
+  }
+
   switch (context.clause) {
     case 'select':
       items.push(...buildSnippetCompletions('select', position));
@@ -185,6 +239,11 @@ export function buildCompletions(
     // does not allow aliasing it here, so nothing is appended to the name.
     case 'insertTarget':
     case 'updateTarget':
+      // Once the target is written, the useful next step is the column list and
+      // its VALUES, not another table name.
+      if (context.clause === 'insertTarget') {
+        items.push(...buildInsertStatementItems(refs, position));
+      }
       items.push(
         ...buildTableSourceCompletions(context, tables, routines, position, lineText, databases, {
           withAlias: false,
@@ -234,6 +293,14 @@ export function buildCompletions(
       break;
     }
 
+    // Inside `VALUES (...)` an expression is expected. Without this branch the
+    // fallback offered every table in the database plus the statement snippets,
+    // so accepting one wrote `VALUES (2, SELECT COUNT(*) FROM )`.
+    case 'values':
+      items.push(...buildScalarFunctionCompletions(routines.scalarFunctions));
+      items.push(...buildValueKeywordCompletions(position));
+      break;
+
     case 'insertColumns':
       // Inside `INSERT INTO t (...)` only bare column names are valid.
       items.push(...buildColumnCompletionsForRefs(refs, false, true));
@@ -242,27 +309,7 @@ export function buildCompletions(
 
     default: {
       // Always offer snippet completions at statement-level context.
-      const replaceRange = replaceRangeWordOnly(lineText, position);
-      
-      items.push({
-        label: 'ssf',
-        kind: CompletionItemKind.Snippet,
-        insertText: 'SELECT * FROM ',
-        insertTextFormat: InsertTextFormat.PlainText,
-        detail: 'SELECT * FROM',
-        sortText: '01_snippet_ssf',
-        textEdit: TextEdit.replace(replaceRange, 'SELECT * FROM '),
-      });
-
-      items.push({
-        label: 'scf',
-        kind: CompletionItemKind.Snippet,
-        insertText: 'SELECT COUNT(*) FROM ',
-        insertTextFormat: InsertTextFormat.PlainText,
-        detail: 'SELECT COUNT(*) FROM',
-        sortText: '01_snippet_scf',
-        textEdit: TextEdit.replace(replaceRange, 'SELECT COUNT(*) FROM '),
-      });
+      items.push(...buildStatementSnippets(lineText, position));
       // General SQL context: keywords + tables when in a recognisable DML statement.
       if (context.statementKind !== 'unknown') {
         items.push(...buildSqlKeywordCompletions(position));
@@ -504,6 +551,115 @@ function buildTableSourceCompletions(
   return items;
 }
 
+/** Literals and functions that make sense as a value inside `VALUES (...)`. */
+function buildValueKeywordCompletions(position: Position): CompletionItem[] {
+  const range = Range.create(position, position);
+  const values: Array<[string, string]> = [
+    ['NULL', 'NULL'],
+    ['DEFAULT', 'DEFAULT'],
+    ['GETDATE()', 'current date and time'],
+    ['SYSDATETIME()', 'current date and time, higher precision'],
+    ['NEWID()', 'new uniqueidentifier'],
+    ['SUSER_SNAME()', 'current login name'],
+  ];
+  return values.map(([text, detail]) => ({
+    label: text,
+    kind: CompletionItemKind.Value,
+    detail,
+    insertTextFormat: InsertTextFormat.PlainText,
+    textEdit: TextEdit.replace(range, text),
+    sortText: `02_value_${text}`,
+  }));
+}
+
+/**
+ * Columns an INSERT may write to: what the server computes for itself can never
+ * appear in the column list.
+ */
+function insertableColumns(columns: ColumnInfo[]): ColumnInfo[] {
+  return columns.filter((c) => !c.isIdentity && !c.isComputed);
+}
+
+/** Columns a valid INSERT has to provide: no default, and NOT NULL. */
+function requiredColumns(columns: ColumnInfo[]): ColumnInfo[] {
+  return insertableColumns(columns).filter((c) => !c.hasDefault && !c.isNullable);
+}
+
+/** `varchar(50)`, `decimal` … as shown next to a column in the preview. */
+function describeType(column: ColumnInfo): string {
+  const type = column.dataType;
+  if (column.maxLength === null || column.maxLength === undefined) return type;
+  if (!/char|binary/i.test(type)) return type;
+  // nchar/nvarchar store two bytes per character; -1 is MAX.
+  if (column.maxLength === -1) return `${type}(max)`;
+  const length = /^n/i.test(type) ? column.maxLength / 2 : column.maxLength;
+  return `${type}(${length})`;
+}
+
+/**
+ * `INSERT INTO t |` → a ready-made column list plus its `VALUES (…)`, with one
+ * tab stop per column so the values can be filled in by tabbing through.
+ *
+ * Two variants are offered: every writable column, and only the ones an INSERT
+ * cannot omit. The second is the one that matters on wide tables — most of the
+ * 103 columns of dbo.ARTICOLI have a default.
+ */
+function buildInsertStatementItems(refs: ResolvedRef[], position: Position): CompletionItem[] {
+  if (refs.length !== 1) return [];
+
+  const table = refs[0].table;
+  const fullName = `${table.schema}.${table.name}`;
+  const writable = insertableColumns(table.columns);
+  if (writable.length === 0) return [];
+  const required = requiredColumns(table.columns);
+
+  const build = (columns: ColumnInfo[], label: string, sortText: string, note: string) => {
+    const names = columns.map((c) => c.name);
+    // $1…$n are the tab stops; $0 leaves the cursor after the statement.
+    const values = columns.map((c, i) => `\${${i + 1}:${describeType(c)}}`);
+    const snippet = `(${names.join(', ')})\nVALUES (${values.join(', ')})$0`;
+    const preview = `(${names.join(', ')})\nVALUES (${columns.map((c) => describeType(c)).join(', ')})`;
+    const skipped = table.columns.length - columns.length;
+
+    return {
+      label,
+      kind: CompletionItemKind.Snippet,
+      detail: `${columns.length} column(s) of ${fullName}${skipped > 0 ? `, ${skipped} skipped` : ''}`,
+      documentation: {
+        kind: 'markdown' as const,
+        value: `${note}\n\n\`\`\`sql\nINSERT INTO ${fullName}\n${preview}\n\`\`\``,
+      },
+      textEdit: TextEdit.replace(Range.create(position, position), snippet),
+      insertTextFormat: InsertTextFormat.Snippet,
+      filterText: 'insert columns values',
+      sortText,
+    };
+  };
+
+  const items: CompletionItem[] = [
+    build(
+      writable,
+      '★ Columns + VALUES (all)',
+      '00_insert_all',
+      'Every column that can be written to. IDENTITY and computed columns are left out.',
+    ),
+  ];
+
+  // Only worth a second entry when it is actually a shorter list.
+  if (required.length > 0 && required.length < writable.length) {
+    items.push(
+      build(
+        required,
+        '★ Columns + VALUES (required only)',
+        '00_insert_required',
+        'Only the columns an INSERT cannot omit: NOT NULL and without a DEFAULT.',
+      ),
+    );
+  }
+
+  return items;
+}
+
 /**
  * Single item that fills an `INSERT INTO t (...)` list with every column of
  * the target table.
@@ -511,7 +667,9 @@ function buildTableSourceCompletions(
 function buildInsertColumnListItem(refs: ResolvedRef[], position: Position): CompletionItem[] {
   if (refs.length !== 1) return [];
 
-  const columns = refs[0].table.columns
+  // IDENTITY and computed columns cannot be written to, so they must not end up
+  // in the list either.
+  const columns = insertableColumns(refs[0].table.columns)
     .map((c) => normalizeColumnName((c as any)?.name ?? c))
     .filter((name): name is string => Boolean(name));
   if (columns.length === 0) return [];

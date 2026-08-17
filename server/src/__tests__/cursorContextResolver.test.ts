@@ -332,3 +332,60 @@ describe('resolveContext — UPDATE and INSERT', () => {
     assert.equal(ctx.clause, 'values');
   });
 });
+
+// ── Qualifier while the next word is being typed ──────────────────────────────
+//
+// `sig` is filtered with `end <= cursorOffset`, so the word being typed — which
+// ends exactly at the cursor — is still in it. resolveDotQualifier assumed the
+// opposite, so as soon as a letter was typed after a dot the qualifier was lost:
+// `EasyMexs_Master.con` reported isAfterDot = false and suggested nothing.
+
+describe('resolveContext — dot qualifier with a partial word', () => {
+  it('keeps the database qualifier while typing a schema name', () => {
+    const sql = 'SELECT * FROM EasyMexs_Master.con';
+    const ctx = resolveContext(sql, 0, sql.length, []);
+    assert.equal(ctx.isAfterDot, true);
+    assert.deepEqual(ctx.qualifierChain, ['EasyMexs_Master']);
+    assert.equal(ctx.currentWord, 'con');
+  });
+
+  it('keeps the schema qualifier while typing a table name', () => {
+    const sql = 'SELECT * FROM dbo.ARTICOL';
+    const ctx = resolveContext(sql, 0, sql.length, []);
+    assert.equal(ctx.isAfterDot, true);
+    assert.deepEqual(ctx.qualifierChain, ['dbo']);
+  });
+
+  it('keeps a two-part qualifier while typing', () => {
+    const sql = 'SELECT * FROM EasyMexs_Master.config.Art';
+    const ctx = resolveContext(sql, 0, sql.length, []);
+    assert.equal(ctx.isAfterDot, true);
+    assert.deepEqual(ctx.qualifierChain, ['EasyMexs_Master', 'config']);
+  });
+
+  it('keeps the alias qualifier while typing a column name', () => {
+    const sql = 'SELECT * FROM dbo.T a WHERE a.Cod';
+    const ctx = resolveContext(sql, 0, sql.length, []);
+    assert.equal(ctx.isAfterDot, true);
+    assert.deepEqual(ctx.qualifierChain, ['a']);
+  });
+
+  it('still resolves a bare dot with nothing typed after it', () => {
+    const sql = 'SELECT * FROM EasyMexs_Master.';
+    const ctx = resolveContext(sql, 0, sql.length, []);
+    assert.equal(ctx.isAfterDot, true);
+    assert.deepEqual(ctx.qualifierChain, ['EasyMexs_Master']);
+  });
+
+  it('does not report a qualifier for a word with no dot before it', () => {
+    const sql = 'SELECT * FROM ARTICOL';
+    const ctx = resolveContext(sql, 0, sql.length, []);
+    assert.equal(ctx.isAfterDot, false);
+  });
+
+  it('does not report a qualifier after a complete identifier', () => {
+    const sql = 'SELECT * FROM dbo.ARTICOLI ';
+    const ctx = resolveContext(sql, 0, sql.length, []);
+    assert.equal(ctx.isAfterDot, false);
+  });
+});
