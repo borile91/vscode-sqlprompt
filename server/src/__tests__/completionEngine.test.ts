@@ -4,6 +4,7 @@ import { TextDocument } from 'vscode-languageserver-textdocument';
 import { CompletionItemKind } from 'vscode-languageserver/node';
 
 import { resolveContext } from '../cursorContextResolver.js';
+import { extractStatementAtOffset } from '../documentTextService.js';
 import { buildCompletions, quoteIdentifier } from '../completionEngine.js';
 import type { TableInfo, RoutineSnapshot } from '../schemaLoader.js';
 
@@ -685,5 +686,67 @@ describe('completionEngine — priority', () => {
 
     const tableLabels = sortedLabels(items, CompletionItemKind.Class);
     assert.equal(tableLabels[0], 'dbo.Zebra', `Expected the FK-related table first, got: ${tableLabels.join(', ')}`);
+  });
+});
+
+// ── Statement snippets after an unterminated query ────────────────────────────
+//
+// A query left without `;` or `GO` keeps the following line inside its own FROM
+// clause, which used to hide the statement snippets: typing `ssf` under an
+// existing SELECT proposed nothing.
+
+/** Runs the full server chain, so statement boundaries are resolved as at runtime. */
+function itemsAtCursor(fullText: string, cursorOffset: number) {
+  const document = TextDocument.create('file:///snip.sql', 'sql', 1, fullText);
+  const statementRange = extractStatementAtOffset(fullText, cursorOffset);
+  const context = resolveContext(statementRange.text, statementRange.start, cursorOffset, tables);
+  return buildCompletions(
+    context,
+    tables,
+    routines,
+    document,
+    document.positionAt(cursorOffset),
+    statementRange,
+  );
+}
+
+const hasSsf = (sql: string) =>
+  itemsAtCursor(sql, sql.length).some((i) => i.label === 'ssf');
+
+describe('statement snippets', () => {
+  it('offers ssf in an empty document', () => {
+    assert.equal(hasSsf(''), true);
+  });
+
+  it('offers ssf under a query left without a terminator', () => {
+    assert.equal(hasSsf('SELECT * FROM dbo.Orders o\nssf'), true);
+  });
+
+  it('offers ssf from the first character typed', () => {
+    assert.equal(hasSsf('SELECT * FROM dbo.Orders o\ns'), true);
+  });
+
+  it('still offers ssf after a semicolon', () => {
+    assert.equal(hasSsf('SELECT * FROM dbo.Orders o;\nssf'), true);
+  });
+
+  it('still offers ssf after GO', () => {
+    assert.equal(hasSsf('SELECT * FROM dbo.Orders o\nGO\nssf'), true);
+  });
+
+  it('does not offer ssf inside a WHERE clause', () => {
+    assert.equal(hasSsf('SELECT * FROM dbo.Orders o\nWHERE '), false);
+  });
+
+  it('does not offer ssf while typing a table name', () => {
+    assert.equal(hasSsf('SELECT * FROM dbo.Ord'), false);
+  });
+
+  it('does not offer ssf in a column list continued on a new line', () => {
+    assert.equal(hasSsf('SELECT o.OrderId,\n  o.Cust'), false);
+  });
+
+  it('does not offer ssf after a qualifier dot', () => {
+    assert.equal(hasSsf('SELECT * FROM dbo.Orders o\nWHERE o.'), false);
   });
 });

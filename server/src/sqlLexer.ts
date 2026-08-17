@@ -69,6 +69,19 @@ const KEYWORDS = new Set<string>([
   'YEAR', 'MONTH', 'DAY', 'ISDATE', 'ISNUMERIC',
 ]);
 
+/**
+ * True when `word` may not be used as a bare alias.
+ *
+ * Backed by the keyword set above, which is deliberately wider than T-SQL's
+ * reserved-word list: it also holds built-in function names, which *are* legal
+ * aliases. Erring that way only makes a generated alias one letter longer,
+ * whereas missing a reserved word produces a statement that does not compile
+ * (`FROM dbo.OrdiniFasi AS of` → "Incorrect syntax near the keyword 'of'").
+ */
+export function isReservedWord(word: string): boolean {
+  return KEYWORDS.has(word.toUpperCase());
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
