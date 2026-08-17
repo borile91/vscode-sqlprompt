@@ -71,7 +71,7 @@ export function resolveContext(
   const statementKind = resolveStatementKind(sig);
   const { isAfterDot, qualifierChain } = resolveDotQualifier(sig, currentWord);
   const clause = resolveClause(sig, statementKind);
-  const { depth, isInFunctionCall, functionName, parameterIndex } = resolveParenContext(sig);
+  const { depth, isInFunctionCall, functionName, parameterIndex } = resolveParenContext(sig, clause);
 
   // Build visible scope from the full token list (includes tokens at cursor).
   const { visibleSources, visibleCtes, visibleAliases } = buildScope(
@@ -154,7 +154,12 @@ function resolveClause(sig: Token[], statementKind: StatementKind): ClauseKind {
 
   for (const tok of sig) {
     if (tok.kind === 'lparen') {
-      stack.push({ clause: 'unknown' });
+      // A paren opened right after the INSERT target is its column list;
+      // the tuples of a VALUES clause stay in the VALUES clause.
+      const parent = stack[stack.length - 1].clause;
+      const inherited: ClauseKind =
+        parent === 'insertTarget' ? 'insertColumns' : parent === 'values' ? 'values' : 'unknown';
+      stack.push({ clause: inherited });
       lastKeyword = '';
       continue;
     }
@@ -193,8 +198,15 @@ function resolveClause(sig: Token[], statementKind: StatementKind): ClauseKind {
       case 'VALUES':
         frame.clause = 'values';
         break;
+      case 'INSERT':
+        frame.clause = 'insertTarget';
+        break;
+      case 'UPDATE':
+        // Not the UPDATE of a MERGE action (WHEN MATCHED THEN UPDATE SET ...).
+        if (statementKind === 'update') frame.clause = 'updateTarget';
+        break;
       case 'SET':
-        if (statementKind === 'update') frame.clause = 'updateSet';
+        if (statementKind === 'update' || statementKind === 'merge') frame.clause = 'updateSet';
         break;
       case 'WITH':
         // Only treat WITH as the CTE clause at the outermost depth.
@@ -209,9 +221,11 @@ function resolveClause(sig: Token[], statementKind: StatementKind): ClauseKind {
         // PARTITION BY → stay in current clause (OVER context)
         break;
       case 'INTO':
-        // INSERT INTO → keep statementKind to 'insert' but clause can be insertColumns
-        // when we later see the column list.  For now, mark as from-like.
-        if (statementKind === 'insert') frame.clause = 'insertColumns';
+        // INSERT INTO → a table is expected; the column list is handled when
+        // the following paren is opened.
+        if (statementKind === 'insert' || statementKind === 'merge') {
+          frame.clause = 'insertTarget';
+        }
         break;
       // These are prefix keywords before JOIN — don't change clause.
       case 'INNER':
@@ -311,7 +325,7 @@ interface ParenFrame {
   commaCount: number;
 }
 
-function resolveParenContext(sig: Token[]): ParenContextResult {
+function resolveParenContext(sig: Token[], clause: ClauseKind): ParenContextResult {
   const stack: ParenFrame[] = [];
   let prevSig: Token | undefined;
 
@@ -349,7 +363,10 @@ function resolveParenContext(sig: Token[]): ParenContextResult {
 
   const depth = stack.length;
   const topFrame = stack[stack.length - 1];
-  const isInFunctionCall = depth > 0 && topFrame?.kind === 'function';
+  // `INSERT INTO dbo.Orders (` looks exactly like a call to a function named
+  // Orders: the clause already knows better.
+  const isInFunctionCall =
+    depth > 0 && topFrame?.kind === 'function' && clause !== 'insertColumns';
 
   return {
     depth,
@@ -419,6 +436,9 @@ function resolveExpectedKinds(
       return ['column', 'expression', 'keyword'];
     case 'values':
       return ['expression', 'parameter', 'keyword'];
+    case 'insertTarget':
+    case 'updateTarget':
+      return ['table', 'view', 'schema', 'keyword'];
     case 'insertColumns':
       return ['column', 'keyword'];
     case 'cte':
