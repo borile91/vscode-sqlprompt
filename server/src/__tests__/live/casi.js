@@ -119,11 +119,13 @@ module.exports = [
     inserimentiVietati: ['ARTICOLI AS a2'],
   },
   {
+    // "of" è una parola riservata T-SQL: l'alias viene esteso a "ofa", come fa
+    // SQL Prompt. Prima il caso attendeva "of", cioè consolidava il difetto.
     pr: 20, db: EM,
-    nome: 'alias CamelCase: OrdiniFasi → of',
+    nome: 'alias CamelCase riservato: OrdiniFasi → ofa',
     sql: 'SELECT * FROM dbo.OrdiniFas|',
-    inserimentiAttesi: ['OrdiniFasi AS of'],
-    inserimentiVietati: ['OrdiniFasi AS of2'],
+    inserimentiAttesi: ['OrdiniFasi AS ofa'],
+    inserimentiVietati: ['OrdiniFasi AS of', 'OrdiniFasi AS ofa2'],
   },
   {
     pr: 20, db: ES,
