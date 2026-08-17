@@ -119,3 +119,30 @@ describe('INSERT column list and VALUES', () => {
     assert.match(items[0].textEdit!.newText, /^\(Id, Nome\)/);
   });
 });
+
+describe('inside VALUES (...)', () => {
+  const valueItems = () => itemsFor('INSERT INTO dbo.Righe (Codice)\nVALUES (');
+
+  it('offers no tables', () => {
+    const tables = valueItems().filter((i) => (i.detail ?? '').startsWith('Table'));
+    assert.deepEqual(tables, []);
+  });
+
+  it('offers no statement snippets', () => {
+    const labels = valueItems().map((i) => i.label);
+    assert.equal(labels.includes('ssf'), false);
+    assert.equal(labels.includes('scf'), false);
+  });
+
+  it('offers the literals and functions that belong in a value', () => {
+    const labels = valueItems().map((i) => i.label);
+    for (const expected of ['NULL', 'DEFAULT', 'GETDATE()', 'NEWID()']) {
+      assert.ok(labels.includes(expected), `missing ${expected} in: ${labels.join(', ')}`);
+    }
+  });
+
+  it('proposes no duplicate label', () => {
+    const labels = valueItems().map((i) => String(i.label));
+    assert.equal(new Set(labels).size, labels.length, labels.join(', '));
+  });
+});
