@@ -11,7 +11,7 @@
  */
 
 import { Token } from './types';
-import { tokenize } from './sqlLexer';
+import { isReservedWord, tokenize } from './sqlLexer';
 import { stripIdentifierDelimiters } from './utils';
 
 /** An occurrence of the alias, as offsets relative to the statement text. */
@@ -122,12 +122,20 @@ export function collidesWithExistingAlias(
 /**
  * Formats `newName` for insertion, adding brackets when it is not a plain
  * identifier.  Returns `null` when the name can never be a valid alias.
+ *
+ * Reserved words are refused rather than bracketed: `[of]` would parse, but the
+ * user asking for `of` means the bare word, and silently delimiting it would
+ * hide the problem instead of reporting it.
  */
 export function formatAliasName(newName: string): string | null {
   const trimmed = stripIdentifierDelimiters(newName).trim();
   if (trimmed.length === 0) return null;
   if (trimmed.includes(']')) return null;
+  // RESERVED_ALIASES covers the words this module needs while scanning a
+  // statement; isReservedWord is the full T-SQL keyword set, which also rules
+  // out short words like OF, IS, IN and TO that are legal nowhere as an alias.
   if (RESERVED_ALIASES.has(trimmed.toUpperCase())) return null;
+  if (isReservedWord(trimmed)) return null;
   return PLAIN_IDENTIFIER.test(trimmed) ? trimmed : `[${trimmed}]`;
 }
 
