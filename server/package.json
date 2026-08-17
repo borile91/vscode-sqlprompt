@@ -4,7 +4,10 @@
     "private": true,
     "scripts": {
         "compile": "tsc -b",
-        "test": "tsc -b && node --test out/__tests__/sqlLexer.test.js out/__tests__/utils.test.js out/__tests__/cursorContextResolver.test.js out/__tests__/scopeBuilder.test.js out/__tests__/documentTextService.test.js out/__tests__/completionEngine.test.js out/__tests__/completionEngineExecDot.test.js out/__tests__/insertSnippets.test.js out/__tests__/aliasRename.test.js"
+        "test": "tsc -b && node --test out/__tests__/sqlLexer.test.js out/__tests__/utils.test.js out/__tests__/cursorContextResolver.test.js out/__tests__/scopeBuilder.test.js out/__tests__/documentTextService.test.js out/__tests__/completionEngine.test.js out/__tests__/completionEngineExecDot.test.js out/__tests__/insertSnippets.test.js out/__tests__/aliasRename.test.js",
+        "test:live": "tsc -b && node src/__tests__/live/live.js",
+        "test:live:schema": "node src/__tests__/live/dump-schema.mjs EasyStock_Master EasyMexs_Master",
+        "test:live:rename": "tsc -b && node src/__tests__/live/rename.js"
     },
     "dependencies": {
         "mssql": "^11.0.1",
