@@ -7,6 +7,12 @@ import {
   TextDocumentPositionParams,
   TextDocumentSyncKind,
   InitializeResult,
+  RenameParams,
+  WorkspaceEdit,
+  TextEdit,
+  Range,
+  ResponseError,
+  ErrorCodes,
 } from "vscode-languageserver/node";
 
 import { TextDocument } from "vscode-languageserver-textdocument";
@@ -22,6 +28,7 @@ import {
 import { extractStatementAtOffset } from "./documentTextService";
 import { resolveContext } from "./cursorContextResolver";
 import { buildCompletions, resolveTableCompletionItem } from "./completionEngine";
+import { findAliasRenameTarget, formatAliasName } from "./aliasRename";
 
 const connection = createConnection(ProposedFeatures.all);
 const documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument);
@@ -97,6 +104,9 @@ connection.onInitialize((params: InitializeParams) => {
       completionProvider: {
         resolveProvider: true,
         triggerCharacters: [".", "*", ",", " "],
+      },
+      renameProvider: {
+        prepareProvider: true,
       },
     },
   };
@@ -472,6 +482,73 @@ connection.onCompletion(
 
 connection.onCompletionResolve((item: CompletionItem): CompletionItem => {
   return resolveTableCompletionItem(item, tables);
+});
+
+// ── Rename of a table alias ───────────────────────────────────────────────────
+//
+// Aliases are scoped to their statement, so both the search and the edits stay
+// inside the statement under the cursor.
+
+/** Locates the alias under the cursor, or null when there is none. */
+function resolveAliasRename(uri: string, position: TextDocumentPositionParams["position"]) {
+  const document = documents.get(uri);
+  if (!document) return null;
+
+  const cursorAbsolute = document.offsetAt(position);
+  const statementRange = extractStatementAtOffset(document.getText(), cursorAbsolute);
+  const target = findAliasRenameTarget(statementRange.text, statementRange.cursorOffset);
+  if (!target) return null;
+
+  return { document, statementStart: statementRange.start, target };
+}
+
+connection.onPrepareRename((params: TextDocumentPositionParams) => {
+  const resolved = resolveAliasRename(params.textDocument.uri, params.position);
+  if (!resolved) return null;
+
+  const { document, statementStart, target } = resolved;
+  return {
+    range: Range.create(
+      document.positionAt(statementStart + target.current.start),
+      document.positionAt(statementStart + target.current.end),
+    ),
+    placeholder: target.alias,
+  };
+});
+
+connection.onRenameRequest((params: RenameParams): WorkspaceEdit | ResponseError<void> => {
+  const resolved = resolveAliasRename(params.textDocument.uri, params.position);
+  if (!resolved) {
+    return new ResponseError(
+      ErrorCodes.InvalidRequest,
+      "SQL Prompt renames table aliases: place the cursor on one.",
+    );
+  }
+
+  const newName = formatAliasName(params.newName);
+  if (!newName) {
+    return new ResponseError(
+      ErrorCodes.InvalidRequest,
+      `"${params.newName}" is not a valid alias.`,
+    );
+  }
+
+  const { document, statementStart, target } = resolved;
+  const edits = target.occurrences.map((occurrence) =>
+    TextEdit.replace(
+      Range.create(
+        document.positionAt(statementStart + occurrence.start),
+        document.positionAt(statementStart + occurrence.end),
+      ),
+      newName,
+    ),
+  );
+
+  connection.console.info(
+    `SQL Prompt: renaming alias [${target.alias}] to [${newName}] in ${edits.length} place(s).`,
+  );
+
+  return { changes: { [params.textDocument.uri]: edits } };
 });
 
 // ── Schema sanitization ───────────────────────────────────────────────────────
