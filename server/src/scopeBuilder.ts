@@ -277,6 +277,7 @@ function extractTableRefs(
 
     // ── Collect the identifier chain: [db.]schema.table  or  cte  ───────
     let j = i;
+    const refStartIdx = i;
     const parts: string[] = [];
 
     while (j < sig.length) {
@@ -316,6 +317,7 @@ function extractTableRefs(
 
     // ── Resolve optional alias: [AS] identifier ───────────────────────────
     let alias: string | undefined;
+    let refEndIdx = j - 1; // last token consumed by the object name
 
     if (j < sig.length) {
       const next = sig[j];
@@ -328,16 +330,22 @@ function extractTableRefs(
           (aliasTok.kind === 'identifier' || aliasTok.kind === 'quotedIdentifier')
         ) {
           alias = stripIdentifierDelimiters(aliasTok.text);
+          refEndIdx = j;
         }
       } else if (
         (next.kind === 'identifier' || next.kind === 'quotedIdentifier') &&
         !RESERVED_ALIASES.has(next.text.toUpperCase())
       ) {
         alias = stripIdentifierDelimiters(next.text);
+        refEndIdx = j;
       }
     }
 
     const isExplicitAlias = alias !== undefined;
+    const range = {
+      start: sig[refStartIdx].start,
+      end: sig[Math.min(refEndIdx, sig.length - 1)].end,
+    };
 
     // ── CTE reference? ─────────────────────────────────────────────────────
     if (cteNames.some((c) => c.toLowerCase() === objectName.toLowerCase())) {
@@ -349,6 +357,7 @@ function extractTableRefs(
         alias: resolvedAlias,
         columns: cols,
         explicitAlias: isExplicitAlias,
+        range,
       });
       continue;
     }
@@ -365,12 +374,21 @@ function extractTableRefs(
         alias: resolvedAlias,
         columns: tableInfo.columns.map((c) => c.name),
         explicitAlias: isExplicitAlias,
+        range,
       });
     } else if (schema || database) {
       // Store unresolved qualified ref so callers can still use the alias.
       const resolvedAlias = alias ?? generateAlias(objectName, usedAliases);
       usedAliases?.add(resolvedAlias);
-      out.push({ objectName, schema, database, alias: resolvedAlias, columns: [], explicitAlias: isExplicitAlias });
+      out.push({
+        objectName,
+        schema,
+        database,
+        alias: resolvedAlias,
+        columns: [],
+        explicitAlias: isExplicitAlias,
+        range,
+      });
     }
   }
 }
