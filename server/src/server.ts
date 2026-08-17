@@ -616,6 +616,9 @@ function sanitizeTableSnapshot(raw: TableInfo[]): TableInfo[] {
           maxLength: typeof col?.maxLength === 'number' ? col.maxLength : null,
           isNullable: !!(col?.isNullable),
           isPrimaryKey: !!(col?.isPrimaryKey),
+          isIdentity: !!(col?.isIdentity),
+          isComputed: !!(col?.isComputed),
+          hasDefault: !!(col?.hasDefault),
         };
       })
       .filter((c): c is NonNullable<typeof c> => c !== null);
