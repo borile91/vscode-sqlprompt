@@ -228,9 +228,16 @@ function extractSelectColumns(bodyTokens: Token[]): string[] {
 
 // ── Table-reference extraction ────────────────────────────────────────────────
 
-/** Keywords that introduce a table-reference token sequence. */
+/**
+ * Keywords that introduce a table-reference token sequence.
+ *
+ * Besides FROM/JOIN, the target of a DML statement is a table reference too:
+ * `UPDATE dbo.T`, `INSERT INTO dbo.T`, `MERGE dbo.T USING dbo.S`.  Without
+ * them, columns of the target could not be resolved outside a SELECT.
+ */
 const TABLE_INTRO_KEYWORDS = new Set([
   'FROM', 'JOIN', 'APPLY',
+  'UPDATE', 'INSERT', 'INTO', 'DELETE', 'MERGE', 'USING',
 ]);
 
 /** Keywords that must NOT be mistaken for aliases or table names. */
@@ -239,6 +246,7 @@ const RESERVED_ALIASES = new Set([
   'JOIN', 'INNER', 'LEFT', 'RIGHT', 'FULL', 'CROSS', 'OUTER', 'APPLY',
   'UNION', 'INTERSECT', 'EXCEPT', 'SELECT', 'INSERT', 'UPDATE', 'DELETE',
   'WITH', 'PIVOT', 'UNPIVOT', 'FOR', 'OPTION',
+  'FROM', 'INTO', 'VALUES', 'USING', 'MERGE', 'TOP', 'OUTPUT', 'WHEN',
 ]);
 
 /**

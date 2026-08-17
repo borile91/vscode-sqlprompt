@@ -286,3 +286,49 @@ describe('resolveContext — robustness', () => {
     assert.equal(c.visibleSources.length, 2);
   });
 });
+
+// ── UPDATE / INSERT clauses (issue #17) ───────────────────────────────────────
+
+describe('resolveContext — UPDATE and INSERT', () => {
+  it('UPDATE expects the target table', () => {
+    const sql = 'UPDATE ';
+    const ctx = resolveContext(sql, 0, sql.length, tables);
+    assert.equal(ctx.statementKind, 'update');
+    assert.equal(ctx.clause, 'updateTarget');
+    assert.ok(ctx.expectedKinds.includes('table'));
+  });
+
+  it('UPDATE ... SET is the updateSet clause', () => {
+    const sql = 'UPDATE dbo.Orders SET ';
+    const ctx = resolveContext(sql, 0, sql.length, tables);
+    assert.equal(ctx.clause, 'updateSet');
+    assert.ok(ctx.expectedKinds.includes('column'));
+  });
+
+  it('INSERT INTO expects the target table', () => {
+    const sql = 'INSERT INTO ';
+    const ctx = resolveContext(sql, 0, sql.length, tables);
+    assert.equal(ctx.statementKind, 'insert');
+    assert.equal(ctx.clause, 'insertTarget');
+    assert.ok(ctx.expectedKinds.includes('table'));
+  });
+
+  it('the paren after the INSERT target is the column list', () => {
+    const sql = 'INSERT INTO dbo.Orders (';
+    const ctx = resolveContext(sql, 0, sql.length, tables);
+    assert.equal(ctx.clause, 'insertColumns');
+    assert.deepEqual(ctx.expectedKinds, ['column', 'keyword']);
+  });
+
+  it('stays in insertColumns after a comma', () => {
+    const sql = 'INSERT INTO dbo.Orders (OrderID, ';
+    const ctx = resolveContext(sql, 0, sql.length, tables);
+    assert.equal(ctx.clause, 'insertColumns');
+  });
+
+  it('the tuple of a VALUES clause stays in values', () => {
+    const sql = 'INSERT INTO dbo.Orders (OrderID) VALUES (';
+    const ctx = resolveContext(sql, 0, sql.length, tables);
+    assert.equal(ctx.clause, 'values');
+  });
+});

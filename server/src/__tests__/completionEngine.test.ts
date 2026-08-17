@@ -529,3 +529,74 @@ describe('completionEngine — alias generation', () => {
     assert.equal(insertedText(table), 'Orders AS o');
   });
 });
+
+// ── UPDATE / INSERT completions (issue #17) ───────────────────────────────────
+
+describe('completionEngine — UPDATE and INSERT', () => {
+  it('UPDATE proposes tables without an alias', () => {
+    const sql = 'UPDATE ';
+    const items = getItemsAt(sql, sql.length);
+    const table = items.find((i) => i.label === 'dbo.Orders');
+
+    assert.ok(table, 'Expected dbo.Orders as UPDATE target');
+    assert.equal(insertedText(table), 'dbo.Orders');
+    assert.equal(table?.detail, 'Table (dbo)');
+  });
+
+  it('INSERT INTO proposes tables without an alias', () => {
+    const sql = 'INSERT INTO ';
+    const items = getItemsAt(sql, sql.length);
+    const table = items.find((i) => i.label === 'dbo.Orders');
+
+    assert.ok(table, 'Expected dbo.Orders as INSERT target');
+    assert.equal(insertedText(table), 'dbo.Orders');
+  });
+
+  it('INSERT INTO does not propose table-valued functions', () => {
+    const items = getItemsAt('INSERT INTO ', 'INSERT INTO '.length);
+    assert.equal(items.find((i) => i.label === 'dbo.fn_OpenOrders'), undefined);
+  });
+
+  it('UPDATE ... SET proposes the target columns unqualified', () => {
+    const sql = 'UPDATE dbo.Orders SET ';
+    const items = getItemsAt(sql, sql.length);
+    const column = items.find((i) => i.label === 'OrderId');
+
+    assert.ok(column, `Expected bare OrderId, got: ${items.map((i) => i.label).join(', ')}`);
+    assert.equal(column?.insertText, 'OrderId');
+    assert.equal(column?.detail, 'dbo.Orders');
+  });
+
+  it('UPDATE ... FROM keeps the written alias on the columns', () => {
+    const sql = 'UPDATE o SET  FROM dbo.Orders o';
+    const items = getItemsAt(sql, sql.indexOf('SET ') + 4);
+    const column = items.find((i) => i.label === 'o.OrderId');
+
+    assert.ok(column, `Expected o.OrderId, got: ${items.map((i) => i.label).join(', ')}`);
+    assert.equal(column?.insertText, 'o.OrderId');
+  });
+
+  it('the INSERT column list proposes bare columns', () => {
+    const sql = 'INSERT INTO dbo.Orders (';
+    const items = getItemsAt(sql, sql.length);
+    const column = items.find((i) => i.label === 'OrderId');
+
+    assert.ok(column, `Expected bare OrderId, got: ${items.map((i) => i.label).join(', ')}`);
+    assert.equal(column?.insertText, 'OrderId');
+  });
+
+  it('the INSERT column list offers the full column list', () => {
+    const sql = 'INSERT INTO dbo.Orders (';
+    const items = getItemsAt(sql, sql.length);
+    const expand = items.find((i) => i.label === '★ Expand all columns');
+
+    assert.ok(expand, 'Expected the expand-all item');
+    assert.equal(insertedText(expand), 'OrderId, CustomerId');
+  });
+
+  it('the VALUES tuple does not propose columns', () => {
+    const sql = 'INSERT INTO dbo.Orders (OrderId) VALUES (';
+    const items = getItemsAt(sql, sql.length);
+    assert.equal(items.find((i) => i.label === 'OrderId'), undefined);
+  });
+});
