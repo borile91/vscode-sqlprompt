@@ -1,6 +1,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { findAliasRenameTarget, formatAliasName } from '../aliasRename.js';
+import {
+  collidesWithExistingAlias,
+  findAliasRenameTarget,
+  formatAliasName,
+} from '../aliasRename.js';
 
 /** Renames every occurrence, to make the expected result readable. */
 function rename(sql: string, cursor: number, newName: string): string | null {
@@ -130,5 +134,46 @@ describe('formatAliasName', () => {
 
   it('rejects a reserved keyword', () => {
     assert.equal(formatAliasName('select'), null);
+  });
+});
+
+describe('collidesWithExistingAlias', () => {
+  const sql = 'SELECT ot.STAB FROM dbo.ORDINI_TESTATA ot JOIN dbo.ORDINI_DETTAGLIO od ON od.STAB = ot.STAB';
+  const onOd = sql.indexOf('od ON');
+
+  it('lists the aliases of the other table references', () => {
+    const target = findAliasRenameTarget(sql, onOd);
+    assert.deepEqual(target?.otherAliases, ['ot']);
+  });
+
+  it('detects a rename onto an alias already used in the statement', () => {
+    const target = findAliasRenameTarget(sql, onOd);
+    assert.equal(collidesWithExistingAlias(target!, 'ot'), true);
+  });
+
+  it('ignores case when comparing', () => {
+    const target = findAliasRenameTarget(sql, onOd);
+    assert.equal(collidesWithExistingAlias(target!, 'OT'), true);
+  });
+
+  it('sees through the brackets of a delimited name', () => {
+    const target = findAliasRenameTarget(sql, onOd);
+    assert.equal(collidesWithExistingAlias(target!, '[ot]'), true);
+  });
+
+  it('allows a name no other table uses', () => {
+    const target = findAliasRenameTarget(sql, onOd);
+    assert.equal(collidesWithExistingAlias(target!, 'det'), false);
+  });
+
+  it('allows renaming an alias onto itself', () => {
+    const target = findAliasRenameTarget(sql, onOd);
+    assert.equal(collidesWithExistingAlias(target!, 'od'), false);
+  });
+
+  it('reports no other aliases for a single-table statement', () => {
+    const single = 'SELECT a.ARTI FROM dbo.ARTICOLI a';
+    const target = findAliasRenameTarget(single, single.indexOf('ARTICOLI a') + 'ARTICOLI '.length);
+    assert.deepEqual(target?.otherAliases, []);
   });
 });

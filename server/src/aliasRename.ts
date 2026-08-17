@@ -27,6 +27,11 @@ export interface AliasRenameTarget {
   occurrences: AliasOccurrence[];
   /** Occurrence containing the cursor. */
   current: AliasOccurrence;
+  /**
+   * Aliases declared by the other table references of the same statement.
+   * Renaming onto one of these would produce two identical correlation names.
+   */
+  otherAliases: string[];
 }
 
 /** Keywords that introduce a table reference which may carry an alias. */
@@ -94,7 +99,24 @@ export function findAliasRenameTarget(
   const current = occurrences.find((o) => cursorOffset >= o.start && cursorOffset <= o.end);
   if (!current) return null;
 
-  return { alias, occurrences, current };
+  const otherAliases = [...definitions]
+    .map((idx) => stripIdentifierDelimiters(sig[idx].text))
+    .filter((a) => a.toLowerCase() !== aliasLower);
+
+  return { alias, occurrences, current, otherAliases };
+}
+
+/**
+ * True when `newName` is already the alias of another table reference in the
+ * same statement.  Applying the rename would yield two identical correlation
+ * names, which SQL Server rejects, so the request must be refused instead.
+ */
+export function collidesWithExistingAlias(
+  target: AliasRenameTarget,
+  newName: string,
+): boolean {
+  const bare = stripIdentifierDelimiters(newName).trim().toLowerCase();
+  return target.otherAliases.some((a) => a.toLowerCase() === bare);
 }
 
 /**

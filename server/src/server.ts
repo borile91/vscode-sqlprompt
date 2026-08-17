@@ -28,7 +28,7 @@ import {
 import { extractStatementAtOffset } from "./documentTextService";
 import { resolveContext } from "./cursorContextResolver";
 import { buildCompletions, resolveTableCompletionItem } from "./completionEngine";
-import { findAliasRenameTarget, formatAliasName } from "./aliasRename";
+import { collidesWithExistingAlias, findAliasRenameTarget, formatAliasName } from "./aliasRename";
 
 const connection = createConnection(ProposedFeatures.all);
 const documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument);
@@ -534,6 +534,14 @@ connection.onRenameRequest((params: RenameParams): WorkspaceEdit | ResponseError
   }
 
   const { document, statementStart, target } = resolved;
+
+  if (collidesWithExistingAlias(target, newName)) {
+    return new ResponseError(
+      ErrorCodes.InvalidRequest,
+      `"${params.newName}" is already used by another table in this statement.`,
+    );
+  }
+
   const edits = target.occurrences.map((occurrence) =>
     TextEdit.replace(
       Range.create(
