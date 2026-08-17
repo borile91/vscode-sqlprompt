@@ -4,6 +4,8 @@
  * Handles statement-boundary detection in a T-SQL document, including:
  *   - Semicolon (`;`) statement terminators
  *   - `GO` batch separators (case-insensitive, must be on its own line)
+ *   - Implicit boundaries: a statement keyword (SELECT, UPDATE, INSERT, …)
+ *     that opens a line while the previous statement was left unterminated
  *
  * All parsing is done character-by-character, correctly skipping string
  * literals, block/line comments, and quoted identifiers so that these
@@ -84,8 +86,30 @@ export function findStatementBoundaries(text: string): number[] {
   const len = text.length;
   let i = 0;
 
+  // ── State for the implicit-boundary heuristic ──────────────────────────
+  /** Paren nesting depth: implicit boundaries only apply at depth 0. */
+  let parenDepth = 0;
+  /** True while only whitespace has been seen on the current line. */
+  let atLineStart = true;
+  /** Last significant token before the cursor position (uppercased). */
+  let prevToken: PrevToken | null = null;
+  /** First statement keyword seen at depth 0 since the last boundary. */
+  let pendingStatement: string | null = null;
+
+  /** Records a boundary and resets the per-statement heuristic state. */
+  const pushBoundary = (offset: number): void => {
+    if (offset > boundaries[boundaries.length - 1]) boundaries.push(offset);
+    prevToken = null;
+    pendingStatement = null;
+    parenDepth = 0;
+  };
+
   while (i < len) {
     const ch = text[i];
+
+    // ── Whitespace / newlines ────────────────────────────────────────────
+    if (ch === '\n') { atLineStart = true; i++; continue; }
+    if (ch === '\r' || ch === ' ' || ch === '\t') { i++; continue; }
 
     // ── Line comment  -- ... \n ──────────────────────────────────────────
     if (ch === '-' && i + 1 < len && text[i + 1] === '-') {
@@ -101,6 +125,9 @@ export function findStatementBoundaries(text: string): number[] {
         i++;
       }
       i += 2; // consume */
+      // The comment itself counts as content on the line it ends on; a
+      // trailing newline (if any) is handled by the whitespace branch.
+      atLineStart = false;
       continue;
     }
 
@@ -108,6 +135,8 @@ export function findStatementBoundaries(text: string): number[] {
     if ((ch === 'N' || ch === 'n') && i + 1 < len && text[i + 1] === "'") {
       i += 2; // consume N and opening quote
       i = skipStringBody(text, i, len);
+      prevToken = { text: "'", isWord: false };
+      atLineStart = false;
       continue;
     }
 
@@ -115,6 +144,8 @@ export function findStatementBoundaries(text: string): number[] {
     if (ch === "'") {
       i++;
       i = skipStringBody(text, i, len);
+      prevToken = { text: "'", isWord: false };
+      atLineStart = false;
       continue;
     }
 
@@ -123,6 +154,8 @@ export function findStatementBoundaries(text: string): number[] {
       i++;
       while (i < len && text[i] !== ']') i++;
       if (i < len) i++; // consume ]
+      prevToken = { text: ']', isWord: false };
+      atLineStart = false;
       continue;
     }
 
@@ -134,22 +167,25 @@ export function findStatementBoundaries(text: string): number[] {
         if (text[i] === '"') { i++; break; }
         i++;
       }
+      prevToken = { text: ']', isWord: false };
+      atLineStart = false;
       continue;
     }
 
     // ── Semicolon terminator ─────────────────────────────────────────────
     if (ch === ';') {
-      boundaries.push(i + 1);
+      pushBoundary(i + 1);
+      atLineStart = false;
       i++;
       continue;
     }
 
     // ── GO batch separator ───────────────────────────────────────────────
-    // Rules: must start at the beginning of a line (only whitespace before
-    // on that line), must be followed by whitespace / end-of-line / digits /
+    // Rules: must be the first token on its line (leading whitespace is
+    // allowed), and must be followed by whitespace / end-of-line / digits /
     // end-of-string only (to avoid matching e.g. "GOTO").
     if ((ch === 'G' || ch === 'g') && i + 1 < len && (text[i + 1] === 'O' || text[i + 1] === 'o')) {
-      if (isGoSeparator(text, i, len)) {
+      if (atLineStart && isGoSeparator(text, i, len)) {
         // Skip to the end of the GO line
         let j = i + 2;
         // Optionally skip the repeat count: GO 3
@@ -159,26 +195,158 @@ export function findStatementBoundaries(text: string): number[] {
         if (j < len && text[j] === '\r' && j + 1 < len && text[j + 1] === '\n') j += 2;
         else if (j < len) j++;
 
-        boundaries.push(j);
+        pushBoundary(j);
+        atLineStart = true;
         i = j;
         continue;
       }
     }
 
+    // ── Word (identifier / keyword / number) ─────────────────────────────
+    if (isWordChar(ch)) {
+      const start = i;
+      let j = i;
+      while (j < len && isWordChar(text[j])) j++;
+      const upper = text.slice(start, j).toUpperCase();
+
+      if (
+        atLineStart &&
+        parenDepth === 0 &&
+        start > 0 &&
+        STATEMENT_START_KEYWORDS.has(upper) &&
+        canStartNewStatement(upper, prevToken, pendingStatement) &&
+        !(upper === 'WITH' && isTableHint(text, j, len))
+      ) {
+        pushBoundary(start);
+      }
+
+      // The `INSERT … SELECT` / `WITH … SELECT` exemption is single-use: once
+      // the body that legitimately belongs to the statement has been seen (the
+      // SELECT itself, or a VALUES list), any *further* line-initial SELECT is
+      // a new statement again.  Without this the pending keyword would survive
+      // until the next `;`/`GO` and suppress every later boundary.
+      if (
+        parenDepth === 0 &&
+        (pendingStatement === 'INSERT' || pendingStatement === 'WITH') &&
+        (upper === 'VALUES' || (atLineStart && upper === 'SELECT'))
+      ) {
+        pendingStatement = 'SELECT';
+      }
+
+      if (parenDepth === 0 && pendingStatement === null && STATEMENT_START_KEYWORDS.has(upper)) {
+        pendingStatement = upper;
+      }
+
+      prevToken = { text: upper, isWord: true };
+      atLineStart = false;
+      i = j;
+      continue;
+    }
+
+    // ── Parens and any other punctuation ─────────────────────────────────
+    if (ch === '(') parenDepth++;
+    else if (ch === ')' && parenDepth > 0) parenDepth--;
+
+    prevToken = { text: ch, isWord: false };
+    atLineStart = false;
     i++;
   }
 
   return boundaries;
 }
 
-/** Returns true when the two characters at `i` form a valid GO separator. */
-function isGoSeparator(text: string, i: number, len: number): boolean {
-  // Must be at the start of a line (or start of string)
-  const prevCh = i > 0 ? text[i - 1] : '\n';
-  if (prevCh !== '\n' && prevCh !== '\r') {
+// ── Implicit statement boundaries ─────────────────────────────────────────────
+
+interface PrevToken {
+  /** Uppercased token text (a single character for punctuation). */
+  text: string;
+  isWord: boolean;
+}
+
+/**
+ * Keywords that may open a new statement when they are the first token on a
+ * line.  Deliberately excludes block openers such as `BEGIN`, whose body is
+ * best kept together with its header.
+ */
+const STATEMENT_START_KEYWORDS = new Set([
+  'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'MERGE', 'WITH',
+  'EXEC', 'EXECUTE', 'DECLARE', 'TRUNCATE',
+  'CREATE', 'ALTER', 'DROP', 'USE', 'PRINT',
+]);
+
+/**
+ * Keywords that, when they precede a line-initial statement keyword, mean the
+ * previous statement is still open — so no boundary may be inserted.
+ * Covers set operators (`UNION SELECT`), MERGE actions (`THEN UPDATE`),
+ * clause keywords and subquery introducers.
+ */
+const OPEN_STATEMENT_KEYWORDS = new Set([
+  'UNION', 'ALL', 'EXCEPT', 'INTERSECT',
+  'AS', 'INTO', 'EXISTS', 'IN', 'AND', 'OR', 'NOT', 'CASE', 'WHEN', 'THEN',
+  // NB: MERGE's own keywords (MATCHED, TARGET, SOURCE) are deliberately absent —
+  // the whole statement is already exempted via `pendingStatement === 'MERGE'`,
+  // and they are common table/column names that would otherwise suppress a
+  // legitimate boundary (e.g. `… FROM dbo.Source` followed by a new SELECT).
+  'ELSE', 'BEGIN', 'RETURN', 'BY', 'OVER',
+  'FROM', 'JOIN', 'ON', 'WHERE', 'GROUP', 'ORDER', 'HAVING', 'SET', 'VALUES',
+  'OUTPUT', 'APPLY', 'USING', 'WITH', 'PARTITION', 'TOP', 'DISTINCT',
+  'LIKE', 'BETWEEN', 'IS', 'FOR', 'OPTION', 'GO',
+]);
+
+/** Punctuation that may legitimately end a statement. */
+const CLOSING_PUNCTUATION = new Set([')', ']', "'", '*']);
+
+/**
+ * Decides whether a line-initial statement keyword really opens a new
+ * statement, given what came before it.
+ *
+ * The rule is conservative on purpose: a false split loses the visible scope
+ * of the query, so anything ambiguous is left attached to the previous
+ * statement.
+ */
+function canStartNewStatement(
+  keyword: string,
+  prevToken: PrevToken | null,
+  pendingStatement: string | null,
+): boolean {
+  // Nothing significant before → the statement already starts at offset 0.
+  if (prevToken === null) return false;
+
+  // MERGE spans several action blocks (WHEN MATCHED THEN UPDATE …): never split.
+  if (pendingStatement === 'MERGE') return false;
+
+  // `INSERT INTO t` / `WITH cte AS (…)` are routinely followed by a SELECT
+  // that belongs to the very same statement.
+  if (keyword === 'SELECT' && (pendingStatement === 'INSERT' || pendingStatement === 'WITH')) {
     return false;
   }
 
+  if (prevToken.isWord) return !OPEN_STATEMENT_KEYWORDS.has(prevToken.text);
+  return CLOSING_PUNCTUATION.has(prevToken.text);
+}
+
+/**
+ * Detects the table-hint form `WITH (NOLOCK)`, which must not be mistaken for
+ * a CTE preamble when it happens to start a line.
+ */
+function isTableHint(text: string, afterWith: number, len: number): boolean {
+  let k = afterWith;
+  while (k < len && (text[k] === ' ' || text[k] === '\t' || text[k] === '\r' || text[k] === '\n')) k++;
+  return k < len && text[k] === '(';
+}
+
+/** Characters that may appear inside an identifier, keyword or number. */
+function isWordChar(ch: string): boolean {
+  return (
+    (ch >= 'a' && ch <= 'z') ||
+    (ch >= 'A' && ch <= 'Z') ||
+    (ch >= '0' && ch <= '9') ||
+    ch === '_' || ch === '@' || ch === '#' || ch === '$'
+  );
+}
+
+/** Returns true when the two characters at `i` form a valid GO separator. */
+function isGoSeparator(text: string, i: number, len: number): boolean {
   // Character after "GO" must be whitespace, digit, end-of-string, or \r/\n
   const afterGo = i + 2;
   if (afterGo >= len) return true;
