@@ -27,6 +27,7 @@ import {
 import { applyDeclareFormatting } from './declareFormatter';
 import { applyExecParamFormatting } from './execFormatter';
 import { applyStuffForXmlFormatting } from './stuffFormatter';
+import { describeFormattingRisk } from './formatGuard';
 
 export class SqlFormattingProvider implements DocumentFormattingEditProvider {
     constructor(private readonly getStyle: () => LoadedStyle | undefined) {}
@@ -278,6 +279,20 @@ export class SqlFormattingProvider implements DocumentFormattingEditProvider {
             // SQL statement when sql-formatter compacts them together.
             formatted = formatted.replace(/^((?:[ \t]*--[^\n]*\n)+)(?=\S)/, '$1\n');
         } catch {
+            return [];
+        }
+
+        // Formatting is cosmetic: it must never be able to break the query.
+        // If the result altered anything beyond whitespace and casing, one of
+        // the regex passes matched where it should not have — leave the
+        // document exactly as it is and say so, instead of applying an edit
+        // that may not compile.
+        const risk = describeFormattingRisk(text, formatted);
+        if (risk) {
+            window.showWarningMessage(
+                `SQL Prompt: formatting cancelled — the result would have altered the query (${risk}). ` +
+                'The document was left unchanged.',
+            );
             return [];
         }
 
