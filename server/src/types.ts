@@ -82,6 +82,12 @@ export interface VisibleSource {
   columns?: string[];
   /** True when the alias was explicitly written in SQL (AS x or bare x after table name). */
   explicitAlias?: boolean;
+  /**
+   * Offsets of the table reference *relative to the statement text*, from the
+   * first identifier of the object name to the end of its alias.
+   * Used to tell which reference the cursor is currently editing.
+   */
+  range?: { start: number; end: number };
 }
 
 // ── Query context ─────────────────────────────────────────────────────────────

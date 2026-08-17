@@ -192,3 +192,25 @@ describe('buildScope — edge cases', () => {
     assert.ok(names.includes('Orders'), 'inner base table should be visible at depth 1');
   });
 });
+
+// ── reference ranges (issue #11) ──────────────────────────────────────────────
+
+describe('buildScope — source ranges', () => {
+  it('records the offsets of the table reference including its alias', () => {
+    const sql = 'SELECT * FROM dbo.Orders o';
+    const scope = buildScope(tokenize(sql), sql.length, tables);
+    const source = scope.visibleSources[0];
+
+    assert.equal(source.explicitAlias, true);
+    assert.equal(sql.slice(source.range!.start, source.range!.end), 'dbo.Orders o');
+  });
+
+  it('records the range of a reference without an alias', () => {
+    const sql = 'SELECT * FROM dbo.Orders';
+    const scope = buildScope(tokenize(sql), sql.length, tables);
+    const source = scope.visibleSources[0];
+
+    assert.equal(source.explicitAlias, false);
+    assert.equal(sql.slice(source.range!.start, source.range!.end), 'dbo.Orders');
+  });
+});

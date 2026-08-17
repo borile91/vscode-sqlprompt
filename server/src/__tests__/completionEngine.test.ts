@@ -447,3 +447,85 @@ describe('completionEngine — db.schema. qualified completions', () => {
     assert.equal(localTable, undefined, 'LocalTable must not appear in DB.imp. completions');
   });
 });
+
+// ── alias generation (issue #11) ──────────────────────────────────────────────
+
+function getItemsAt(sql: string, cursor: number) {
+  const document = TextDocument.create('file:///test.sql', 'sql', 1, sql);
+  const position = document.positionAt(cursor);
+  const context = resolveContext(sql, 0, cursor, tables);
+
+  return buildCompletions(
+    context,
+    tables,
+    routines,
+    document,
+    position,
+    { text: sql, start: 0, end: sql.length, cursorOffset: cursor },
+  );
+}
+
+function insertedText(item: any): string {
+  return typeof item?.textEdit === 'object' ? String(item.textEdit.newText) : '';
+}
+
+describe('completionEngine — alias generation', () => {
+  it('does not reserve an alias for the table being typed', () => {
+    // "Orders" is already a visible source with the auto-alias "o"; suggesting
+    // the same table must still propose "o", not "o2".
+    const items = getItemsAt('SELECT * FROM Orders', 'SELECT * FROM Orders'.length);
+    const table = items.find((i) => i.label === 'dbo.Orders');
+
+    assert.ok(table, 'Expected dbo.Orders in FROM completions');
+    assert.equal(insertedText(table), 'dbo.Orders AS o');
+    assert.equal(table?.detail, 'Table (dbo) — alias: o');
+  });
+
+  it('does not reserve aliases that were auto-generated for other sources', () => {
+    const sql = 'SELECT * FROM dbo.Orders JOIN ';
+    const items = getItemsAt(sql, sql.length);
+    const view = items.find((i) => i.label === 'dbo.OrderSummaryView');
+
+    // Orders has no written alias, so "os" must stay free for the view.
+    assert.ok(view, 'Expected dbo.OrderSummaryView in JOIN completions');
+    assert.equal(insertedText(view), 'dbo.OrderSummaryView AS osv');
+  });
+
+  it('still deduplicates against an alias written in the query', () => {
+    const sql = 'SELECT * FROM dbo.Orders o JOIN ';
+    const items = getItemsAt(sql, sql.length);
+    const table = items.find((i) => i.label === 'dbo.Orders');
+
+    assert.ok(table, 'Expected dbo.Orders in JOIN completions');
+    assert.equal(insertedText(table), 'dbo.Orders AS o2');
+  });
+
+  it('deduplicates case-insensitively', () => {
+    const sql = 'SELECT * FROM dbo.Orders AS O JOIN ';
+    const items = getItemsAt(sql, sql.length);
+    const table = items.find((i) => i.label === 'dbo.Orders');
+
+    assert.equal(insertedText(table), 'dbo.Orders AS o2');
+  });
+
+  it('ignores the reference under the cursor even when it has an alias', () => {
+    // Cursor sits on the table name of "dbo.Orders o": re-completing it must
+    // propose "o" again rather than colliding with itself.
+    const sql = 'SELECT * FROM dbo.Orders o';
+    const items = getItemsAt(sql, sql.indexOf('dbo.Orders') + 'dbo.Orders'.length);
+    // The schema prefix is already typed, so items are labelled by bare name.
+    const table = items.find((i) => i.label === 'Orders');
+
+    assert.ok(table, 'Expected Orders in FROM completions');
+    assert.equal(insertedText(table), 'Orders AS o');
+  });
+
+  it('keeps the alias free after a schema-qualified prefix', () => {
+    const sql = 'SELECT * FROM dbo.';
+    const items = getItemsAt(sql, sql.length);
+    const table = items.find((i) => i.label === 'Orders');
+
+    assert.ok(table, 'Expected Orders in dbo. completions');
+    assert.equal(insertedText(table), 'Orders AS o');
+  });
+});

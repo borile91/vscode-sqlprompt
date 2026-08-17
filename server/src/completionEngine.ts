@@ -37,6 +37,40 @@ import {
 import { StatementRange } from './documentTextService';
 import { generateAlias } from './utils';
 
+// ── Alias bookkeeping ─────────────────────────────────────────────────────────
+
+/**
+ * Collects the aliases that are really taken in the statement, so that a newly
+ * suggested table gets `o2` only when `o` is genuinely occupied.
+ *
+ * Two categories are deliberately left out:
+ *
+ *  - **auto-generated aliases** — `buildScope` assigns one to every source so
+ *    that columns can be qualified, but they are not written in the document;
+ *    counting them produced `t2` for the very first table of a query.
+ *  - **the reference under the cursor** — while completing `FROM Ord|` the
+ *    table being typed is already a visible source, and it must not reserve
+ *    the alias that the completion is about to insert in its place.
+ */
+function collectUsedAliases(context: QueryContext): Set<string> {
+  const cursorRelative = context.cursorOffset - context.statementRange.start;
+  const used = new Set<string>();
+
+  for (const source of context.visibleSources) {
+    if (!source.alias || !source.explicitAlias) continue;
+    if (
+      source.range &&
+      cursorRelative >= source.range.start &&
+      cursorRelative <= source.range.end
+    ) {
+      continue;
+    }
+    used.add(source.alias.toLowerCase());
+  }
+
+  return used;
+}
+
 // ── Snippet completions ───────────────────────────────────────────────────────
 
 function buildSnippetCompletions(clause: string, position: Position): CompletionItem[] {
@@ -131,13 +165,9 @@ export function buildCompletions(
 
     case 'from':
     case 'join': {
-      // Build the set of aliases already committed in the current query so that
-      // new suggestions get a deduplicated alias (e.g. o2 when o is taken).
-      const usedAliases = new Set(
-        context.visibleSources
-          .map((s) => s.alias)
-          .filter((a): a is string => a !== undefined),
-      );
+      // Aliases actually written in the query, so that new suggestions get a
+      // deduplicated alias (e.g. o2) only when o is really taken.
+      const usedAliases = collectUsedAliases(context);
 
       items.push(...buildSnippetCompletions(context.clause, position));
       const schemaMatch = SCHEMA_DOT_PATTERN.exec(lineText);
@@ -469,11 +499,7 @@ function buildDotCompletions(
       : [];
 
   if (schemaMatches.length || schemaRoutineMatches.length || schemaProcedureMatches.length) {
-    const usedAliases = new Set(
-      context.visibleSources
-        .map((s) => s.alias)
-        .filter((a): a is string => a !== undefined),
-    );
+    const usedAliases = collectUsedAliases(context);
     const tableItems = schemaMatches.map((table) => {
       const alias = generateAlias(table.name, new Set(usedAliases));
       return {
@@ -574,11 +600,7 @@ function buildDotCompletions(
         sortText: `01_schema_${schema}`,
       }));
 
-      const usedAliases = new Set(
-        context.visibleSources
-          .map((s) => s.alias)
-          .filter((a): a is string => a !== undefined),
-      );
+      const usedAliases = collectUsedAliases(context);
       const tableItems = tablesForDb.map((table) => {
         const alias = generateAlias(table.name, new Set(usedAliases));
         const fullName = `${table.schema}.${table.name}`;
