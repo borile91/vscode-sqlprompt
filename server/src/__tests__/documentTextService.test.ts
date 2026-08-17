@@ -108,6 +108,26 @@ describe('findStatementBoundaries — unterminated statements', () => {
     assert.deepEqual(findStatementBoundaries(text), [0]);
   });
 
+  it('splits the SELECT that follows an INSERT … SELECT', () => {
+    const text = 'INSERT INTO dbo.Target (a)\nSELECT a FROM dbo.Source\nSELECT * FROM dbo.Other';
+    assert.deepEqual(findStatementBoundaries(text), [0, text.indexOf('SELECT * FROM dbo.Other')]);
+  });
+
+  it('splits the SELECT that follows an INSERT … VALUES', () => {
+    const text = 'INSERT INTO dbo.Target (a)\nVALUES (1)\nSELECT * FROM dbo.Other';
+    assert.deepEqual(findStatementBoundaries(text), [0, text.indexOf('SELECT * FROM dbo.Other')]);
+  });
+
+  it('splits the SELECT that follows the main query of a CTE', () => {
+    const text = 'WITH c AS (\n  SELECT 1 AS x\n)\nSELECT * FROM c\nSELECT * FROM dbo.Other';
+    assert.deepEqual(findStatementBoundaries(text), [0, text.indexOf('SELECT * FROM dbo.Other')]);
+  });
+
+  it('splits after a table whose name collides with a MERGE keyword', () => {
+    const text = 'SELECT * FROM dbo.Source\nSELECT * FROM dbo.Other';
+    assert.deepEqual(findStatementBoundaries(text), [0, text.indexOf('SELECT * FROM dbo.Other')]);
+  });
+
   it('does not split a subquery', () => {
     const text = 'SELECT *\nFROM t\nWHERE Id IN (\nSELECT Id FROM u\n)';
     assert.deepEqual(findStatementBoundaries(text), [0]);

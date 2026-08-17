@@ -220,6 +220,19 @@ export function findStatementBoundaries(text: string): number[] {
         pushBoundary(start);
       }
 
+      // The `INSERT … SELECT` / `WITH … SELECT` exemption is single-use: once
+      // the body that legitimately belongs to the statement has been seen (the
+      // SELECT itself, or a VALUES list), any *further* line-initial SELECT is
+      // a new statement again.  Without this the pending keyword would survive
+      // until the next `;`/`GO` and suppress every later boundary.
+      if (
+        parenDepth === 0 &&
+        (pendingStatement === 'INSERT' || pendingStatement === 'WITH') &&
+        (upper === 'VALUES' || (atLineStart && upper === 'SELECT'))
+      ) {
+        pendingStatement = 'SELECT';
+      }
+
       if (parenDepth === 0 && pendingStatement === null && STATEMENT_START_KEYWORDS.has(upper)) {
         pendingStatement = upper;
       }
@@ -270,7 +283,11 @@ const STATEMENT_START_KEYWORDS = new Set([
 const OPEN_STATEMENT_KEYWORDS = new Set([
   'UNION', 'ALL', 'EXCEPT', 'INTERSECT',
   'AS', 'INTO', 'EXISTS', 'IN', 'AND', 'OR', 'NOT', 'CASE', 'WHEN', 'THEN',
-  'ELSE', 'BEGIN', 'RETURN', 'MATCHED', 'TARGET', 'SOURCE', 'BY', 'OVER',
+  // NB: MERGE's own keywords (MATCHED, TARGET, SOURCE) are deliberately absent —
+  // the whole statement is already exempted via `pendingStatement === 'MERGE'`,
+  // and they are common table/column names that would otherwise suppress a
+  // legitimate boundary (e.g. `… FROM dbo.Source` followed by a new SELECT).
+  'ELSE', 'BEGIN', 'RETURN', 'BY', 'OVER',
   'FROM', 'JOIN', 'ON', 'WHERE', 'GROUP', 'ORDER', 'HAVING', 'SET', 'VALUES',
   'OUTPUT', 'APPLY', 'USING', 'WITH', 'PARTITION', 'TOP', 'DISTINCT',
   'LIKE', 'BETWEEN', 'IS', 'FOR', 'OPTION', 'GO',
