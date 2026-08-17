@@ -214,3 +214,42 @@ describe('buildScope — source ranges', () => {
     assert.equal(sql.slice(source.range!.start, source.range!.end), 'dbo.Orders');
   });
 });
+
+// ── DML targets (issue #17) ───────────────────────────────────────────────────
+
+describe('buildScope — UPDATE / INSERT / MERGE targets', () => {
+  it('resolves the UPDATE target', () => {
+    const sql = 'UPDATE dbo.Orders SET ';
+    const scope = buildScope(tokenize(sql), sql.length, tables);
+
+    assert.equal(scope.visibleSources.length, 1);
+    assert.equal(scope.visibleSources[0].objectName, 'Orders');
+    assert.deepEqual(scope.visibleSources[0].columns, ['OrderID', 'CustomerID']);
+  });
+
+  it('resolves the INSERT INTO target', () => {
+    const sql = 'INSERT INTO dbo.Orders (';
+    const scope = buildScope(tokenize(sql), sql.length, tables);
+
+    assert.equal(scope.visibleSources.length, 1);
+    assert.equal(scope.visibleSources[0].objectName, 'Orders');
+  });
+
+  it('resolves both sides of a MERGE', () => {
+    const sql = 'MERGE dbo.Orders AS t USING dbo.Customers AS s ON t.CustomerID = s.CustomerID';
+    const scope = buildScope(tokenize(sql), sql.length, tables);
+    const names = scope.visibleSources.map((s) => s.objectName).sort();
+
+    assert.deepEqual(names, ['Customers', 'Orders']);
+    assert.deepEqual(scope.visibleAliases.sort(), ['s', 't']);
+  });
+
+  it('keeps resolving the UPDATE ... FROM form', () => {
+    const sql = 'UPDATE o SET o.CustomerID = 1 FROM dbo.Orders o';
+    const scope = buildScope(tokenize(sql), sql.length, tables);
+
+    assert.equal(scope.visibleSources.length, 1);
+    assert.equal(scope.visibleSources[0].objectName, 'Orders');
+    assert.equal(scope.visibleSources[0].alias, 'o');
+  });
+});

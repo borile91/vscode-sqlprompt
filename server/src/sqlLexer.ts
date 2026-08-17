@@ -53,7 +53,7 @@ const KEYWORDS = new Set<string>([
   'TABLE', 'TABLESAMPLE', 'TEXTSIZE', 'THEN', 'TO', 'TOP',
   'TRAN', 'TRANSACTION', 'TRIGGER', 'TRUNCATE',
   'UNBOUNDED', 'UNION', 'UNIQUE', 'UNPIVOT', 'UPDATE', 'UPDATETEXT',
-  'USE', 'USER',
+  'USE', 'USER', 'USING',
   'VALUES', 'VARYING', 'VIEW',
   'WAITFOR', 'WHEN', 'WHERE', 'WHILE', 'WITH', 'WITHIN', 'WRITETEXT',
   // Built-in aggregate / scalar / window functions used as context markers
