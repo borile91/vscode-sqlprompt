@@ -270,33 +270,44 @@ function resolveDotQualifier(
   sig: Token[],
   currentWord: string | undefined,
 ): DotQualifierResult {
-  // If the user is typing a word AND that word's start is preceded by a dot,
-  // the sig array already excludes that partial word (end <= cursorOffset check).
-  // So if currentWord is non-empty, the actual sig should end with "... dot".
-  // If currentWord is empty, sig ends with "... dot" for isAfterDot.
+  // The word being typed ends exactly at the cursor, and `sig` is filtered with
+  // `end <= cursorOffset`, so that word IS still in `sig` — the dot we are
+  // looking for is the token before it. Without dropping it, `Db.con` reported
+  // isAfterDot = false and lost the qualifier, so nothing was suggested as soon
+  // as the user typed the first letter after a database or schema dot.
+  const typing = sig[sig.length - 1];
+  const isTypedWord =
+    currentWord !== undefined &&
+    currentWord.length > 0 &&
+    typing !== undefined &&
+    (typing.kind === 'identifier' ||
+      typing.kind === 'quotedIdentifier' ||
+      typing.kind === 'keyword') &&
+    stripIdentifierDelimiters(typing.text) === currentWord;
+  const beforeCursor = isTypedWord ? sig.slice(0, -1) : sig;
 
   // The last significant token must be a dot.
-  const lastTok = sig[sig.length - 1];
+  const lastTok = beforeCursor[beforeCursor.length - 1];
   if (!lastTok || lastTok.kind !== 'dot') {
     return { isAfterDot: false, qualifierChain: [] };
   }
 
   // Walk backwards collecting: identifier, dot, identifier, dot, ...
   const chain: string[] = [];
-  let j = sig.length - 1; // points at the trailing dot
+  let j = beforeCursor.length - 1; // points at the trailing dot
 
   while (j >= 0) {
-    const t = sig[j];
+    const t = beforeCursor[j];
     if (t.kind === 'dot') {
       j--;
       // Expect an identifier before this dot.
       if (
         j >= 0 &&
-        (sig[j].kind === 'identifier' ||
-          sig[j].kind === 'quotedIdentifier' ||
-          sig[j].kind === 'keyword')
+        (beforeCursor[j].kind === 'identifier' ||
+          beforeCursor[j].kind === 'quotedIdentifier' ||
+          beforeCursor[j].kind === 'keyword')
       ) {
-        chain.unshift(stripIdentifierDelimiters(sig[j].text));
+        chain.unshift(stripIdentifierDelimiters(beforeCursor[j].text));
         j--;
         // Continue — maybe there's another dot before this identifier.
       } else {

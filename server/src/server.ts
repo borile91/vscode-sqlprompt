@@ -448,8 +448,23 @@ connection.onCompletion(
             .then((result) => {
               const extraTables = result.tables ?? [];
               tables = [...tables, ...extraTables];
-              loadedDatabaseNames.add(topLower);
               loadingDatabaseNames.delete(topLower);
+              // An empty result is not a loaded database: the client answers
+              // `{ tables: [] }` both when no editor is active and when the
+              // query failed. Marking it as loaded would freeze the database
+              // out of completions until the window is reloaded, so leave it
+              // unmarked and let the next keystroke try again.
+              if (extraTables.length === 0) {
+                connection.console.info(
+                  `SQL Prompt: [${knownDb}] returned no tables — not marking it as loaded, will retry.`,
+                );
+                connection.sendNotification('sqlPrompt/schemaLoadingFailed', {
+                  database: knownDb,
+                  error: `No tables returned for ${knownDb}. Keep the .sql editor focused and try again.`,
+                });
+                return;
+              }
+              loadedDatabaseNames.add(topLower);
               connection.console.info(
                 `SQL Prompt: connectionSharing demand-loaded ${extraTables.length} table(s) for [${knownDb}].`,
               );
