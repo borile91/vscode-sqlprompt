@@ -165,115 +165,13 @@ export function buildCompletions(
 
     case 'from':
     case 'join': {
-      // Aliases actually written in the query, so that new suggestions get a
-      // deduplicated alias (e.g. o2) only when o is really taken.
-      const usedAliases = collectUsedAliases(context);
-
       items.push(...buildSnippetCompletions(context.clause, position));
-      const schemaMatch = SCHEMA_DOT_PATTERN.exec(lineText);
-      if (schemaMatch) {
-        const dbName = schemaMatch[1]?.toLowerCase();   // undefined when no db qualifier
-        const schemaName = schemaMatch[2];
-        const replaceRange = replaceRangeWordOnly(lineText, position);
-        tables
-          .filter(
-            (t) =>
-              t.schema.toLowerCase() === schemaName.toLowerCase() &&
-              (dbName === undefined || (t.database ?? '').toLowerCase() === dbName),
-          )
-          .forEach((table) => {
-            // Pass a copy so that sibling items don't affect each other.
-            const alias = generateAlias(table.name, new Set(usedAliases));
-            items.push({
-              label: table.name,
-              kind: CompletionItemKind.Class,
-              detail: `Table — alias: ${alias}`,
-              filterText: table.name,
-              textEdit: TextEdit.replace(replaceRange, `${table.name} AS ${alias}`),
-              insertTextFormat: InsertTextFormat.PlainText,
-              sortText: `01_table_${table.name}`,
-              data: { type: 'table', index: tables.indexOf(table) },
-            });
-          });
-
-        routines.tableValuedFunctions
-          .filter((fn) => fn.schema.toLowerCase() === schemaName.toLowerCase())
-          .forEach((fn) => {
-            const alias = generateAlias(fn.name, new Set(usedAliases));
-            items.push({
-              label: fn.name,
-              kind: CompletionItemKind.Function,
-              detail: `Table-valued function — alias: ${alias}`,
-              filterText: fn.name,
-              textEdit: TextEdit.replace(
-                replaceRange,
-                `${buildFunctionCallText(fn.name, fn.parameters)} AS ${alias}`,
-              ),
-              insertTextFormat: InsertTextFormat.Snippet,
-              sortText: `02_tvf_${fn.name}`,
-            });
-          });
-      } else {
-        const replaceRange = replaceRangeWordOnly(lineText, position);
-        tables.forEach((table, idx) => {
-          const alias = generateAlias(table.name, new Set(usedAliases));
-          const fullName = `${table.schema}.${table.name}`;
-          items.push({
-            label: fullName,
-            kind: CompletionItemKind.Class,
-            detail: `Table (${table.schema}) — alias: ${alias}`,
-            filterText: fullName,
-            textEdit: TextEdit.replace(replaceRange, `${fullName} AS ${alias}`),
-            insertTextFormat: InsertTextFormat.PlainText,
-            sortText: `01_table_${table.name}`,
-            data: { type: 'table', index: idx },
-          });
-        });
-
-        routines.tableValuedFunctions.forEach((fn) => {
-          const alias = generateAlias(fn.name, new Set(usedAliases));
-          const fullName = `${fn.schema}.${fn.name}`;
-          items.push({
-            label: fullName,
-            kind: CompletionItemKind.Function,
-            detail: `Table-valued function (${fn.schema}) — alias: ${alias}`,
-            filterText: fullName,
-            textEdit: TextEdit.replace(
-              replaceRange,
-              `${buildFunctionCallText(fullName, fn.parameters)} AS ${alias}`,
-            ),
-            insertTextFormat: InsertTextFormat.Snippet,
-            sortText: `02_tvf_${fn.name}`,
-          });
-        });
-
-        // Add all defined CTEs to FROM/JOIN suggestions
-        context.visibleCtes.forEach((cteName, cteIdx) => {
-          const alias = generateAlias(cteName, new Set(usedAliases));
-          items.push({
-            label: cteName,
-            kind: CompletionItemKind.Variable,
-            detail: `CTE — alias: ${alias}`,
-            filterText: cteName,
-            textEdit: TextEdit.replace(replaceRange, `${cteName} AS ${alias}`),
-            insertTextFormat: InsertTextFormat.PlainText,
-            sortText: `01_cte_${cteIdx.toString().padStart(3, '0')}`,
-          });
-        });
-
-        // Add database names so the user can type "DBA." to get cross-DB schemas.
-        databases.forEach((dbName) => {
-          items.push({
-            label: dbName,
-            kind: CompletionItemKind.Module,
-            detail: 'Database',
-            filterText: dbName,
-            textEdit: TextEdit.replace(replaceRange, dbName),
-            insertTextFormat: InsertTextFormat.PlainText,
-            sortText: `00_db_${dbName}`,
-          });
-        });
-      }
+      items.push(
+        ...buildTableSourceCompletions(context, tables, routines, position, lineText, databases, {
+          withAlias: true,
+          includeFunctions: true,
+        }),
+      );
 
       // After a JOIN + table ref, suggest "ON fk.predicate"
       if (context.clause === 'join' && refs.length >= 2) {
@@ -281,6 +179,18 @@ export function buildCompletions(
       }
       break;
     }
+
+    // INSERT INTO <target> / UPDATE <target>: a table is expected, but T-SQL
+    // does not allow aliasing it here, so nothing is appended to the name.
+    case 'insertTarget':
+    case 'updateTarget':
+      items.push(
+        ...buildTableSourceCompletions(context, tables, routines, position, lineText, databases, {
+          withAlias: false,
+          includeFunctions: false,
+        }),
+      );
+      break;
 
     case 'exec':
       items.push(...buildStoredProcedureCompletions(routines.storedProcedures));
@@ -313,9 +223,20 @@ export function buildCompletions(
       items.push(...buildScalarFunctionCompletions(routines.scalarFunctions));
       break;
 
-    case 'updateSet':
-      items.push(...buildColumnCompletionsForRefs(refs, true, false));
+    case 'updateSet': {
+      // `UPDATE dbo.T SET ...` targets a single unaliased table: the columns
+      // must be inserted bare.  With a FROM clause (`UPDATE t SET ... FROM
+      // dbo.T AS t`) the written alias is available and qualifying is correct.
+      const bare = refs.length === 1 && refs[0].isAutoAlias;
+      items.push(...buildColumnCompletionsForRefs(refs, !bare, bare));
       items.push(...buildColumnCompletionsForSources(context.visibleSources));
+      break;
+    }
+
+    case 'insertColumns':
+      // Inside `INSERT INTO t (...)` only bare column names are valid.
+      items.push(...buildColumnCompletionsForRefs(refs, false, true));
+      items.push(...buildInsertColumnListItem(refs, position));
       break;
 
     default: {
@@ -388,6 +309,184 @@ export function resolveTableCompletionItem(item: CompletionItem, tables: TableIn
     }
   }
   return item;
+}
+
+// ── Table-source completions (FROM / JOIN / INSERT INTO / UPDATE) ─────────────
+
+interface TableSourceOptions {
+  /** Append ` AS <alias>` to the inserted text (FROM / JOIN only). */
+  withAlias: boolean;
+  /** Offer table-valued functions and CTEs (FROM / JOIN only). */
+  includeFunctions: boolean;
+}
+
+/**
+ * Builds the list of objects that can follow a table-introducing keyword.
+ *
+ * `INSERT INTO` and `UPDATE` accept a table too, but T-SQL forbids aliasing it
+ * in place — hence `withAlias`, which also removes the alias from the detail.
+ */
+function buildTableSourceCompletions(
+  context: QueryContext,
+  tables: TableInfo[],
+  routines: RoutineSnapshot,
+  position: Position,
+  lineText: string,
+  databases: string[],
+  options: TableSourceOptions,
+): CompletionItem[] {
+  const items: CompletionItem[] = [];
+
+  // Aliases actually written in the query, so that new suggestions get a
+  // deduplicated alias (e.g. o2) only when o is really taken.
+  const usedAliases = collectUsedAliases(context);
+  const replaceRange = replaceRangeWordOnly(lineText, position);
+
+  /** ` AS <alias>` suffix plus the matching detail fragment. */
+  const aliasFor = (objectName: string): { suffix: string; detail: string } => {
+    if (!options.withAlias) return { suffix: '', detail: '' };
+    // Pass a copy so that sibling items don't affect each other.
+    const alias = generateAlias(objectName, new Set(usedAliases));
+    return { suffix: ` AS ${alias}`, detail: ` — alias: ${alias}` };
+  };
+
+  const schemaMatch = SCHEMA_DOT_PATTERN.exec(lineText);
+
+  if (schemaMatch) {
+    const dbName = schemaMatch[1]?.toLowerCase();   // undefined when no db qualifier
+    const schemaName = schemaMatch[2];
+
+    tables
+      .filter(
+        (t) =>
+          t.schema.toLowerCase() === schemaName.toLowerCase() &&
+          (dbName === undefined || (t.database ?? '').toLowerCase() === dbName),
+      )
+      .forEach((table) => {
+        const alias = aliasFor(table.name);
+        items.push({
+          label: table.name,
+          kind: CompletionItemKind.Class,
+          detail: `Table${alias.detail}`,
+          filterText: table.name,
+          textEdit: TextEdit.replace(replaceRange, `${table.name}${alias.suffix}`),
+          insertTextFormat: InsertTextFormat.PlainText,
+          sortText: `01_table_${table.name}`,
+          data: { type: 'table', index: tables.indexOf(table) },
+        });
+      });
+
+    if (options.includeFunctions) {
+      routines.tableValuedFunctions
+        .filter((fn) => fn.schema.toLowerCase() === schemaName.toLowerCase())
+        .forEach((fn) => {
+          const alias = aliasFor(fn.name);
+          items.push({
+            label: fn.name,
+            kind: CompletionItemKind.Function,
+            detail: `Table-valued function${alias.detail}`,
+            filterText: fn.name,
+            textEdit: TextEdit.replace(
+              replaceRange,
+              `${buildFunctionCallText(fn.name, fn.parameters)}${alias.suffix}`,
+            ),
+            insertTextFormat: InsertTextFormat.Snippet,
+            sortText: `02_tvf_${fn.name}`,
+          });
+        });
+    }
+
+    return items;
+  }
+
+  tables.forEach((table, idx) => {
+    const alias = aliasFor(table.name);
+    const fullName = `${table.schema}.${table.name}`;
+    items.push({
+      label: fullName,
+      kind: CompletionItemKind.Class,
+      detail: `Table (${table.schema})${alias.detail}`,
+      filterText: fullName,
+      textEdit: TextEdit.replace(replaceRange, `${fullName}${alias.suffix}`),
+      insertTextFormat: InsertTextFormat.PlainText,
+      sortText: `01_table_${table.name}`,
+      data: { type: 'table', index: idx },
+    });
+  });
+
+  if (options.includeFunctions) {
+    routines.tableValuedFunctions.forEach((fn) => {
+      const alias = aliasFor(fn.name);
+      const fullName = `${fn.schema}.${fn.name}`;
+      items.push({
+        label: fullName,
+        kind: CompletionItemKind.Function,
+        detail: `Table-valued function (${fn.schema})${alias.detail}`,
+        filterText: fullName,
+        textEdit: TextEdit.replace(
+          replaceRange,
+          `${buildFunctionCallText(fullName, fn.parameters)}${alias.suffix}`,
+        ),
+        insertTextFormat: InsertTextFormat.Snippet,
+        sortText: `02_tvf_${fn.name}`,
+      });
+    });
+
+    // Add all defined CTEs to FROM/JOIN suggestions
+    context.visibleCtes.forEach((cteName, cteIdx) => {
+      const alias = aliasFor(cteName);
+      items.push({
+        label: cteName,
+        kind: CompletionItemKind.Variable,
+        detail: `CTE${alias.detail}`,
+        filterText: cteName,
+        textEdit: TextEdit.replace(replaceRange, `${cteName}${alias.suffix}`),
+        insertTextFormat: InsertTextFormat.PlainText,
+        sortText: `01_cte_${cteIdx.toString().padStart(3, '0')}`,
+      });
+    });
+  }
+
+  // Add database names so the user can type "DBA." to get cross-DB schemas.
+  databases.forEach((dbName) => {
+    items.push({
+      label: dbName,
+      kind: CompletionItemKind.Module,
+      detail: 'Database',
+      filterText: dbName,
+      textEdit: TextEdit.replace(replaceRange, dbName),
+      insertTextFormat: InsertTextFormat.PlainText,
+      sortText: `00_db_${dbName}`,
+    });
+  });
+
+  return items;
+}
+
+/**
+ * Single item that fills an `INSERT INTO t (...)` list with every column of
+ * the target table.
+ */
+function buildInsertColumnListItem(refs: ResolvedRef[], position: Position): CompletionItem[] {
+  if (refs.length !== 1) return [];
+
+  const columns = refs[0].table.columns
+    .map((c) => normalizeColumnName((c as any)?.name ?? c))
+    .filter((name): name is string => Boolean(name));
+  if (columns.length === 0) return [];
+
+  const replacement = columns.join(', ');
+
+  return [{
+    label: '★ Expand all columns',
+    kind: CompletionItemKind.Snippet,
+    detail: `Inserts the ${columns.length} column(s) of ${refs[0].table.schema}.${refs[0].table.name}`,
+    documentation: { kind: 'markdown', value: `\`\`\`sql\n${replacement}\n\`\`\`` },
+    textEdit: TextEdit.replace(Range.create(position, position), replacement),
+    insertTextFormat: InsertTextFormat.PlainText,
+    filterText: 'expand columns all star',
+    sortText: '00_expand_all',
+  }];
 }
 
 // ── Dot completions ───────────────────────────────────────────────────────────
@@ -500,14 +599,21 @@ function buildDotCompletions(
 
   if (schemaMatches.length || schemaRoutineMatches.length || schemaProcedureMatches.length) {
     const usedAliases = collectUsedAliases(context);
+    // `INSERT INTO dbo.` / `UPDATE dbo.` do not accept an alias on the target.
+    const withAlias = context.clause !== 'insertTarget' && context.clause !== 'updateTarget';
     const tableItems = schemaMatches.map((table) => {
       const alias = generateAlias(table.name, new Set(usedAliases));
       return {
         label: table.name,
         kind: CompletionItemKind.Class,
-        detail: `Table (${table.schema}) — alias: ${alias}`,
+        detail: withAlias ? `Table (${table.schema}) — alias: ${alias}` : `Table (${table.schema})`,
         filterText: table.name,
-        textEdit: TextEdit.replace(replaceRange, `${quoteIdentifier(table.name)} AS ${alias}`),
+        textEdit: TextEdit.replace(
+          replaceRange,
+          withAlias
+            ? `${quoteIdentifier(table.name)} AS ${alias}`
+            : quoteIdentifier(table.name),
+        ),
         insertTextFormat: InsertTextFormat.PlainText,
         sortText: `01_table_${table.name}`,
         data: { type: 'table', index: tables.indexOf(table) },
@@ -1252,11 +1358,12 @@ function replaceRangeWordOnly(lineText: string, position: Position): Range {
 
 /**
  * Regex: `FROM [db.]schema.` or `JOIN [db.]schema.` — schema-qualified table context.
+ * Also covers the DML targets `INSERT INTO`, `UPDATE`, `MERGE` and `USING`.
  * Group 1: optional database qualifier (e.g. `DB` in `FROM DB.imp.Tab`).
  * Group 2: schema name (e.g. `imp`).
  */
 const SCHEMA_DOT_PATTERN =
-  /\b(?:FROM|JOIN|INNER\s+JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|CROSS\s+JOIN|LEFT\s+OUTER\s+JOIN|RIGHT\s+OUTER\s+JOIN|FULL\s+JOIN|FULL\s+OUTER\s+JOIN|APPLY|OUTER\s+APPLY|CROSS\s+APPLY)\s+(?:(\w+)\.)?(\w+)\.\s*\w*$/i;
+  /\b(?:FROM|JOIN|INNER\s+JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|CROSS\s+JOIN|LEFT\s+OUTER\s+JOIN|RIGHT\s+OUTER\s+JOIN|FULL\s+JOIN|FULL\s+OUTER\s+JOIN|APPLY|OUTER\s+APPLY|CROSS\s+APPLY|INSERT|INTO|UPDATE|MERGE|USING)\s+(?:(\w+)\.)?(\w+)\.\s*\w*$/i;
 
 function buildDatabaseCompletions(
   databases: string[],
