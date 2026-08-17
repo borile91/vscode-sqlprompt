@@ -159,7 +159,11 @@ function setCachedSchemaSnapshot(cacheKey: string, snapshot: SchemaSnapshot): vo
 
 // Our extension's identifier as published — used by the mssql connectionSharing
 // API so the permission dialog shows "SQL Prompt" and the approval is persisted.
-const EXTENSION_ID = "giacomoborile.vscode-sqlprompt";
+// Must match `publisher`.`name` from package.json: mssql resolves the caller by
+// this id, and a wrong one makes getActiveDatabase / getActiveEditorConnectionId
+// return undefined, which silently disables the schema cache and the detection
+// of a database change.
+const EXTENSION_ID = "borile91.vscode-sqlprompt";
 
 async function getMssqlApi(): Promise<any | undefined> {
     if (mssqlApiPromise) {
