@@ -1430,8 +1430,11 @@ function buildOnPredicateCompletions(
   position: Position,
   excludePredicates: Set<string>,
 ): CompletionItem[] {
+  // Right after ON (no predicate written yet) the combined entry — all columns of
+  // a composite FK joined with AND — lets a multi-column FK be inserted in one go.
+  // Once a predicate exists it would repeat columns already written, so it is skipped.
   return buildFkPredicateSuggestions(refs, {
-    includeCombined: false,
+    includeCombined: excludePredicates.size === 0,
     excludePredicates,
   }).map((s) => ({
     label: s.insertText,
