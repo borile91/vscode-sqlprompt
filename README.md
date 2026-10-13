@@ -8,6 +8,7 @@ SQL Prompt is a SQL Server IntelliSense and formatting extension for VS Code. It
 - Suggests schema-qualified table names after `FROM` and `JOIN`
 - Inserts automatic aliases, for example `dbo.TABLE_NAME AS tn`
 - Renames a table alias with `F2`, updating every reference in the statement
+- Fills in the current definition after `ALTER PROCEDURE|VIEW|FUNCTION`: pick an existing object and its definition replaces the header, ready to edit
 - Reloads schema context when you switch to another `.sql` file with a different active connection
 - Formats SQL documents using configurable style files (JSON exports from Redgate SQL Prompt)
 
@@ -40,6 +41,13 @@ Typical suggestions:
 - `dbo.TABLE_NAME AS tn`
 - `dbo.Orders AS o`
 - `dbo.OrderDetails AS od`
+
+## ALTER scaffolding
+
+Type `ALTER PROCEDURE `, `ALTER VIEW ` or `ALTER FUNCTION ` (also after `CREATE OR`) in a connected `.sql` file and start typing a name. The existing objects of that kind are suggested; accepting one replaces the `ALTER ...` header with the **current definition** of the object, with `CREATE` rewritten to `ALTER`, so you can modify it right away.
+
+- Objects are read through the active ms-mssql connection (system objects are skipped); the list is cached for 60 seconds.
+- Encrypted objects have no readable definition: a warning is shown and nothing is changed.
 
 ## SQL Formatter
 
