@@ -157,6 +157,9 @@ function buildSnippetCompletions(clause: string, position: Position): Completion
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+/** `ALTER PROC[EDURE] | VIEW | FUNCTION` followed by a partial (qualified) name. */
+const ALTER_OBJECT_HEADER = /\bALTER\s+(?:PROC(?:EDURE)?|VIEW|FUNCTION)\s+[\w.\[\]]*$/i;
+
 export function buildCompletions(
   context: QueryContext,
   tables: TableInfo[],
@@ -170,6 +173,18 @@ export function buildCompletions(
   // ── 0. USE <database> completions ────────────────────────────────────────
   if (context.clause === 'use') {
     return buildDatabaseCompletions(databases, document, position);
+  }
+
+  // ── 0b. ALTER PROCEDURE|VIEW|FUNCTION <name> ─────────────────────────────
+  // The name of an existing object is being typed. The client offers those
+  // objects together with their current definition (see client/src/alterScaffold.ts),
+  // so table, alias and keyword suggestions would only be noise here.
+  const textBeforeCursor = document.getText({
+    start: { line: position.line, character: 0 },
+    end: position,
+  });
+  if (ALTER_OBJECT_HEADER.test(textBeforeCursor)) {
+    return [];
   }
 
   // ── 1. Dot-qualified completions ─────────────────────────────────────────
