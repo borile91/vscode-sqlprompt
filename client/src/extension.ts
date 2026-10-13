@@ -28,6 +28,25 @@ import {
 
 import { loadStylesFromFolder, LoadedStyle } from './formatter/styleLoader';
 import { SqlFormattingProvider } from './formatter/sqlFormattingProvider';
+import { SchemaDiskCache, SchemaToken } from './schema/schemaCache';
+import { CompletionUsageStore, usageDatabaseKey } from './schema/usageStore';
+import {
+    QueryRunner,
+    loadColumns,
+    loadCrossDatabaseSchema,
+    loadDatabases,
+    loadForeignKeys,
+    loadObjects,
+    loadRoutines,
+    loadSchemaToken,
+    queryFirstCellText,
+} from './schema/schemaLoad';
+import {
+    WireColumns,
+    WireForeignKey,
+    WireRoutine,
+    WireSnapshot,
+} from './schema/wireFormat';
 
 let client: LanguageClient | undefined;
 let connectionSyncDebounce: ReturnType<typeof setTimeout> | undefined;
@@ -41,107 +60,129 @@ const lastSyncedDatabasePerUri = new Map<string, string>();
 
 // ── Go to Definition state ────────────────────────────────────────────────────
 let lastOwnerUri: string | undefined;
-let lastTablesSnapshot: TableInfo[] = [];
 const definitionScriptCache = new Map<string, string>();
 const onDefinitionContentChange = new EventEmitter<Uri>();
-const schemaSnapshotCache = new Map<
-    string,
-    {
-        snapshot: SchemaSnapshot;
-        cachedAt: number;
-    }
->();
 const inFlightSchemaSyncs = new Map<string, Promise<boolean>>();
 
 // ── Formatting state ──────────────────────────────────────────────────────────
 let loadedStyles: LoadedStyle[] = [];
 let formatterStatusBarItem: StatusBarItem | undefined;
 
-type ColumnInfo = {
+/**
+ * The columns of a table, as `sqlPrompt/resolveObject` reports them.
+ *
+ * This is all the schema detail the extension host still holds: it is needed to
+ * generate a `CREATE TABLE` for Go to Definition, since a table has no
+ * `sys.sql_modules` entry to script. Everything else about the schema lives in
+ * the language server.
+ */
+type ResolvedColumn = {
     name: string;
     dataType: string;
     maxLength: number | null;
     isNullable: boolean;
     isPrimaryKey: boolean;
-    /** Filled by the server itself: must stay out of an INSERT column list. */
-    isIdentity?: boolean;
-    isComputed?: boolean;
-    /** Has a DEFAULT constraint, so it may be omitted from an INSERT. */
-    hasDefault?: boolean;
 };
 
-type TableInfo = {
-    schema: string;
-    name: string;
-    columns: ColumnInfo[];
-    foreignKeys: ForeignKeyInfo[];
-    database?: string;
-};
 
-type ForeignKeyMapping = {
-    column: string;
-    referencedColumn: string;
-};
+/**
+ * In-memory snapshot cache, keyed by connection and database.
+ *
+ * First of two cache levels. A hit here short-circuits the entire sync — not
+ * even the change-detection query runs — which is what makes switching between
+ * `.sql` files on the same connection free. The second level is
+ * `SchemaDiskCache`: it survives a window reload, and it is validated against
+ * the database itself rather than against a clock.
+ */
+const schemaSnapshotCache = new Map<
+    string,
+    {
+        snapshot: WireSnapshot;
+        cachedAt: number;
+        /** Identity of the database the snapshot came from, when it was known. */
+        token?: SchemaToken;
+    }
+>();
 
-type ForeignKeyInfo = {
-    name: string;
-    parentSchema: string;
-    parentTable: string;
-    referencedSchema: string;
-    referencedTable: string;
-    mappings: ForeignKeyMapping[];
-};
+/** Second-level cache. Created in `activate`, once the storage URI is known. */
+let schemaDiskCache: SchemaDiskCache | undefined;
 
-type RoutineParameterInfo = {
-    name: string;
-    dataType: string;
-    maxLength: number | null;
-    precision: number | null;
-    scale: number | null;
-    isOutput: boolean;
-    hasDefaultValue: boolean;
-};
+/**
+ * The snapshot the language server is currently holding.
+ *
+ * Switching between `.sql` files on the same connection is the most frequent
+ * sync of all, and it always hits the in-memory cache. Without this, each of
+ * those hits would re-serialise the whole schema over the LSP connection to
+ * tell the server something it already knows.
+ */
+let publishedSnapshot: WireSnapshot | undefined;
 
-type ScalarFunctionInfo = {
-    schema: string;
-    name: string;
-    parameters: RoutineParameterInfo[];
-};
+// ── Completion usage history ──────────────────────────────────────────────────
 
-type TableValuedFunctionInfo = {
-    schema: string;
-    name: string;
-    parameters: RoutineParameterInfo[];
-};
+/** What the user has accepted before, per database. Created in `activate`. */
+let usageStore: CompletionUsageStore | undefined;
 
-type StoredProcedureInfo = {
-    schema: string;
-    name: string;
-    parameters: RoutineParameterInfo[];
-};
+/** Which database the accepted completions belong to, from the schema token. */
+let usageDatabase: string | undefined;
 
-type SchemaSnapshot = {
-    tables: TableInfo[];
-    scalarFunctions: ScalarFunctionInfo[];
-    tableValuedFunctions: TableValuedFunctionInfo[];
-    storedProcedures: StoredProcedureInfo[];
-    databases?: string[];
-};
+/** Coalesces the persist-and-publish that follows each accepted completion. */
+let usageFlushDebounce: ReturnType<typeof setTimeout> | undefined;
 
-function getSchemaObjectCount(snapshot: SchemaSnapshot): number {
-    return (
-        snapshot.tables.length +
-        snapshot.scalarFunctions.length +
-        snapshot.tableValuedFunctions.length +
-        snapshot.storedProcedures.length
-    );
+/**
+ * Sends the decayed usage history for `usageDatabase` to the language server.
+ *
+ * Called after a schema sync — so a fresh server process is ranking with the
+ * history from the start — and after an accepted completion has been recorded.
+ */
+async function publishUsageScores(): Promise<void> {
+    if (!client || !usageStore || !usageDatabase) {
+        return;
+    }
+    try {
+        await client.sendRequest('sqlPrompt/updateUsageScores', {
+            entries: usageStore.scores(usageDatabase),
+        });
+    } catch (err: any) {
+        console.error(`[SQL Prompt] updateUsageScores failed: ${err?.message ?? err}`);
+    }
+}
+
+/**
+ * Records one accepted completion and schedules the follow-up work.
+ *
+ * Persisting to `globalState` and re-publishing on every keystroke-accepted
+ * item would be wasteful, and the ranking does not need to change until the
+ * next completion request, so both are debounced.
+ */
+function recordCompletionUse(objectKey: unknown): void {
+    if (typeof objectKey !== 'string' || !objectKey || !usageStore || !usageDatabase) {
+        return;
+    }
+
+    usageStore.record(usageDatabase, objectKey);
+
+    if (usageFlushDebounce) {
+        clearTimeout(usageFlushDebounce);
+    }
+    usageFlushDebounce = setTimeout(async () => {
+        usageFlushDebounce = undefined;
+        await usageStore?.persist();
+        await publishUsageScores();
+    }, 1500);
+}
+
+/** Number of schema objects in a snapshot, for the status message. */
+function getSchemaObjectCount(snapshot: WireSnapshot): number {
+    return snapshot.objects.length;
 }
 
 function buildSchemaCacheKey(connectionId: string, database: string | undefined): string {
     return `${connectionId.toLowerCase()}::${(database ?? "").toLowerCase()}`;
 }
 
-function getCachedSchemaSnapshot(cacheKey: string): SchemaSnapshot | undefined {
+function getCachedSchemaSnapshot(
+    cacheKey: string,
+): { snapshot: WireSnapshot; token?: SchemaToken } | undefined {
     const cachedEntry = schemaSnapshotCache.get(cacheKey);
     if (!cachedEntry) {
         return undefined;
@@ -152,13 +193,18 @@ function getCachedSchemaSnapshot(cacheKey: string): SchemaSnapshot | undefined {
         return undefined;
     }
 
-    return cachedEntry.snapshot;
+    return { snapshot: cachedEntry.snapshot, token: cachedEntry.token };
 }
 
-function setCachedSchemaSnapshot(cacheKey: string, snapshot: SchemaSnapshot): void {
+function setCachedSchemaSnapshot(
+    cacheKey: string,
+    snapshot: WireSnapshot,
+    token?: SchemaToken,
+): void {
     schemaSnapshotCache.set(cacheKey, {
         snapshot,
         cachedAt: Date.now(),
+        token,
     });
 }
 
@@ -195,411 +241,139 @@ async function getMssqlApi(): Promise<any | undefined> {
     return mssqlApiPromise;
 }
 
-function extractRowsFromSimpleQueryResult(result: any): any[] {
-    const rows = result?.rows;
-    const columnInfo = result?.columnInfo;
+// ── Publishing the schema to the language server ──────────────────────────────
 
-    if (!Array.isArray(rows)) {
-        return [];
+/**
+ * Publishes stage 0: the object names, replacing whatever the server had.
+ *
+ * This is the payload that makes the extension useful — table completion after
+ * `FROM` / `JOIN` / `INSERT INTO` needs nothing else — and it is also by far
+ * the smallest, a couple of thousand rows even on a large database.
+ */
+async function publishSchemaObjects(snapshot: WireSnapshot): Promise<boolean> {
+    if (!client) {
+        return false;
     }
-
-    if (!rows.length) {
-        return rows;
+    try {
+        const result = await client.sendRequest<{ success: boolean }>(
+            "sqlPrompt/setSchemaObjects",
+            {
+                objects: snapshot.objects,
+                databases: snapshot.databases,
+                database: snapshot.database,
+            },
+        );
+        return result?.success === true;
+    } catch (err: any) {
+        console.error(`[SQL Prompt] setSchemaObjects failed: ${err?.message ?? err}`);
+        return false;
     }
+}
 
-    if (!Array.isArray(rows[0])) {
-        return rows;
+/** Publishes one or more of the later stages, merging them into stage 0. */
+async function publishSchemaDetails(details: {
+    columns?: WireColumns[];
+    foreignKeys?: WireForeignKey[];
+    routines?: WireRoutine[];
+}): Promise<void> {
+    if (!client) {
+        return;
     }
-
-    if (!Array.isArray(columnInfo)) {
-        return [];
+    try {
+        await client.sendRequest("sqlPrompt/mergeSchemaDetails", details);
+    } catch (err: any) {
+        console.error(`[SQL Prompt] mergeSchemaDetails failed: ${err?.message ?? err}`);
     }
+}
 
-    return rows.map((values: any[]) => {
-        const row: Record<string, any> = {};
-        for (let i = 0; i < columnInfo.length; i++) {
-            const rawName = columnInfo[i]?.columnName ?? columnInfo[i]?.name;
-            const name = typeof rawName === "string" ? rawName : `col_${i}`;
-            row[name] = values[i];
-        }
-        return row;
+/**
+ * Republishes a complete snapshot. Used when one is restored from a cache.
+ *
+ * Publishing the snapshot the server already holds is a no-op, so it is skipped
+ * rather than paid for.
+ */
+async function publishCachedSnapshot(snapshot: WireSnapshot): Promise<boolean> {
+    if (publishedSnapshot === snapshot) {
+        return true;
+    }
+    if (!(await publishSchemaObjects(snapshot))) {
+        return false;
+    }
+    await publishSchemaDetails({
+        columns: snapshot.columns,
+        foreignKeys: snapshot.foreignKeys,
+        routines: snapshot.routines,
     });
+    publishedSnapshot = snapshot;
+    return true;
 }
 
-function normalizeCellValue(value: any): any {
-    if (value == null) {
-        return value;
-    }
+/**
+ * Runs the staged load, publishing each stage the moment it lands.
+ *
+ * Stage 0 is published before anything expensive starts, so the user can type
+ * against the schema while the rest is still loading.
+ *
+ * A stage that fails is logged and skipped rather than aborting the load:
+ * losing the foreign keys costs the `ON` suggestions, not the whole schema.
+ * `undefined` comes back only when stage 0 itself could not be published,
+ * because then there is nothing to cache and nothing to report.
+ */
+async function loadSchemaStaged(
+    runner: QueryRunner,
+    ownerUri: string,
+    database: string | undefined,
+    report: (message: string) => void,
+): Promise<WireSnapshot | undefined> {
+    report("objects…");
+    const objects = await loadObjects(runner, ownerUri);
+    const databases = await loadDatabases(runner, ownerUri);
 
-    // mssql simple query rows may wrap values as objects like:
-    // { displayValue: 'dbo', ... } or { value: 'dbo', ... }
-    if (typeof value === "object") {
-        if ("displayValue" in value) {
-            return (value as any).displayValue;
-        }
-        if ("value" in value) {
-            return (value as any).value;
-        }
-    }
-
-    return value;
-}
-
-function normalizeText(value: any): string | undefined {
-    const raw = normalizeCellValue(value);
-    if (raw == null) {
-        return undefined;
-    }
-    if (typeof raw === "string") {
-        return raw.trim();
-    }
-    if (typeof raw === "number" || typeof raw === "boolean") {
-        return String(raw);
-    }
-    return undefined;
-}
-
-function mapRowsToSchemaSnapshot(rows: any[]): TableInfo[] {
-    const tableMap = new Map<string, TableInfo>();
-
-    for (const row of rows) {
-        const schema = normalizeText(row.schema_name);
-        const table = normalizeText(row.table_name);
-        if (!schema || !table) {
-            continue;
-        }
-
-        const key = `${schema}.${table}`;
-        if (!tableMap.has(key)) {
-            tableMap.set(key, {
-                schema,
-                name: table,
-                columns: [],
-                foreignKeys: [],
-            });
-        }
-
-        const columnName = normalizeText(row.column_name);
-        if (!columnName) {
-            continue;
-        }
-
-        const maxLengthRaw = normalizeCellValue(row.max_length);
-        const isNullableRaw = normalizeCellValue(row.is_nullable);
-        const isPrimaryKeyRaw = normalizeCellValue(row.is_primary_key);
-        const isIdentityRaw = normalizeCellValue(row.is_identity);
-        const isComputedRaw = normalizeCellValue(row.is_computed);
-        const hasDefaultRaw = normalizeCellValue(row.has_default);
-
-        tableMap.get(key)!.columns.push({
-            name: columnName,
-            dataType: normalizeText(row.data_type) ?? "unknown",
-            maxLength:
-                typeof maxLengthRaw === "number" ? maxLengthRaw : null,
-            isNullable: isNullableRaw === true || isNullableRaw === 1,
-            isPrimaryKey:
-                isPrimaryKeyRaw === true || isPrimaryKeyRaw === 1,
-            isIdentity: isIdentityRaw === true || isIdentityRaw === 1,
-            isComputed: isComputedRaw === true || isComputedRaw === 1,
-            hasDefault: hasDefaultRaw === true || hasDefaultRaw === 1,
-        });
-    }
-
-    return Array.from(tableMap.values());
-}
-
-function mapRowsToForeignKeys(rows: any[]): ForeignKeyInfo[] {
-    const fkMap = new Map<string, ForeignKeyInfo>();
-
-    for (const row of rows) {
-        const parentSchema = normalizeText(row.parent_schema);
-        const parentTable = normalizeText(row.parent_table);
-        const fkName = normalizeText(row.fk_name);
-
-        if (!parentSchema || !parentTable || !fkName) {
-            continue;
-        }
-
-        const fkKey = `${parentSchema}.${parentTable}::${fkName}`;
-        if (!fkMap.has(fkKey)) {
-            fkMap.set(fkKey, {
-                name: fkName,
-                parentSchema,
-                parentTable,
-                referencedSchema: normalizeText(row.referenced_schema) ?? "",
-                referencedTable: normalizeText(row.referenced_table) ?? "",
-                mappings: [],
-            });
-        }
-
-        const parentColumn = normalizeText(row.parent_column);
-        const referencedColumn = normalizeText(row.referenced_column);
-        if (!parentColumn || !referencedColumn) {
-            continue;
-        }
-
-        fkMap.get(fkKey)!.mappings.push({
-            column: parentColumn,
-            referencedColumn,
-        });
-    }
-
-    return Array.from(fkMap.values());
-}
-
-function attachForeignKeysToTables(
-    tables: TableInfo[],
-    foreignKeys: ForeignKeyInfo[],
-): TableInfo[] {
-    const tableMap = new Map<string, TableInfo>();
-    for (const table of tables) {
-        tableMap.set(`${table.schema}.${table.name}`.toLowerCase(), table);
-    }
-
-    for (const fk of foreignKeys) {
-        const key = `${fk.parentSchema}.${fk.parentTable}`.toLowerCase();
-        const table = tableMap.get(key);
-        if (table) {
-            table.foreignKeys.push(fk);
-        }
-    }
-
-    return tables;
-}
-
-function mapRowsToRoutineSnapshot(rows: any[]): Omit<SchemaSnapshot, "tables"> {
-    type RoutineEntry = {
-        schema: string;
-        name: string;
-        objectType: string;
-        parameters: RoutineParameterInfo[];
+    const snapshot: WireSnapshot = {
+        objects,
+        columns: [],
+        foreignKeys: [],
+        routines: [],
+        databases,
+        database,
     };
 
-    const routineMap = new Map<string, RoutineEntry>();
-
-    for (const row of rows) {
-        const schema = normalizeText(row.schema_name);
-        const name = normalizeText(row.routine_name);
-        const objectType = normalizeText(row.object_type);
-        if (!schema || !name || !objectType) {
-            continue;
-        }
-
-        const key = `${schema}.${name}::${objectType}`;
-        if (!routineMap.has(key)) {
-            routineMap.set(key, {
-                schema,
-                name,
-                objectType,
-                parameters: [],
-            });
-        }
-
-        const parameterName = normalizeText(row.parameter_name);
-        if (parameterName) {
-            const maxLengthRaw = normalizeCellValue(row.max_length);
-            const precisionRaw = normalizeCellValue(row.precision);
-            const scaleRaw = normalizeCellValue(row.scale);
-            const isOutputRaw = normalizeCellValue(row.is_output);
-            const hasDefaultRaw = normalizeCellValue(row.has_default_value);
-
-            routineMap.get(key)!.parameters.push({
-                name: parameterName,
-                dataType: normalizeText(row.data_type) ?? "unknown",
-                maxLength: typeof maxLengthRaw === "number" ? maxLengthRaw : null,
-                precision: typeof precisionRaw === "number" ? precisionRaw : null,
-                scale: typeof scaleRaw === "number" ? scaleRaw : null,
-                isOutput: isOutputRaw === true || isOutputRaw === 1,
-                hasDefaultValue: hasDefaultRaw === true || hasDefaultRaw === 1,
-            });
-        }
-    }
-
-    const scalarFunctions: ScalarFunctionInfo[] = [];
-    const tableValuedFunctions: TableValuedFunctionInfo[] = [];
-    const storedProcedures: StoredProcedureInfo[] = [];
-
-    for (const routine of routineMap.values()) {
-        if (routine.objectType === "FN" || routine.objectType === "FS" || routine.objectType === "FT") {
-            scalarFunctions.push({
-                schema: routine.schema,
-                name: routine.name,
-                parameters: routine.parameters,
-            });
-            continue;
-        }
-
-        if (routine.objectType === "IF" || routine.objectType === "TF") {
-            tableValuedFunctions.push({
-                schema: routine.schema,
-                name: routine.name,
-                parameters: routine.parameters,
-            });
-            continue;
-        }
-
-        if (routine.objectType === "P" || routine.objectType === "PC") {
-            storedProcedures.push({
-                schema: routine.schema,
-                name: routine.name,
-                parameters: routine.parameters,
-            });
-        }
-    }
-
-    console.log(`[SQL Prompt] Routines parsed: ${scalarFunctions.length} scalar, ${tableValuedFunctions.length} TVF, ${storedProcedures.length} procedures`);
-
-    return { scalarFunctions, tableValuedFunctions, storedProcedures };
-}
-
-async function loadSchemaViaConnectionSharing(ownerUri: string): Promise<SchemaSnapshot | undefined> {
-    const api = await getMssqlApi();
-    if (!api?.connectionSharing) {
+    if (!(await publishSchemaObjects(snapshot))) {
         return undefined;
     }
+    publishedSnapshot = snapshot;
+    console.log(
+        `[SQL Prompt] stage 0: ${objects.length} object(s), ${databases.length} database(s)`,
+    );
 
-    const schemaQuery = `
-            WITH schema_objects AS (
-                SELECT
-                    o.object_id,
-                    o.schema_id,
-                    o.name,
-                    o.type
-                FROM sys.objects o
-                WHERE o.type IN ('U', 'V')
-                    AND o.is_ms_shipped = 0
-            )
-            SELECT
-                s.name AS schema_name,
-                so.name AS table_name,
-                c.name AS column_name,
-                ty.name AS data_type,
-                c.max_length,
-                c.is_nullable,
-                c.is_identity,
-                c.is_computed,
-                CASE WHEN c.default_object_id <> 0 THEN 1 ELSE 0 END AS has_default,
-                CASE WHEN so.type = 'U' AND pk.column_id IS NOT NULL THEN 1 ELSE 0 END AS is_primary_key
-            FROM schema_objects so
-            INNER JOIN sys.schemas s ON so.schema_id = s.schema_id
-            INNER JOIN sys.columns c ON so.object_id = c.object_id
-            INNER JOIN sys.types ty ON c.user_type_id = ty.user_type_id
-            LEFT JOIN (
-                SELECT ic.object_id, ic.column_id
-                FROM sys.index_columns ic
-                INNER JOIN sys.indexes i ON ic.object_id = i.object_id AND ic.index_id = i.index_id
-                WHERE i.is_primary_key = 1
-            ) pk ON so.object_id = pk.object_id AND c.column_id = pk.column_id
-            ORDER BY s.name, so.name, c.column_id
-        `;
-
-    const foreignKeysQuery = `
-            SELECT
-                fk.name AS fk_name,
-                sch_parent.name AS parent_schema,
-                t_parent.name AS parent_table,
-                c_parent.name AS parent_column,
-                sch_ref.name AS referenced_schema,
-                t_ref.name AS referenced_table,
-                c_ref.name AS referenced_column,
-                fkc.constraint_column_id
-            FROM sys.foreign_keys fk
-            INNER JOIN sys.foreign_key_columns fkc ON fk.object_id = fkc.constraint_object_id
-            INNER JOIN sys.tables t_parent ON fkc.parent_object_id = t_parent.object_id
-            INNER JOIN sys.schemas sch_parent ON t_parent.schema_id = sch_parent.schema_id
-            INNER JOIN sys.columns c_parent ON fkc.parent_object_id = c_parent.object_id AND fkc.parent_column_id = c_parent.column_id
-            INNER JOIN sys.tables t_ref ON fkc.referenced_object_id = t_ref.object_id
-            INNER JOIN sys.schemas sch_ref ON t_ref.schema_id = sch_ref.schema_id
-            INNER JOIN sys.columns c_ref ON fkc.referenced_object_id = c_ref.object_id AND fkc.referenced_column_id = c_ref.column_id
-            ORDER BY sch_parent.name, t_parent.name, fk.name, fkc.constraint_column_id
-        `;
-
-    const routinesQuery = `
-                        SELECT
-                                s.name AS schema_name,
-                                o.name AS routine_name,
-                                o.type AS object_type,
-                                p.parameter_id,
-                                p.name AS parameter_name,
-                                ty.name AS data_type,
-                                p.max_length,
-                                p.precision,
-                                p.scale,
-                                p.is_output,
-                                p.has_default_value
-                        FROM sys.objects o
-                        INNER JOIN sys.schemas s ON o.schema_id = s.schema_id
-                        LEFT JOIN sys.parameters p ON o.object_id = p.object_id AND p.parameter_id > 0
-                        LEFT JOIN sys.types ty ON p.user_type_id = ty.user_type_id
-                        WHERE o.type IN ('FN', 'FS', 'FT', 'IF', 'TF', 'P', 'PC')
-                            AND o.is_ms_shipped = 0
-                        ORDER BY s.name, o.name, p.parameter_id
-                `;
-
-    const databasesQuery = `
-        SELECT name
-        FROM sys.databases
-        WHERE state_desc = 'ONLINE'
-        ORDER BY name
-    `;
-
+    report("columns…");
     try {
-        const result = await api.connectionSharing.executeSimpleQuery?.(
-            ownerUri,
-            schemaQuery,
-        );
-        const fkResult = await api.connectionSharing.executeSimpleQuery?.(
-            ownerUri,
-            foreignKeysQuery,
-        );
-        let routinesResult: any;
-        try {
-            routinesResult = await api.connectionSharing.executeSimpleQuery?.(
-                ownerUri,
-                routinesQuery,
-            );
-        } catch {
-            routinesResult = undefined;
-        }
-        let databasesResult: any;
-        try {
-            databasesResult = await api.connectionSharing.executeSimpleQuery?.(
-                ownerUri,
-                databasesQuery,
-            );
-        } catch {
-            databasesResult = undefined;
-        }
-
-        const rows = extractRowsFromSimpleQueryResult(result);
-        const fkRows = extractRowsFromSimpleQueryResult(fkResult);
-        const routineRows = extractRowsFromSimpleQueryResult(routinesResult);
-        const dbRows = extractRowsFromSimpleQueryResult(databasesResult);
-
-        console.log(`[SQL Prompt] Schema rows: ${rows.length}, FK rows: ${fkRows.length}, Routine rows: ${routineRows.length}, DB rows: ${dbRows.length}`);
-
-        const schemaTables = mapRowsToSchemaSnapshot(rows);
-        const foreignKeys = mapRowsToForeignKeys(fkRows);
-        const routineSnapshot = mapRowsToRoutineSnapshot(routineRows);
-        const databases = dbRows
-            .map((r: any) => {
-                const v = r?.name ?? r?.Name;
-                return typeof v === 'string' ? v : typeof v === 'object' && v !== null ? (v.displayValue ?? v.value ?? '') : '';
-            })
-            .filter((n: string) => n.length > 0);
-
-        console.log(`[SQL Prompt] Routines loaded: ${routineSnapshot.scalarFunctions.length} scalar, ${routineSnapshot.tableValuedFunctions.length} TVF, ${routineSnapshot.storedProcedures.length} procedures`);
-
-        return {
-            tables: attachForeignKeysToTables(schemaTables, foreignKeys),
-            scalarFunctions: routineSnapshot.scalarFunctions,
-            tableValuedFunctions: routineSnapshot.tableValuedFunctions,
-            storedProcedures: routineSnapshot.storedProcedures,
-            databases,
-        };
-    } catch {
-        return undefined;
+        snapshot.columns = await loadColumns(runner, ownerUri);
+        await publishSchemaDetails({ columns: snapshot.columns });
+        console.log(`[SQL Prompt] stage 1: columns for ${snapshot.columns.length} object(s)`);
+    } catch (err: any) {
+        console.error(`[SQL Prompt] stage 1 (columns) failed: ${err?.message ?? err}`);
     }
+
+    report("relationships…");
+    try {
+        snapshot.foreignKeys = await loadForeignKeys(runner, ownerUri);
+        await publishSchemaDetails({ foreignKeys: snapshot.foreignKeys });
+        console.log(`[SQL Prompt] stage 2: ${snapshot.foreignKeys.length} foreign key(s)`);
+    } catch (err: any) {
+        console.error(`[SQL Prompt] stage 2 (foreign keys) failed: ${err?.message ?? err}`);
+    }
+
+    report("routine signatures…");
+    try {
+        snapshot.routines = await loadRoutines(runner, ownerUri);
+        await publishSchemaDetails({ routines: snapshot.routines });
+        console.log(`[SQL Prompt] stage 3: ${snapshot.routines.length} routine(s)`);
+    } catch (err: any) {
+        console.error(`[SQL Prompt] stage 3 (routines) failed: ${err?.message ?? err}`);
+    }
+
+    return snapshot;
 }
 
 /**
@@ -676,14 +450,36 @@ async function checkForDatabaseChange(): Promise<void> {
 
         if (activeDatabase && lastDatabase !== undefined && activeDatabase !== lastDatabase) {
             console.log(`[SQL Prompt] Database changed: ${lastDatabase} → ${activeDatabase}, re-syncing schema.`);
-            await syncMssqlConnection(false);
+            await syncMssqlConnection();
         }
     } catch {
         // API may be unavailable — ignore
     }
 }
 
-async function syncMssqlConnection(showNotification = false): Promise<boolean> {
+/**
+ * Brings the language server's schema up to date with the mssql connection of
+ * the active SQL editor.
+ *
+ * Three paths, cheapest first:
+ *
+ *  1. **In-memory cache** — same connection and database, seen within the last
+ *     few minutes. Publishes immediately and runs no query at all.
+ *  2. **Disk cache** — one small change-detection query decides whether the
+ *     stored snapshot still describes the database. This is the path a window
+ *     reload takes, and the reason reopening VS Code no longer costs a full
+ *     reload on an unchanged database.
+ *  3. **Staged load** — object names first, then columns, foreign keys and
+ *     routine signatures, each published as it lands.
+ *
+ * `force` skips both caches; that is what `SQL Prompt: Reload Schema` needs in
+ * order to pick up a change the token cannot see, such as a renamed column.
+ */
+async function syncMssqlConnection(
+    options: { showNotification?: boolean; force?: boolean } = {},
+): Promise<boolean> {
+    const { showNotification = false, force = false } = options;
+
     if (!client) {
         console.log("SQL Prompt: syncMssqlConnection — client not ready");
         return false;
@@ -702,18 +498,22 @@ async function syncMssqlConnection(showNotification = false): Promise<boolean> {
 
     const ownerUri = editor.document.uri.toString();
 
+    // Several events can ask for the same URI at once (editor switch, ownership
+    // change, the activation timer). A forced reload is the one case that has to
+    // run even so, because the user asked for it explicitly.
     const existingSync = inFlightSchemaSyncs.get(ownerUri);
-    if (existingSync) {
+    if (existingSync && !force) {
         return existingSync;
+    }
+
+    if (force) {
+        publishedSnapshot = undefined;
     }
 
     let syncPromise!: Promise<boolean>;
     syncPromise = (async (): Promise<boolean> => {
         try {
-            const api = await getMssqlApi();
-            if (!api?.connectionSharing) {
-                return false;
-            }
+            const runner = api.connectionSharing as QueryRunner;
 
             try {
                 const isConnected = await api.connectionSharing.isConnected?.(ownerUri);
@@ -727,6 +527,8 @@ async function syncMssqlConnection(showNotification = false): Promise<boolean> {
                 return false;
             }
 
+            // The connection id and database name key the in-memory cache, and
+            // the database name lets checkForDatabaseChange() notice a later USE.
             let activeConnectionId: string | undefined;
             let activeDatabase: string | undefined;
             try {
@@ -750,83 +552,107 @@ async function syncMssqlConnection(showNotification = false): Promise<boolean> {
             const cacheKey = activeConnectionId
                 ? buildSchemaCacheKey(activeConnectionId, activeDatabase)
                 : undefined;
-            const cachedSnapshot = cacheKey ? getCachedSchemaSnapshot(cacheKey) : undefined;
 
-            const publishSchemaSnapshot = async (
-                schemaSnapshot: SchemaSnapshot,
-                isCached: boolean,
-            ): Promise<boolean> => {
+            /** Bookkeeping and user feedback for a snapshot that went through. */
+            const announce = (snapshot: WireSnapshot, fromCache: boolean): boolean => {
                 lastOwnerUri = ownerUri;
-                lastTablesSnapshot = schemaSnapshot.tables;
-
-                try {
-                    const objectCount = getSchemaObjectCount(schemaSnapshot);
-                    const updateResult = await client!.sendRequest<{
-                        success: boolean;
-                        tableCount: number;
-                    }>("sqlPrompt/updateSchemaSnapshot", {
-                        tables: schemaSnapshot.tables,
-                        scalarFunctions: schemaSnapshot.scalarFunctions,
-                        tableValuedFunctions: schemaSnapshot.tableValuedFunctions,
-                        storedProcedures: schemaSnapshot.storedProcedures,
-                        databases: schemaSnapshot.databases ?? [],
-                    });
-
-                    if (!updateResult?.success) {
-                        return false;
-                    }
-
-                    // Record the database that is now active for this URI so
-                    // checkForDatabaseChange() can detect future USE switches.
-                    if (activeDatabase !== undefined) {
-                        lastSyncedDatabasePerUri.set(ownerUri, activeDatabase);
-                    }
-
-                    await suppressMssqlIntellisense();
-
-                    const statusMessage = isCached
-                        ? `SQL Prompt: schema restored from cache — ${objectCount} object(s)`
-                        : `SQL Prompt: schema loaded — ${objectCount} object(s)`;
-                    window.setStatusBarMessage(statusMessage, 5000);
-
-                    if (showNotification) {
-                        let dbDetail = "";
-                        if (activeDatabase) {
-                            dbDetail = ` · ${activeDatabase}`;
-                        }
-                        window.showInformationMessage(
-                            `SQL Prompt: connected${dbDetail} — ${objectCount} object(s) loaded`,
-                        );
-                    }
-
-                    return true;
-                } catch {
-                    return false;
+                if (activeDatabase !== undefined) {
+                    lastSyncedDatabasePerUri.set(ownerUri, activeDatabase);
                 }
+                void suppressMssqlIntellisense();
+
+                const objectCount = getSchemaObjectCount(snapshot);
+                window.setStatusBarMessage(
+                    fromCache
+                        ? `SQL Prompt: schema restored from cache — ${objectCount} object(s)`
+                        : `SQL Prompt: schema loaded — ${objectCount} object(s)`,
+                    5000,
+                );
+
+                if (showNotification) {
+                    const dbDetail = activeDatabase ? ` · ${activeDatabase}` : "";
+                    window.showInformationMessage(
+                        `SQL Prompt: connected${dbDetail} — ${objectCount} object(s) loaded`,
+                    );
+                }
+
+                return true;
             };
 
-            if (cachedSnapshot) {
-                return await publishSchemaSnapshot(cachedSnapshot, true);
+            /** Points the usage history at the database now in play. */
+            const adoptUsageDatabase = (identity: SchemaToken | undefined) => {
+                usageDatabase = identity
+                    ? usageDatabaseKey(identity.serverName, identity.databaseName)
+                    : undefined;
+            };
+
+            // 1. In-memory cache.
+            if (!force && cacheKey) {
+                const cached = getCachedSchemaSnapshot(cacheKey);
+                if (cached && (await publishCachedSnapshot(cached.snapshot))) {
+                    adoptUsageDatabase(cached.token);
+                    await publishUsageScores();
+                    return announce(cached.snapshot, true);
+                }
             }
 
-            const result = await window.withProgress(
-                { location: 15, title: "SQL Prompt: Loading schema..." },
-                async () => {
-                    const schemaSnapshot = await loadSchemaViaConnectionSharing(ownerUri);
-                    if (!schemaSnapshot) {
-                        return null;
-                    }
+            // The token both keys the disk cache and says whether its entry is
+            // still valid. A failure here is not fatal: it only costs the cache.
+            let token: SchemaToken | undefined;
+            try {
+                token = await loadSchemaToken(runner, ownerUri);
+            } catch (err: any) {
+                console.error(`[SQL Prompt] schema token query failed: ${err?.message ?? err}`);
+            }
 
-                    const published = await publishSchemaSnapshot(schemaSnapshot, false);
-                    if (published && cacheKey) {
-                        setCachedSchemaSnapshot(cacheKey, schemaSnapshot);
-                    }
+            adoptUsageDatabase(token);
 
-                    return published;
-                },
+            // 2. Disk cache.
+            if (token && schemaDiskCache) {
+                if (force) {
+                    await schemaDiskCache.invalidate(token);
+                } else {
+                    const cached = await schemaDiskCache.read(token);
+                    if (cached && (await publishCachedSnapshot(cached))) {
+                        if (cacheKey) {
+                            setCachedSchemaSnapshot(cacheKey, cached, token);
+                        }
+                        await publishUsageScores();
+                        return announce(cached, true);
+                    }
+                }
+            }
+
+            // 3. Staged load.
+            const snapshot = await window.withProgress(
+                { location: ProgressLocation.Window, title: "SQL Prompt: loading schema" },
+                (progress) =>
+                    loadSchemaStaged(
+                        runner,
+                        ownerUri,
+                        token?.databaseName ?? activeDatabase,
+                        (message) => progress.report({ message }),
+                    ),
             );
 
-            return result === true;
+            if (!snapshot) {
+                return false;
+            }
+
+            if (cacheKey) {
+                setCachedSchemaSnapshot(cacheKey, snapshot, token);
+            }
+
+            await publishUsageScores();
+            const announced = announce(snapshot, false);
+
+            // Persisting is what makes the *next* window reload cheap, so it
+            // must not delay this one: fire it off and let it finish on its own.
+            if (token && schemaDiskCache) {
+                void schemaDiskCache.write(token, snapshot);
+            }
+
+            return announced;
         } finally {
             const currentSync = inFlightSchemaSyncs.get(ownerUri);
             if (currentSync === syncPromise) {
@@ -864,7 +690,7 @@ async function setupMssqlConnectionListener(
             }
             connectionSyncDebounce = setTimeout(async () => {
                 connectionSyncDebounce = undefined;
-                await syncMssqlConnection(true);
+                await syncMssqlConnection({ showNotification: true });
             }, 600);
         }),
     );
@@ -894,21 +720,25 @@ function formatColumnDataType(dataType: string, maxLength: number | null): strin
     return dataType;
 }
 
-function generateCreateTableScript(table: TableInfo): string {
-    const colDefs = table.columns.map(c => {
+function generateCreateTableScript(
+    schema: string,
+    name: string,
+    columns: ResolvedColumn[],
+): string {
+    const colDefs = columns.map(c => {
         const typeDef = formatColumnDataType(c.dataType, c.maxLength);
         const nullability = c.isNullable ? 'NULL' : 'NOT NULL';
         return `    [${c.name}] ${typeDef} ${nullability}`;
     });
 
-    const pkCols = table.columns.filter(c => c.isPrimaryKey);
+    const pkCols = columns.filter(c => c.isPrimaryKey);
     if (pkCols.length > 0) {
         colDefs.push(
-            `    CONSTRAINT [PK_${table.name}] PRIMARY KEY (${pkCols.map(c => `[${c.name}]`).join(', ')})`,
+            `    CONSTRAINT [PK_${name}] PRIMARY KEY (${pkCols.map(c => `[${c.name}]`).join(', ')})`,
         );
     }
 
-    return `CREATE TABLE [${table.schema}].[${table.name}] (\n${colDefs.join(',\n')}\n);`;
+    return `CREATE TABLE [${schema}].[${name}] (\n${colDefs.join(',\n')}\n);`;
 }
 
 /**
@@ -945,6 +775,8 @@ function resolveIdentifierAtColumn(
 export async function activate(context: ExtensionContext) {
     console.log("SQL Prompt: extension activating...");
     setupMssqlApiLifetime(context);
+    schemaDiskCache = new SchemaDiskCache(context.globalStorageUri);
+    usageStore = new CompletionUsageStore(context.globalState);
 
     const serverModule = context.asAbsolutePath(
         path.join("server", "dist", "server.js"),
@@ -1003,9 +835,18 @@ export async function activate(context: ExtensionContext) {
             setTimeout(() => syncMssqlConnection(), 2000);
         }),
 
+        // Fired by an accepted completion item, never from the palette — which
+        // is why it is not declared in package.json `contributes.commands`.
+        commands.registerCommand(
+            "sqlPrompt.recordCompletionUse",
+            (objectKey: unknown) => recordCompletionUse(objectKey),
+        ),
+
         commands.registerCommand("sqlPrompt.disconnect", async () => {
             if (client) {
                 await client.sendRequest("sqlPrompt/disconnect");
+                publishedSnapshot = undefined;
+                schemaSnapshotCache.clear();
                 await restoreMssqlIntellisense();
                 window.showInformationMessage("SQL Prompt: disconnected.");
             }
@@ -1021,7 +862,7 @@ export async function activate(context: ExtensionContext) {
                 return;
             }
 
-            const reloaded = await syncMssqlConnection(true);
+            const reloaded = await syncMssqlConnection({ showNotification: true, force: true });
             if (!reloaded) {
                 window.showWarningMessage(
                     "SQL Prompt: no active mssql connection found. " +
@@ -1129,15 +970,19 @@ export async function activate(context: ExtensionContext) {
 
     client.onRequest("sqlPrompt/loadCrossDatabaseSchema", async (params: { database: string }) => {
         const ownerUri = window.activeTextEditor?.document.uri.toString();
-        if (!ownerUri) {
-            return { tables: [] };
+        const api = await getMssqlApi();
+        if (!ownerUri || !api?.connectionSharing) {
+            return { objects: [], columns: [] };
         }
         try {
-            const snapshot = await loadSchemaForDatabaseViaConnectionSharing(ownerUri, params.database);
-            return { tables: snapshot?.tables ?? [] };
+            return await loadCrossDatabaseSchema(
+                api.connectionSharing as QueryRunner,
+                ownerUri,
+                params.database,
+            );
         } catch (e: any) {
             console.error(`[SQL Prompt] loadCrossDatabaseSchema failed: ${e.message}`);
-            return { tables: [] };
+            return { objects: [], columns: [] };
         }
     });
 
@@ -1173,13 +1018,7 @@ export async function activate(context: ExtensionContext) {
                     schema: string;
                     name: string;
                     kind: 'tableOrView' | 'procedure' | 'scalarFunction' | 'tableValuedFunction';
-                    columns?: Array<{
-                        name: string;
-                        dataType: string;
-                        maxLength: number | null;
-                        isNullable: boolean;
-                        isPrimaryKey: boolean;
-                    }>;
+                    columns?: ResolvedColumn[];
                 };
 
                 let resolved: ResolvedObject | null = null;
@@ -1209,14 +1048,11 @@ export async function activate(context: ExtensionContext) {
                             INNER JOIN sys.schemas s ON o.schema_id = s.schema_id
                             WHERE s.name = N'${schemaEsc}' AND o.name = N'${nameEsc}'
                         `;
-                        const result = await api.connectionSharing.executeSimpleQuery?.(
+                        script = await queryFirstCellText(
+                            api.connectionSharing as QueryRunner,
                             ownerUri,
                             scriptQuery,
-                        );
-                        const rows = extractRowsFromSimpleQueryResult(result);
-                        if (rows.length > 0) {
-                            script = normalizeText(rows[0].definition) ?? null;
-                        }
+                        ) ?? null;
                     } catch {
                         // fallthrough to other strategies
                     }
@@ -1237,20 +1073,12 @@ export async function activate(context: ExtensionContext) {
 
                 // For tables (no sql_modules entry): generate CREATE TABLE from snapshot
                 if (script === null && resolved.kind === 'tableOrView') {
-                    // Prefer server-returned columns; fall back to local snapshot
-                    const columns = resolved.columns ?? lastTablesSnapshot.find(
-                        t => t.schema.toLowerCase() === resolved!.schema.toLowerCase() &&
-                            t.name.toLowerCase() === resolved!.name.toLowerCase(),
-                    )?.columns;
-
-                    if (columns) {
-                        const tableInfo: TableInfo = {
-                            schema: resolved.schema,
-                            name: resolved.name,
-                            columns,
-                            foreignKeys: [],
-                        };
-                        script = generateCreateTableScript(tableInfo);
+                    if (resolved.columns) {
+                        script = generateCreateTableScript(
+                            resolved.schema,
+                            resolved.name,
+                            resolved.columns,
+                        );
                     }
                 }
 
@@ -1366,6 +1194,15 @@ export async function activate(context: ExtensionContext) {
 
 export async function deactivate() {
     mssqlApiPromise = undefined;
+
+    // A completion accepted in the last second and a half is still only in
+    // memory; flush it before the debounce would have.
+    if (usageFlushDebounce) {
+        clearTimeout(usageFlushDebounce);
+        usageFlushDebounce = undefined;
+        await usageStore?.persist();
+    }
+
     await restoreMssqlIntellisense();
     if (client) {
         await client.stop();
@@ -1373,62 +1210,3 @@ export async function deactivate() {
     }
 }
 
-async function loadSchemaForDatabaseViaConnectionSharing(ownerUri: string, database: string): Promise<SchemaSnapshot | undefined> {
-    const api = await getMssqlApi();
-    if (!api?.connectionSharing) {
-        return undefined;
-    }
-
-    const dbBracketed = '[' + database.replace(/]/g, ']]') + ']';
-    
-    // We only load tables/views (and their columns) for cross-database. No routines/FKs.
-    const schemaQuery = `
-            SELECT
-                s.name AS schema_name,
-                so.name AS table_name,
-                c.name AS column_name,
-                ty.name AS data_type,
-                c.max_length,
-                c.is_nullable,
-                c.is_identity,
-                c.is_computed,
-                CASE WHEN c.default_object_id <> 0 THEN 1 ELSE 0 END AS has_default,
-                CASE WHEN so.type = 'U' AND pk.column_id IS NOT NULL THEN 1 ELSE 0 END AS is_primary_key
-            FROM ${dbBracketed}.sys.objects so
-            INNER JOIN ${dbBracketed}.sys.schemas s ON so.schema_id = s.schema_id
-            INNER JOIN ${dbBracketed}.sys.columns c ON so.object_id = c.object_id
-            INNER JOIN ${dbBracketed}.sys.types ty ON c.user_type_id = ty.user_type_id
-            LEFT JOIN (
-                SELECT ic.object_id, ic.column_id
-                FROM ${dbBracketed}.sys.index_columns ic
-                INNER JOIN ${dbBracketed}.sys.indexes i
-                    ON ic.object_id = i.object_id AND ic.index_id = i.index_id
-                WHERE i.is_primary_key = 1
-            ) pk ON so.object_id = pk.object_id AND c.column_id = pk.column_id
-            WHERE so.type IN ('U', 'V') AND so.is_ms_shipped = 0
-            ORDER BY s.name, so.name, c.column_id
-    `;
-
-    try {
-        const result = await api.connectionSharing.executeSimpleQuery?.(ownerUri, schemaQuery);
-        const rows = extractRowsFromSimpleQueryResult(result);
-        const schemaTables = mapRowsToSchemaSnapshot(rows);
-        
-        // Tag tables with the requested database name
-        for (const t of schemaTables) {
-            t.database = database;
-        }
-
-        console.log(`[SQL Prompt] Cross-database schema loaded for [${database}]: ${schemaTables.length} tables`);
-        return {
-            tables: schemaTables,
-            scalarFunctions: [],
-            tableValuedFunctions: [],
-            storedProcedures: [],
-            databases: []
-        };
-    } catch (e: any) {
-        console.error(`[SQL Prompt] loadSchemaForDatabaseViaConnectionSharing failed for [${database}]: ${e.message}`);
-        return undefined;
-    }
-}
