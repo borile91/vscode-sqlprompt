@@ -687,6 +687,62 @@ describe('completionEngine — priority', () => {
     const tableLabels = sortedLabels(items, CompletionItemKind.Class);
     assert.equal(tableLabels[0], 'dbo.Zebra', `Expected the FK-related table first, got: ${tableLabels.join(', ')}`);
   });
+
+  // Parent(A, B) <- Child(ParentA, ParentB): a composite FK over two columns.
+  function compositeFkLabels(sql: string): string[] {
+    const col = (name: string) => ({ name, dataType: 'int', maxLength: null, isNullable: false, isPrimaryKey: false });
+    const parent: TableInfo = {
+      schema: 'dbo',
+      name: 'Parent',
+      columns: [col('A'), col('B')],
+      foreignKeys: [],
+    };
+    const child: TableInfo = {
+      schema: 'dbo',
+      name: 'Child',
+      columns: [col('ParentA'), col('ParentB')],
+      foreignKeys: [
+        {
+          name: 'FK_Child_Parent',
+          parentSchema: 'dbo',
+          parentTable: 'Child',
+          referencedSchema: 'dbo',
+          referencedTable: 'Parent',
+          mappings: [
+            { column: 'ParentA', referencedColumn: 'A' },
+            { column: 'ParentB', referencedColumn: 'B' },
+          ],
+        },
+      ],
+    };
+    const fkTables = [parent, child];
+
+    const document = TextDocument.create('file:///fk-on.sql', 'sql', 1, sql);
+    const context = resolveContext(sql, 0, sql.length, fkTables);
+    const items = buildCompletions(
+      context,
+      fkTables,
+      routines,
+      document,
+      document.positionAt(sql.length),
+      { text: sql, start: 0, end: sql.length, cursorOffset: sql.length },
+    );
+    return items.map((i) => i.label);
+  }
+
+  const COMPOSITE = 'c.ParentA = p.A AND c.ParentB = p.B';
+
+  it('offers the whole composite FK in one item after a typed ON', () => {
+    const labels = compositeFkLabels('SELECT * FROM dbo.Parent p JOIN dbo.Child c ON ');
+    assert.ok(labels.includes(COMPOSITE), `Expected the combined predicate, got: ${labels.join(' | ')}`);
+  });
+
+  it('does not offer the composite FK once a predicate is already written', () => {
+    const labels = compositeFkLabels('SELECT * FROM dbo.Parent p JOIN dbo.Child c ON c.ParentA = p.A AND ');
+    assert.ok(!labels.includes(COMPOSITE), `Composite predicate should be skipped, got: ${labels.join(' | ')}`);
+    // The column not written yet is still offered on its own.
+    assert.ok(labels.includes('c.ParentB = p.B'), `Expected the remaining column, got: ${labels.join(' | ')}`);
+  });
 });
 
 // ── Statement snippets after an unterminated query ────────────────────────────
