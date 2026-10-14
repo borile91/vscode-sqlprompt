@@ -36,6 +36,12 @@ describe('describeFormattingRisk — formattings that must be allowed', () => {
         assert.equal(describeFormattingRisk(before, 'SELECT a, b FROM dbo.T'), null);
     });
 
+    it('accepts comments moved around, also with quotes and nested block comments', () => {
+        const before = "SELECT a, -- c'è, ancora\n /* x /* y */ z */ b FROM [t--1] WHERE s = '--no'";
+        const after = "SELECT\n    a -- c'è, ancora\n  , /* x /* y */ z */ b\nFROM\n    [t--1]\nWHERE\n    s = '--no'";
+        assert.equal(describeFormattingRisk(before, after), null);
+    });
+
     it('accepts an empty document', () => {
         assert.equal(describeFormattingRisk('', ''), null);
     });
@@ -76,6 +82,16 @@ describe('describeFormattingRisk — results that must be refused', () => {
     it('refuses altered string content', () => {
         const risk = describeFormattingRisk("SELECT 'abc'", "SELECT 'abd'");
         assert.ok(risk);
+    });
+
+    // Osservato con gli stili 2_Inline/3_Tsqlt: la colonna b finiva nel commento
+    it('refuses code moved into a line comment', () => {
+        const before = 'SELECT a -- primo\n, b -- secondo\nFROM t';
+        const after = 'SELECT   a -- primo, b -- secondo\nFROM     t';
+        const risk = describeFormattingRisk(before, after);
+        assert.ok(risk, 'expected the guard to refuse this result');
+        assert.match(risk!, /comment/);
+        assert.match(risk!, /removed 1 "b"/);
     });
 
     it('reports each changed character', () => {
