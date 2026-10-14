@@ -56,7 +56,9 @@ export interface SqlPromptStyleJson {
         };
     };
     dml?: {
+        collapseShortStatements?: boolean;
         collapseStatementsShorterThan?: number;
+        collapseShortSubqueries?: boolean;
         collapseSubqueriesShorterThan?: number;
     };
     ddl?: {
