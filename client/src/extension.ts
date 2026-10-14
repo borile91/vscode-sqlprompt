@@ -300,6 +300,24 @@ async function fetchModuleDefinition(
     }
 }
 
+/**
+ * Attende `task` mostrando una notifica con avanzamento indefinito, ma solo se
+ * dura più di `delayMs`: le letture veloci non fanno comparire nulla.
+ */
+async function withDelayedProgress<T>(title: string, task: Promise<T>, delayMs = 300): Promise<T> {
+    const timer = setTimeout(() => {
+        void window.withProgress(
+            { location: ProgressLocation.Notification, title },
+            () => task.then(() => undefined, () => undefined),
+        );
+    }, delayMs);
+    try {
+        return await task;
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
 /** Lists the user objects of a kind through the mssql connectionSharing API. */
 async function listModules(
     ownerUri: string,
@@ -1247,6 +1265,9 @@ export async function activate(context: ExtensionContext) {
         string,
         { cachedAt: number; modules: Array<{ schema: string; name: string }> }
     >();
+    // Una sola lettura per elenco anche se si continua a scrivere mentre carica.
+    const alterListInFlight = new Map<string, Promise<Array<{ schema: string; name: string }>>>();
+    const alterKindPlural = { procedure: 'procedures', view: 'views', function: 'functions' } as const;
 
     context.subscriptions.push(
         languages.registerCompletionItemProvider(
@@ -1263,8 +1284,20 @@ export async function activate(context: ExtensionContext) {
                     const cacheKey = `${ownerUri}|${header.kind}`;
                     let cached = alterListCache.get(cacheKey);
                     if (!cached || Date.now() - cached.cachedAt > ALTER_LIST_TTL_MS) {
+                        let loading = alterListInFlight.get(cacheKey);
+                        if (!loading) {
+                            loading = withDelayedProgress(
+                                `SQL Prompt: loading ${alterKindPlural[header.kind]}…`,
+                                listModules(ownerUri, header.kind),
+                            );
+                            alterListInFlight.set(cacheKey, loading);
+                            void loading.then(
+                                () => alterListInFlight.delete(cacheKey),
+                                () => alterListInFlight.delete(cacheKey),
+                            );
+                        }
                         try {
-                            cached = { cachedAt: Date.now(), modules: await listModules(ownerUri, header.kind) };
+                            cached = { cachedAt: Date.now(), modules: await loading };
                         } catch {
                             return undefined;
                         }
@@ -1311,7 +1344,10 @@ export async function activate(context: ExtensionContext) {
                 const end = editor.selection.active;
                 const version = document.version;
 
-                const definition = await fetchModuleDefinition(ownerUri, module.schema, module.name);
+                const definition = await withDelayedProgress(
+                    `SQL Prompt: loading the definition of [${module.schema}].[${module.name}]…`,
+                    fetchModuleDefinition(ownerUri, module.schema, module.name),
+                );
                 const script = definition ? toAlterScript(definition) : undefined;
                 if (!script) {
                     window.showWarningMessage(
