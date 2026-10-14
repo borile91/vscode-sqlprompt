@@ -35,6 +35,7 @@ import {
 
 import { loadStylesFromFolder, LoadedStyle } from './formatter/styleLoader';
 import { SqlFormattingProvider } from './formatter/sqlFormattingProvider';
+import { normalizeMode, planSuggestions } from './mssqlSuggestions';
 import { SchemaDiskCache, SchemaToken } from './schema/schemaCache';
 import { CompletionUsageStore, usageDatabaseKey } from './schema/usageStore';
 import {
@@ -71,7 +72,6 @@ let client: LanguageClient | undefined;
 let connectionSyncDebounce: ReturnType<typeof setTimeout> | undefined;
 let databaseCheckDebounce: ReturnType<typeof setTimeout> | undefined;
 let mssqlApiPromise: Promise<any | undefined> | undefined;
-let mssqlIntellisenseSuppressed = false;
 const SCHEMA_CACHE_TTL_MS = 5 * 60 * 1000;
 
 /** Tracks the database that was active when the schema was last synced, keyed by ownerUri. */
@@ -560,42 +560,65 @@ interface StagedLoad {
  * When showNotification is true (connection just changed), also pops an
  * information message including the active database name.
  */
-async function suppressMssqlIntellisense(): Promise<void> {
-    if (mssqlIntellisenseSuppressed) {
-        return;
-    }
-    const sqlPromptConfig = workspace.getConfiguration("sqlPrompt");
-    const shouldSuppress = sqlPromptConfig.get<boolean>("suppressMssqlIntellisense", true);
-    if (!shouldSuppress) {
-        return;
-    }
+const MSSQL_SUGGESTIONS_KEY = 'intelliSense.enableSuggestions';
+const OWN_GLOBAL_KEY = 'sqlPrompt.mssqlSuggestions.ownGlobal';
+const OWN_WORKSPACE_KEY = 'sqlPrompt.mssqlSuggestions.ownWorkspace';
+const NOTICE_SHOWN_KEY = 'sqlPrompt.mssqlSuggestions.noticeShown';
+
+/**
+ * Porta `mssql.intelliSense.enableSuggestions` dove dice
+ * `sqlPrompt.suppressMssqlIntellisense` (vedi mssqlSuggestions.ts). Si scrive
+ * solo quando cambia qualcosa: niente più modifiche al workspace a ogni connessione.
+ */
+async function applyMssqlSuggestionsPolicy(context: ExtensionContext): Promise<void> {
+    const mode = normalizeMode(
+        workspace.getConfiguration('sqlPrompt').get('suppressMssqlIntellisense'),
+    );
+    const mssqlConfig = workspace.getConfiguration('mssql');
+    const current = mssqlConfig.inspect<boolean>(MSSQL_SUGGESTIONS_KEY);
+    const plan = planSuggestions(mode, {
+        globalValue: current?.globalValue,
+        workspaceValue: current?.workspaceValue,
+        ownGlobal: context.globalState.get<boolean>(OWN_GLOBAL_KEY, false),
+        ownWorkspace: context.workspaceState.get<boolean>(OWN_WORKSPACE_KEY, false),
+    });
+
     try {
-        await workspace.getConfiguration("mssql").update(
-            "intelliSense.enableSuggestions",
-            false,
-            ConfigurationTarget.Workspace,
-        );
-        mssqlIntellisenseSuppressed = true;
-    } catch {
-        // Setting may not exist in older versions of the mssql extension — ignore
+        if (plan.global !== undefined) {
+            await mssqlConfig.update(MSSQL_SUGGESTIONS_KEY, plan.global ?? undefined, ConfigurationTarget.Global);
+            await context.globalState.update(OWN_GLOBAL_KEY, plan.global === false);
+        }
+        if (plan.workspace !== undefined && workspace.workspaceFolders?.length) {
+            await mssqlConfig.update(MSSQL_SUGGESTIONS_KEY, plan.workspace ?? undefined, ConfigurationTarget.Workspace);
+            await context.workspaceState.update(OWN_WORKSPACE_KEY, plan.workspace === false);
+        }
+    } catch (err: any) {
+        // Chiave non registrata (mssql assente o troppo vecchia): niente da spegnere.
+        console.log(`[SQL Prompt] mssql suggestions setting not updated: ${err?.message ?? err}`);
+        return;
+    }
+
+    if (plan.global === false && !context.globalState.get<boolean>(NOTICE_SHOWN_KEY, false)) {
+        await context.globalState.update(NOTICE_SHOWN_KEY, true);
+        void showMssqlSuggestionsNotice();
     }
 }
 
-async function restoreMssqlIntellisense(): Promise<void> {
-    if (!mssqlIntellisenseSuppressed) {
-        return;
-    }
-    try {
-        // Removing the workspace-level override restores the user/default value.
-        // Stessa chiave impostata da suppressMssqlIntellisense.
-        await workspace.getConfiguration("mssql").update(
-            "intelliSense.enableSuggestions",
-            undefined,
-            ConfigurationTarget.Workspace,
-        );
-        mssqlIntellisenseSuppressed = false;
-    } catch {
-        // Ignore
+/** Avviso una tantum: la scelta resta all'utente, che può cambiarla da qui. */
+async function showMssqlSuggestionsNotice(): Promise<void> {
+    const onlyWorkspace = 'Only this workspace';
+    const keepBoth = 'Keep mssql suggestions';
+    const picked = await window.showInformationMessage(
+        "SQL Prompt turned off the mssql extension's suggestions in your User settings, " +
+        'so only SQL Prompt completions appear. Change it any time with sqlPrompt.suppressMssqlIntellisense.',
+        onlyWorkspace,
+        keepBoth,
+    );
+    const mode = picked === onlyWorkspace ? 'workspace' : picked === keepBoth ? 'off' : undefined;
+    if (mode) {
+        await workspace
+            .getConfiguration('sqlPrompt')
+            .update('suppressMssqlIntellisense', mode, ConfigurationTarget.Global);
     }
 }
 
@@ -737,7 +760,6 @@ async function syncMssqlConnection(
                 if (activeDatabase !== undefined) {
                     lastSyncedDatabasePerUri.set(ownerUri, activeDatabase);
                 }
-                void suppressMssqlIntellisense();
 
                 const objectCount = getSchemaObjectCount(snapshot);
                 window.setStatusBarMessage(
@@ -961,6 +983,7 @@ export async function activate(context: ExtensionContext) {
     setupMssqlApiLifetime(context);
     schemaDiskCache = new SchemaDiskCache(context.globalStorageUri);
     usageStore = new CompletionUsageStore(context.globalState);
+    void applyMssqlSuggestionsPolicy(context);
 
     const serverModule = context.asAbsolutePath(
         path.join("server", "dist", "server.js"),
@@ -1031,7 +1054,6 @@ export async function activate(context: ExtensionContext) {
                 await client.sendRequest("sqlPrompt/disconnect");
                 publishedSnapshot = undefined;
                 schemaSnapshotCache.clear();
-                await restoreMssqlIntellisense();
                 window.showInformationMessage("SQL Prompt: disconnected.");
             }
         }),
@@ -1558,6 +1580,9 @@ export async function activate(context: ExtensionContext) {
             updateFormatterStatusBar();
         }),
         workspace.onDidChangeConfiguration(async (event) => {
+            if (event.affectsConfiguration('sqlPrompt.suppressMssqlIntellisense')) {
+                await applyMssqlSuggestionsPolicy(context);
+            }
             if (event.affectsConfiguration('sqlPrompt.snippets.shortcuts')) {
                 await publishStatementShortcuts();
             }
@@ -1597,7 +1622,6 @@ export async function deactivate() {
         await usageStore?.persist();
     }
 
-    await restoreMssqlIntellisense();
     if (client) {
         await client.stop();
         client = undefined;
