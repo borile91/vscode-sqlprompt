@@ -845,11 +845,12 @@ describe('completionEngine — schemi con molte tabelle', () => {
     assert.equal(hasZona('SELECT * FROM dbo.Zon'), true);
   });
 
-  it('leaves a small schema complete', () => {
-    const document = TextDocument.create('file:///test.sql', 'sql', 1, 'SELECT * FROM ');
-    const context = resolveContext('SELECT * FROM ', 0, 14, tables);
-    const result = buildCompletionList(context, tables, routines, document, document.positionAt(14), {
-      text: 'SELECT * FROM ', start: 0, end: 14, cursorOffset: 14,
+  it('leaves a list without table sources complete', () => {
+    const sql = 'SELECT  FROM dbo.Orders o';
+    const document = TextDocument.create('file:///test.sql', 'sql', 1, sql);
+    const context = resolveContext(sql, 0, 7, tables);
+    const result = buildCompletionList(context, tables, routines, document, document.positionAt(7), {
+      text: sql, start: 0, end: sql.length, cursorOffset: 7,
     });
     assert.equal(result.isIncomplete, false);
   });
@@ -914,5 +915,50 @@ describe('completionEngine — la scelta sostituisce la parola digitata', () => 
   it('colonna dopo alias.: sostituisce la parte digitata e il resto della parola', () => {
     const out = accept('SELECT o.Or|dXX FROM dbo.Orders o', 'OrderId', tables, []);
     assert.equal(out, 'SELECT o.OrderId FROM dbo.Orders o');
+  });
+});
+
+describe('completionEngine — ordine rispetto alla parola digitata', () => {
+  const t = (schema: string, name: string, isView = false): TableInfo => ({
+    schema, name, columns: [], foreignKeys: [], isView,
+  });
+  const schema: TableInfo[] = [
+    t('ui', 'vwArticoli', true),
+    t('mag', 'vwArticoliGiacenze', true),
+    t('dbo', 'ORDINI_ARTICOLI'),
+    t('dbo', 'ARTICOLI_FORNITORI'),
+    t('dbo', 'ARTICOLI'),
+    t('dbo', 'CLIENTI'),
+  ];
+
+  /** Etichette delle table source nell'ordine in cui VS Code le mostra. */
+  function shown(sql: string) {
+    const document = TextDocument.create('file:///test.sql', 'sql', 1, sql);
+    const position = document.positionAt(sql.length);
+    const context = resolveContext(sql, 0, sql.length, schema);
+    const result = buildCompletionList(context, schema, emptyRoutines, document, position, {
+      text: sql, start: 0, end: sql.length, cursorOffset: sql.length,
+    });
+    const sources = result.items.filter((i) => String(i.sortText).startsWith('01a_'));
+    return { result, sources, labels: sources.sort((a, b) => (String(a.sortText) < String(b.sortText) ? -1 : 1)).map((i) => String(i.label)) };
+  }
+
+  it('the table whose name starts with the typed word comes first', () => {
+    const { labels } = shown('SELECT * FROM articol');
+    assert.equal(labels[0], 'dbo.ARTICOLI');
+    assert.equal(labels[1], 'dbo.ARTICOLI_FORNITORI');
+    assert.ok(labels.indexOf('ui.vwArticoli') > 1);
+    assert.ok(!labels.includes('dbo.CLIENTI'));
+  });
+
+  it('every table source carries the typed text as filterText, so VS Code keeps the server order', () => {
+    const { result, sources } = shown('SELECT * FROM articol');
+    assert.equal(result.isIncomplete, true);
+    assert.ok(sources.every((i) => i.filterText === 'articol'));
+  });
+
+  it('after schema. the same order applies', () => {
+    const { labels } = shown('SELECT * FROM dbo.articol');
+    assert.equal(labels[0], 'ARTICOLI');
   });
 });
