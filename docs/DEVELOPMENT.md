@@ -14,6 +14,9 @@ vscode-sqlprompt/
 │   └── src/
 │       ├── extension.ts
 │       ├── alterScaffold.ts
+│       ├── mssql/
+│       ├── schema/
+│       ├── formatter/
 │       └── __tests__/
 ├── server/
 │   ├── package.json
@@ -37,6 +40,12 @@ vscode-sqlprompt/
 
 - `client/src/extension.ts`: VS Code extension entry point and Language Client lifecycle.
 - `client/src/alterScaffold.ts`: pure helpers behind the `ALTER PROCEDURE|VIEW|FUNCTION` scaffolding (header detection, queries, CREATE → ALTER rewrite).
+- `client/src/mssql/`: the only place that knows the ms-mssql extension API. `extension.ts` goes through `SchemaAccessProvider` (`connectionProvider.ts`) and never calls the mssql API directly.
+  - `connectionProvider.ts`: the provider interface and `selectSchemaAccess`, which picks the backend from what the installed ms-mssql offers (capability detection).
+  - `sharedConnectionsBackend.ts`: backend on `getSharedConnectionsApi(1)` (ms-mssql after 1.46.0): access token from the `mssql-shared-connections` authentication provider (user consent, in-memory cache, one renewal when mssql rejects it) and a pool of SQL Prompt's own connections keyed by `connectionId|database`.
+  - `legacyBackend.ts`: backend on the deprecated `connectionSharing` API (ms-mssql 1.46.0 and earlier), querying the editor URI directly.
+  - `mssqlApi.ts`: minimal local typings of the mssql API (no up-to-date npm package exists).
+  - `vscodeSchemaAccess.ts`: the VS Code glue (extension activation, `authentication.getSession`, user messages). Every other file in the folder is free of `vscode` imports and unit-tested with fake API objects.
 - `server/src/server.ts`: Language Server Protocol endpoint and request handling.
 - `server/src/schemaLoader.ts`: SQL Server schema loading and refresh logic.
 - `server/src/completionEngine.ts`: completion generation based on context and schema.
@@ -63,7 +72,7 @@ npm run compile
 
 - Build task: `npm run compile`
 - Watch mode: `npm run watch`
-- Unit tests are under `server/src/__tests__/`
+- Unit tests are under `server/src/__tests__/` and `client/src/**/__tests__/` (`cd client && npm test`, `cd server && npm test`); new client test files must be added to the `test` script in `client/package.json`
 
 ## Release process
 
@@ -81,7 +90,7 @@ npm run compile
 ## LSP flow (high level)
 
 1. Client starts the language server.
-2. Client tracks active SQL editor and active ms-mssql connection.
+2. Client tracks active SQL editor and active ms-mssql connection (through `SchemaAccessProvider`).
 3. Client sends connection updates to server (`sqlPrompt/updateConnection`).
 4. Server refreshes schema when needed.
 5. On completion requests, server resolves cursor context and returns completion items.
