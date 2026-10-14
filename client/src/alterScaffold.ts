@@ -79,16 +79,25 @@ export function buildDefinitionQuery(schema: string, name: string): string {
 
 const CREATE_HEADER = /\bCREATE\s+(?:OR\s+ALTER\s+)?(PROC(?:EDURE)?|VIEW|FUNCTION)\b/i;
 
+/** Copia del testo con commenti e stringhe sostituiti da spazi, a parità di posizioni. */
+function maskCommentsAndStrings(sql: string): string {
+    return sql.replace(/--[^\n]*|\/\*[\s\S]*?(?:\*\/|$)|'(?:[^']|'')*'?/g, (m) => m.replace(/[^\n]/g, ' '));
+}
+
 /**
  * Rewrites the first `CREATE [OR ALTER] PROC|VIEW|FUNCTION` of a stored
- * definition into `ALTER ...`. Leading comments are kept untouched.
+ * definition into `ALTER ...`. Leading comments are kept untouched, and a
+ * `CREATE` inside a comment or a string is not taken for the header.
  * Returns `undefined` when the text has no such header.
  */
 export function toAlterScript(definition: string): string | undefined {
-    if (!CREATE_HEADER.test(definition)) {
+    const match = CREATE_HEADER.exec(maskCommentsAndStrings(definition));
+    if (!match) {
         return undefined;
     }
-    return definition
-        .replace(CREATE_HEADER, 'ALTER $1')
-        .replace(/\r\n/g, '\n');
+    const rewritten =
+        definition.slice(0, match.index) +
+        `ALTER ${match[1]}` +
+        definition.slice(match.index + match[0].length);
+    return rewritten.replace(/\r\n/g, '\n');
 }

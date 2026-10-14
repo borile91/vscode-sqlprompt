@@ -72,6 +72,11 @@ describe('toAlterScript', () => {
         assert.match(out ?? '', /CREATE VIEW$/);
     });
 
+    it('ignores a CREATE inside a leading comment', () => {
+        const out = toAlterScript('-- Description: create view for orders\n/* CREATE PROCEDURE dbo.old */\nCREATE VIEW ui.vwOrdini AS SELECT 1 AS a');
+        assert.equal(out, '-- Description: create view for orders\n/* CREATE PROCEDURE dbo.old */\nALTER VIEW ui.vwOrdini AS SELECT 1 AS a');
+    });
+
     it('returns undefined when there is no header (e.g. encrypted object)', () => {
         assert.equal(toAlterScript('-- encrypted'), undefined);
     });
