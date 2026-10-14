@@ -50,6 +50,57 @@ interface ColumnItem {
     comment: string;
 }
 
+// ── Disposizione della virgola iniziale ──────────────────────────────────────
+
+/** Opzioni della virgola iniziale lette dallo stile. */
+interface CommaLayout {
+    alignment: 'beforeItem' | 'toList' | 'toStatement';
+    /** Separatore: ", " oppure "," (addSpaceBeforeComma). */
+    sep: string;
+}
+
+function readCommaLayout(style: SqlPromptStyleJson): CommaLayout {
+    const a = style.lists?.commaAlignment;
+    return {
+        alignment: a === 'toList' || a === 'toStatement' ? a : 'beforeItem',
+        // Default storico: spazio dopo la virgola
+        sep: style.lists?.addSpaceBeforeComma === false ? ',' : ', ',
+    };
+}
+
+/**
+ * Prefisso degli elementi successivi al primo e colonna in cui inizia l'elemento.
+ *   beforeItem:  virgola subito prima dell'elemento, allineato al primo
+ *   toList:      virgola sulla colonna del primo elemento
+ *   toStatement: virgola sulla colonna della keyword, elemento allineato al primo
+ */
+function leadingCommaPrefix(
+    stmtCol: number,
+    listCol: number,
+    layout: CommaLayout,
+): { prefix: string; itemCol: number } {
+    const { sep } = layout;
+    if (layout.alignment === 'toList') {
+        return { prefix: ' '.repeat(listCol) + sep, itemCol: listCol + sep.length };
+    }
+    if (layout.alignment === 'toStatement') {
+        const itemCol = Math.max(listCol, stmtCol + sep.length);
+        return { prefix: ' '.repeat(stmtCol) + ',' + ' '.repeat(itemCol - stmtCol - 1), itemCol };
+    }
+    const commaCol = Math.max(0, listCol - sep.length);
+    return { prefix: ' '.repeat(commaCol) + sep, itemCol: commaCol + sep.length };
+}
+
+/** Sposta una riga di `delta` colonne (rimuove solo spazi iniziali se negativo). */
+function shiftLine(line: string, delta: number): string {
+    if (delta > 0) return line.trim() ? ' '.repeat(delta) + line : line;
+    if (delta < 0) {
+        const lead = line.length - line.trimStart().length;
+        return line.slice(Math.min(lead, -delta));
+    }
+    return line;
+}
+
 // SQL clause keywords that end a column list
 const CLAUSE_RE =
     /^\s*(FROM|WHERE|GROUP\s+BY|HAVING|ORDER\s+BY|UNION(\s+ALL)?|INTERSECT|EXCEPT|INTO|ON|SET)\b/i;
@@ -144,6 +195,14 @@ function collectItems(
         if (afterPrefix === ' ') break;
 
         const [rawExpr, comment] = splitComment(contLine.slice(kwWidth).trim());
+        // Riga di solo commento: non è un elemento (avrebbe una virgola in più),
+        // si accoda al commento dell'elemento precedente
+        if (!rawExpr && comment) {
+            const last = items[items.length - 1];
+            last.comment = last.comment ? `${last.comment} ${comment}` : comment;
+            i++;
+            continue;
+        }
         const hasTrailing = rawExpr.trimEnd().endsWith(',');
         const expr = hasTrailing ? rawExpr.trimEnd().slice(0, -1).trimEnd() : rawExpr.trimEnd();
         items.push({ expression: expr, comment });
@@ -171,9 +230,11 @@ function formatItems(
     items: ColumnItem[],
     alignComments: boolean,
     alignAliases: boolean,
+    layout: CommaLayout,
 ): string[] {
-    const commaIndent = Math.max(0, kwWidth - 2);
-    const commaPad = ' '.repeat(commaIndent);
+    const stmtCol = kwPrefix.length - kwPrefix.trimStart().length;
+    const { prefix: commaPrefix, itemCol } = leadingCommaPrefix(stmtCol, kwWidth, layout);
+    const delta = itemCol - kwWidth;
 
     // Split each expression into [base, alias]
     const split = items.map(item => {
@@ -234,10 +295,233 @@ function formatItems(
         if (j === 0) {
             formatted.push(kwPrefix + exprPart + commentPart);
         } else {
-            formatted.push(commaPad + ', ' + exprPart + commentPart);
+            // Le righe di continuazione seguono lo spostamento dell'elemento
+            const [head, ...rest] = (exprPart + commentPart).split('\n');
+            formatted.push([commaPrefix + head, ...rest.map(l => shiftLine(l, delta))].join('\n'));
         }
     }
     return formatted;
+}
+
+// ── Liste con keyword su riga propria (indentazione standard) ───────────────
+//
+// Senza tabularLeft sql-formatter produce:
+//     SELECT
+//         foo,
+//         min(bat)
+// Qui la lista diventa a virgola iniziale. Un nuovo elemento inizia solo dopo
+// una virgola separatrice (fuori da parentesi, stringhe e commenti); le righe
+// più indentate o non precedute da virgola (CASE, subquery, OVER) restano
+// continuazione dell'elemento.
+
+// Keyword che aprono una lista quando stanno da sole sulla riga.
+const STANDALONE_LIST_KW_RE =
+    /^([ ]*)(?:SELECT(?:[ \t]+(?:DISTINCT|ALL))?|GROUP[ \t]+BY|ORDER[ \t]+BY|PARTITION[ \t]+BY|SET|VALUES)[ \t]*$/i;
+
+interface StandaloneListOptions {
+    layout: CommaLayout;
+    alignComments: boolean;
+    alignAliases: boolean;
+}
+
+/** Esito della scansione di una riga T-SQL. */
+interface LineScan {
+    /** Variazione netta delle parentesi (fuori da stringhe e commenti). */
+    depth: number;
+    /** Indice dell'ultimo carattere di codice, -1 se la riga non ne ha. */
+    lastCode: number;
+    /** Inizio del commento `--`, -1 se assente. */
+    commentStart: number;
+    /** Stringa, identificatore o commento a blocco aperti a fine riga. */
+    unterminated: boolean;
+}
+
+function scanLine(line: string): LineScan {
+    let depth = 0;
+    let lastCode = -1;
+    let i = 0;
+    const open = (): LineScan => ({ depth, lastCode, commentStart: -1, unterminated: true });
+    while (i < line.length) {
+        const ch = line[i];
+        if (ch === '-' && line[i + 1] === '-') {
+            return { depth, lastCode, commentStart: i, unterminated: false };
+        }
+        if (ch === '/' && line[i + 1] === '*') {
+            const end = line.indexOf('*/', i + 2);
+            if (end === -1) return open();
+            i = end + 2;
+            continue;
+        }
+        if (ch === "'" || ch === '"' || ch === '[') {
+            const close = ch === '[' ? ']' : ch;
+            let j = i + 1;
+            for (;;) {
+                if (j >= line.length) return open();
+                if (line[j] === close) {
+                    if (line[j + 1] === close) { j += 2; continue; } // carattere raddoppiato = escape
+                    break;
+                }
+                j++;
+            }
+            lastCode = j;
+            i = j + 1;
+            continue;
+        }
+        if (ch === '(') depth++;
+        else if (ch === ')') depth--;
+        if (!/\s/.test(ch)) lastCode = i;
+        i++;
+    }
+    return { depth, lastCode, commentStart: -1, unterminated: false };
+}
+
+function indentOf(line: string): number {
+    return line.length - line.trimStart().length;
+}
+
+/** Elemento di una lista con keyword su riga propria. */
+interface StandaloneItem {
+    /** Commenti su righe proprie che precedono l'elemento. */
+    leading: string[];
+    /** Righe dell'elemento (la prima a colonna listCol), senza virgola separatrice. */
+    lines: string[];
+}
+
+/** Rimuove il carattere in `idx` (la virgola) ricucendo gli spazi attorno. */
+function removeCharAt(line: string, idx: number): string {
+    const before = line.slice(0, idx).trimEnd();
+    const after = line.slice(idx + 1).trim();
+    return after ? `${before} ${after}` : before;
+}
+
+/**
+ * True se l'ultima riga di `text` termina con un commento `--`: niente può
+ * esserle accodato sulla stessa riga, finirebbe dentro il commento.
+ */
+function endsWithLineComment(text: string): boolean {
+    const lastLine = text.slice(text.lastIndexOf('\n') + 1);
+    return scanLine(lastLine).commentStart >= 0;
+}
+
+/** Applica formatStandaloneList a tutte le liste contenute in `lines`. */
+function formatNestedStandaloneLists(lines: string[], opts: StandaloneListOptions): string[] {
+    const out: string[] = [];
+    let j = 0;
+    while (j < lines.length) {
+        const r = formatStandaloneList(lines, j, opts);
+        if (r) {
+            out.push(...r.lines);
+            j = r.nextIndex;
+        } else {
+            out.push(lines[j]);
+            j++;
+        }
+    }
+    return out;
+}
+
+/**
+ * Se `lines[start]` è una keyword di lista da sola sulla riga, riscrive la
+ * lista che segue a virgola iniziale. Restituisce null se non è una lista o se
+ * la struttura non è sicura (stringhe/commenti su più righe, virgole orfane):
+ * in quel caso il testo resta invariato.
+ */
+function formatStandaloneList(
+    lines: string[],
+    start: number,
+    opts: StandaloneListOptions,
+): { lines: string[]; nextIndex: number } | null {
+    const kwMatch = lines[start].match(STANDALONE_LIST_KW_RE);
+    if (!kwMatch) return null;
+    const stmtCol = kwMatch[1].length;
+    const firstLine = lines[start + 1];
+    if (firstLine === undefined || !firstLine.trim() || /^[ ]*\t/.test(firstLine)) return null;
+    const listCol = indentOf(firstLine);
+    if (listCol <= stmtCol) return null;
+
+    const items: StandaloneItem[] = [];
+    let pending: string[] = [];
+    let current: StandaloneItem | undefined;
+    let depth = 0;
+    let ended = true; // true = il prossimo elemento può iniziare (dopo una virgola)
+    let i = start + 1;
+    for (; i < lines.length; i++) {
+        const line = lines[i];
+        if (!line.trim()) break;
+        // Virgola su riga propria: sql-formatter la mette dopo un elemento con commento
+        if (STANDALONE_COMMA_RE.test(line)) {
+            if (!current || ended || depth !== 0) return null;
+            ended = true;
+            continue;
+        }
+        if (indentOf(line) < listCol) break;
+        const scan = scanLine(line);
+        if (scan.unterminated) return null;
+        if (ended) {
+            if (scan.lastCode === -1) {
+                pending.push(line); // commento su riga propria prima dell'elemento
+                continue;
+            }
+            if (indentOf(line) !== listCol) return null;
+            current = { leading: pending, lines: [line] };
+            pending = [];
+            items.push(current);
+            ended = false;
+            depth = 0;
+        } else {
+            current!.lines.push(line);
+        }
+        depth += scan.depth;
+        if (depth < 0) return null;
+        if (depth === 0 && scan.lastCode >= 0 && line[scan.lastCode] === ',') {
+            current!.lines[current!.lines.length - 1] = removeCharAt(line, scan.lastCode);
+            ended = true;
+        }
+    }
+    // Lista vuota, parentesi non chiuse o virgola finale senza elemento: non tocca
+    if (!current || ended || depth !== 0 || pending.length > 0) return null;
+
+    const { prefix, itemCol } = leadingCommaPrefix(stmtCol, listCol, opts.layout);
+    const delta = itemCol - listCol;
+
+    // Allineamento di alias e commenti sugli elementi su una sola riga
+    const heads = items.map(item => {
+        const text = item.lines[0].slice(listCol);
+        if (item.lines.length > 1) return { text, single: false, base: '', alias: '', comment: '' };
+        const scan = scanLine(text);
+        const code = scan.commentStart >= 0 ? text.slice(0, scan.commentStart).trimEnd() : text;
+        const comment = scan.commentStart >= 0 ? text.slice(scan.commentStart) : '';
+        let [base, alias] = opts.alignAliases ? splitAlias(code) : [code, ''];
+        if (alias && computeNetParens(base) !== 0) [base, alias] = [code, ''];
+        return { text, single: true, base, alias, comment };
+    });
+    const maxBase = Math.max(0, ...heads.filter(h => h.single && h.alias).map(h => h.base.length));
+    const codeOf = (h: typeof heads[number]): string =>
+        h.alias ? `${h.base.padEnd(maxBase)} ${h.alias}` : h.base;
+    const maxCode = Math.max(0, ...heads.filter(h => h.single && h.comment).map(h => codeOf(h).length));
+
+    const out = [lines[start]];
+    items.forEach((item, idx) => {
+        const h = heads[idx];
+        let head = h.text;
+        if (h.single && (opts.alignAliases || opts.alignComments)) {
+            const code = codeOf(h);
+            head = h.comment
+                ? `${opts.alignComments ? code.padEnd(maxCode) : code} ${h.comment}`
+                : code;
+        }
+        const body = formatNestedStandaloneLists([' '.repeat(listCol) + head, ...item.lines.slice(1)], opts);
+        if (idx === 0) {
+            out.push(...item.leading, ...body);
+        } else {
+            out.push(
+                ...item.leading.map(l => shiftLine(l, delta)),
+                prefix + body[0].slice(listCol),
+                ...body.slice(1).map(l => shiftLine(l, delta)),
+            );
+        }
+    });
+    return { lines: out, nextIndex: i };
 }
 
 /**
@@ -293,6 +577,8 @@ function collapseSelectItems(
     }
 
     if (items.length <= 1) return null;
+    // Un commento `--` inghiottirebbe gli elementi accodati sulla stessa riga
+    if (items.some(endsWithLineComment)) return null;
 
     return {
         line: `${selectIndent}SELECT ${items.join(', ')}${hasFinalSemi ? ';' : ''}`,
@@ -316,6 +602,8 @@ export function applyLeadingCommaFormat(
 
     const alignComments = style.lists.alignComments ?? false;
     const alignAliases = style.lists.alignAliases ?? false;
+    const layout = readCommaLayout(style);
+    const standaloneOpts: StandaloneListOptions = { layout, alignComments, alignAliases };
     const spacesInside = style.parentheses?.addSpacesInsideParentheses ?? false;
     const columnsBreakMode = style.insertStatements?.columns?.placeSubsequentColumnsOnNewLines;
     const tabWidth = style.whitespace?.numberOfSpacesInTabs ?? 4;
@@ -424,6 +712,12 @@ export function applyLeadingCommaFormat(
                     if (trimmed) columns.push(trimmed.replace(/,\s*$/, ''));
                     j++;
                 }
+                // Colonne con commento `--`: non si possono unire su una riga
+                if (columns.some(endsWithLineComment)) {
+                    result.push(line);
+                    i++;
+                    continue;
+                }
                 const closingTrimmed = (lines[j] ?? '').trim();
                 const hasSemicolon = closingTrimmed === ');';
                 j++;
@@ -470,21 +764,24 @@ export function applyLeadingCommaFormat(
                         it.expression + (it.comment ? ' ' + it.comment : ''),
                     );
                     const oneLine = kwPrefix + allExprs.join(', ');
+                    // Un elemento (non ultimo) che termina con un commento `--`
+                    // impedisce la riga unica: il resto finirebbe nel commento.
+                    const commentBreaks = allExprs.slice(0, -1).some(endsWithLineComment);
 
                     if (listBreakMode === 'ifLongerThanMaxLineLength') {
                         // Keep inline if fits; otherwise fall back to vertical.
-                        if (isFinite(maxLineLen) && oneLine.length > maxLineLen) {
-                            result.push(...formatItems(kwPrefix, kwWidthBase, items, alignComments, alignAliases));
+                        if (commentBreaks || (isFinite(maxLineLen) && oneLine.length > maxLineLen)) {
+                            result.push(...formatItems(kwPrefix, kwWidthBase, items, alignComments, alignAliases, layout));
                         } else {
                             result.push(oneLine);
                         }
                     } else {
                         // 'never': pack items greedily onto lines ≤ maxLineLen.
-                        if (!isFinite(maxLineLen) || oneLine.length <= maxLineLen) {
+                        if (!commentBreaks && (!isFinite(maxLineLen) || oneLine.length <= maxLineLen)) {
                             result.push(oneLine);
                         } else {
-                            const commaIndent = Math.max(0, kwWidthBase - 2);
-                            const commaPad = ' '.repeat(commaIndent);
+                            const stmtCol = kwPrefix.length - kwPrefix.trimStart().length;
+                            const { prefix: commaPrefix } = leadingCommaPrefix(stmtCol, kwWidthBase, layout);
                             let currentLine = kwPrefix;
                             let first = true;
                             for (const expr of allExprs) {
@@ -493,9 +790,10 @@ export function applyLeadingCommaFormat(
                                     first = false;
                                 } else {
                                     const candidate = currentLine + ', ' + expr;
-                                    if (candidate.length >= maxLineLen - tabWidth) {
+                                    // Dopo un commento `--` si va sempre a capo
+                                    if (endsWithLineComment(currentLine) || candidate.length >= maxLineLen - tabWidth) {
                                         result.push(currentLine);
-                                        currentLine = commaPad + ', ' + expr;
+                                        currentLine = commaPrefix + expr;
                                     } else {
                                         currentLine = candidate;
                                     }
@@ -509,6 +807,14 @@ export function applyLeadingCommaFormat(
             }
             result.push(line);
             i++;
+            continue;
+        }
+
+        // Layout standard: keyword da sola sulla riga, elementi indentati sotto
+        const standalone = formatStandaloneList(lines, i, standaloneOpts);
+        if (standalone) {
+            result.push(...standalone.lines);
+            i = standalone.nextIndex;
             continue;
         }
 
@@ -540,7 +846,7 @@ export function applyLeadingCommaFormat(
         const { items, nextIndex } = collectItems(lines, i, firstItemText, kwWidthBase);
         i = nextIndex;
 
-        result.push(...formatItems(kwPrefix, effectiveKwWidth, items, alignComments, alignAliases));
+        result.push(...formatItems(kwPrefix, effectiveKwWidth, items, alignComments, alignAliases, layout));
     }
 
     return result.join('\n');
