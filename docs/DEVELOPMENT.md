@@ -37,6 +37,7 @@ vscode-sqlprompt/
 
 - `client/src/extension.ts`: VS Code extension entry point and Language Client lifecycle.
 - `client/src/alterScaffold.ts`: pure helpers behind the `ALTER PROCEDURE|VIEW|FUNCTION` scaffolding (header detection, queries, CREATE → ALTER rewrite).
+- `client/src/formatter/`: the SQL formatter (style loading, `sql-formatter` options mapping, post-processing passes, safety guard). See [formatting/FORMATTING.md](formatting/FORMATTING.md).
 - `server/src/server.ts`: Language Server Protocol endpoint and request handling.
 - `server/src/schemaLoader.ts`: SQL Server schema loading and refresh logic.
 - `server/src/completionEngine.ts`: completion generation based on context and schema.
@@ -63,7 +64,8 @@ npm run compile
 
 - Build task: `npm run compile`
 - Watch mode: `npm run watch`
-- Unit tests are under `server/src/__tests__/`
+- Server unit tests are under `server/src/__tests__/` (`cd server && npm test`)
+- Client unit tests, including the formatter and its example fixtures, are under `client/src/**/__tests__/` (`cd client && npm test`); see [formatting/FORMATTING.md](formatting/FORMATTING.md#tests)
 
 ## Release process
 
