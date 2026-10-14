@@ -14,6 +14,7 @@ SQL Prompt is a SQL Server IntelliSense and formatting extension for VS Code, in
 - Scalar functions with their parameters, stored procedures with named parameters after `EXEC`
 - Built-in T-SQL functions (`MIN`, `MAX`, `AVG`, `COUNT`, `ISNULL`, `COALESCE`, `CAST`, `CONVERT`, `DATEADD`, `DATEDIFF`, `LEN`, `SUBSTRING`, `ROW_NUMBER() OVER (…)`…) with argument placeholders, only where they are valid (no aggregates in `WHERE`); `DATEADD(` offers the dateparts, `CAST(x AS ` and `CONVERT(` the data types
 - Parameter hints while typing inside the parentheses of a built-in or database function (signature help)
+- Window functions: `OVER` after an aggregate or ranking call (`SUM(x) `, `ROW_NUMBER() `), then `PARTITION BY` / `ORDER BY`, the columns, `ASC`/`DESC` and the common frames (`ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`…)
 
 **Ranking**
 - What starts with what you typed comes first: typing `articol` puts `dbo.ARTICOLI` before `ui.vwArticoli`

@@ -11,6 +11,7 @@
 
 import { tokenize } from './sqlLexer';
 import { Token } from './types';
+import { findBuiltin } from './builtinFunctions';
 
 export interface KeywordContext {
   /** Parole chiave da proporre, nell'ordine di priorità. */
@@ -98,6 +99,8 @@ export function suggestKeywords(textBeforeCursor: string): KeywordContext {
   const text = textBeforeCursor.replace(/[\w@#$]+$/, '');
   const { level, opener } = currentLevel(tokenize(text));
 
+  if (opener === 'OVER') return overKeywords(level);
+
   if (level.length === 0) {
     if (opener === undefined) return { keywords: STATEMENT_START, afterCompleteSource: false };
     // Dentro `IN (`, `EXISTS (` o `FROM (` può iniziare una sottoquery; dentro
@@ -156,7 +159,11 @@ export function suggestKeywords(textBeforeCursor: string): KeywordContext {
       const last = segment[segment.length - 1];
       const onlyModifiers = segment.every((t) => ['TOP', 'DISTINCT'].includes(t.text) || t.kind === 'number' || t.kind === 'group');
       if (onlyModifiers || !endsExpression(last)) return NONE;
-      return { keywords: ['FROM', 'INTO'], afterCompleteSource: false };
+      // `SUM(x) ` / `ROW_NUMBER() `: la clausola OVER è la prossima cosa sensata.
+      const called = last.kind === 'group' ? segment[segment.length - 2] : undefined;
+      const category = findBuiltin(called?.text)?.category;
+      const over = category === 'aggregate' || category === 'window' ? ['OVER'] : [];
+      return { keywords: [...over, 'FROM', 'INTO'], afterCompleteSource: false };
     }
 
     case 'BY': {
@@ -173,6 +180,43 @@ export function suggestKeywords(textBeforeCursor: string): KeywordContext {
     }
   }
   return NONE;
+}
+
+/** Clausole di finestra più usate, proposte per intero dopo l'ORDER BY di OVER. */
+const WINDOW_FRAMES = [
+  'ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW',
+  'ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING',
+  'ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING',
+  'RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW',
+];
+
+/**
+ * Dentro `OVER (`: prima PARTITION BY / ORDER BY, poi le colonne (nessuna
+ * keyword), poi ORDER BY dopo le colonne di PARTITION BY, ASC/DESC e la
+ * clausola di finestra dopo quelle di ORDER BY.
+ */
+function overKeywords(level: LevelToken[]): KeywordContext {
+  if (level.length === 0) {
+    return { keywords: ['PARTITION BY', 'ORDER BY'], afterCompleteSource: false, keywordRequired: true };
+  }
+  const words = level.map((t) => t.text);
+  if (endsWith(words, ['PARTITION']) || endsWith(words, ['ORDER'])) {
+    return { keywords: ['BY'], afterCompleteSource: false, keywordRequired: true };
+  }
+  if (words.includes('ROWS') || words.includes('RANGE')) return NONE;
+
+  const k = lastIndexWhere(level, (t) => t.text === 'BY');
+  const last = level[level.length - 1];
+  if (k < 0 || k === level.length - 1 || last.kind === 'comma') return NONE;
+  if (level[k - 1]?.text === 'PARTITION') {
+    return endsExpression(last) ? { keywords: ['ORDER BY'], afterCompleteSource: false } : NONE;
+  }
+  if (last.text === 'ASC' || last.text === 'DESC') {
+    return { keywords: WINDOW_FRAMES, afterCompleteSource: false, keywordRequired: true };
+  }
+  return endsExpression(last)
+    ? { keywords: ['ASC', 'DESC', ...WINDOW_FRAMES], afterCompleteSource: false }
+    : NONE;
 }
 
 /** Parole chiave dopo una table source completa, in base a chi l'ha introdotta. */
