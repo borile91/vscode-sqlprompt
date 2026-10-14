@@ -66,9 +66,19 @@
                 },
                 "sqlPrompt.suppressMssqlIntellisense": {
                     "scope": "window",
-                    "type": "boolean",
-                    "default": true,
-                    "description": "When connected, automatically disable the mssql extension's IntelliSense so that SQL Prompt completions appear exclusively. Connection features (Script As, Alter Procedure, etc.) are unaffected. Set to false to let both providers coexist."
+                    "type": "string",
+                    "enum": [
+                        "user",
+                        "workspace",
+                        "off"
+                    ],
+                    "enumDescriptions": [
+                        "Turn off the mssql extension's suggestions once, in your User settings: no project file is touched.",
+                        "Turn off the mssql extension's suggestions in this workspace's settings (written once).",
+                        "Leave the mssql extension's suggestions on: both lists appear together."
+                    ],
+                    "default": "user",
+                    "markdownDescription": "Where SQL Prompt turns off the mssql extension's own suggestions (`mssql.intelliSense.enableSuggestions`), so that only SQL Prompt completions appear. The setting is written once and never toggled on connect or disconnect. Connection features (Script As, Alter Procedure, etc.) are unaffected. Older `true`/`false` values still work as `user`/`off`."
                 },
                 "sqlPrompt.formatting.stylesFolder": {
                     "scope": "resource",
