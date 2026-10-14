@@ -21,6 +21,7 @@ import {
     StatusBarItem,
     ProgressLocation,
     WorkspaceEdit,
+    TextDocument,
 } from "vscode";
 
 import {
@@ -61,6 +62,8 @@ import {
     buildObjectListQuery,
     buildDefinitionQuery,
     toAlterScript,
+    bracketIdentifier,
+    bracketQualifiedName,
 } from './alterScaffold';
 
 let client: LanguageClient | undefined;
@@ -318,14 +321,24 @@ async function withDelayedProgress<T>(title: string, task: Promise<T>, delayMs =
     }
 }
 
-/** Lists the user objects of a kind through the mssql connectionSharing API. */
+/**
+ * Lists the user objects of a kind through the mssql connectionSharing API.
+ * In direct-connection mode (no connectionSharing) the list comes from the
+ * language server's schema snapshot.
+ */
 async function listModules(
     ownerUri: string,
     kind: AlterObjectKind,
 ): Promise<Array<{ schema: string; name: string }>> {
     const api = await getMssqlApi();
     if (!api?.connectionSharing) {
-        return [];
+        if (!client) {
+            throw new Error('language server not ready');
+        }
+        return client.sendRequest<Array<{ schema: string; name: string }>>(
+            'sqlPrompt/listModules',
+            { kind },
+        );
     }
     const rows = await queryRowsText(
         api.connectionSharing as QueryRunner,
@@ -1261,13 +1274,48 @@ export async function activate(context: ExtensionContext) {
     // current definition replaces the header, ready to be edited.
 
     const ALTER_LIST_TTL_MS = 60 * 1000;
-    const alterListCache = new Map<
-        string,
-        { cachedAt: number; modules: Array<{ schema: string; name: string }> }
-    >();
+    // Errori ed elenchi vuoti (disconnesso, schema non ancora caricato) restano in
+    // cache poco: abbastanza da non rifare la query a ogni tasto.
+    const ALTER_LIST_NEGATIVE_TTL_MS = 10 * 1000;
+    type ModuleList = Array<{ schema: string; name: string }>;
+    const alterListCache = new Map<string, { expiresAt: number; modules?: ModuleList }>();
     // Una sola lettura per elenco anche se si continua a scrivere mentre carica.
-    const alterListInFlight = new Map<string, Promise<Array<{ schema: string; name: string }>>>();
+    const alterListInFlight = new Map<string, Promise<ModuleList>>();
     const alterKindPlural = { procedure: 'procedures', view: 'views', function: 'functions' } as const;
+
+    /**
+     * Connessione da cui leggere elenco e definizioni: quella del documento se è
+     * connesso (più editor possono puntare a database diversi), altrimenti l'ultima
+     * sincronizzata, come per Go to Definition. Il database attivo entra nella
+     * chiave di cache, così un `USE` non lascia l'elenco del database precedente.
+     */
+    async function resolveAlterSource(
+        document: TextDocument,
+    ): Promise<{ ownerUri: string; database: string }> {
+        const documentUri = document.uri.toString();
+        const api = await getMssqlApi();
+        if (!api?.connectionSharing) {
+            // Connessione diretta: l'elenco viene dallo snapshot del server.
+            return { ownerUri: lastOwnerUri ?? documentUri, database: '' };
+        }
+        let connected = false;
+        try {
+            connected = !!(await api.connectionSharing.isConnected?.(documentUri));
+        } catch {
+            connected = false;
+        }
+        const ownerUri = connected ? documentUri : lastOwnerUri ?? documentUri;
+        let database: string | undefined;
+        // getActiveDatabase descrive l'editor attivo: vale solo se è questo documento.
+        if (connected && window.activeTextEditor?.document === document) {
+            try {
+                database = await api.connectionSharing.getActiveDatabase?.(EXTENSION_ID);
+            } catch {
+                database = undefined;
+            }
+        }
+        return { ownerUri, database: database ?? lastSyncedDatabasePerUri.get(ownerUri) ?? '' };
+    }
 
     context.subscriptions.push(
         languages.registerCompletionItemProvider(
@@ -1280,10 +1328,10 @@ export async function activate(context: ExtensionContext) {
                     const header = parseAlterHeader(before);
                     if (!header) { return undefined; }
 
-                    const ownerUri = lastOwnerUri ?? document.uri.toString();
-                    const cacheKey = `${ownerUri}|${header.kind}`;
+                    const { ownerUri, database } = await resolveAlterSource(document);
+                    const cacheKey = `${ownerUri}|${database.toLowerCase()}|${header.kind}`;
                     let cached = alterListCache.get(cacheKey);
-                    if (!cached || Date.now() - cached.cachedAt > ALTER_LIST_TTL_MS) {
+                    if (!cached || Date.now() > cached.expiresAt) {
                         let loading = alterListInFlight.get(cacheKey);
                         if (!loading) {
                             loading = withDelayedProgress(
@@ -1296,24 +1344,36 @@ export async function activate(context: ExtensionContext) {
                                 () => alterListInFlight.delete(cacheKey),
                             );
                         }
+                        let modules: ModuleList | undefined;
                         try {
-                            cached = { cachedAt: Date.now(), modules: await loading };
+                            modules = await loading;
                         } catch {
-                            return undefined;
+                            modules = undefined;
                         }
+                        const ttl = modules?.length ? ALTER_LIST_TTL_MS : ALTER_LIST_NEGATIVE_TTL_MS;
+                        cached = { expiresAt: Date.now() + ttl, modules };
                         alterListCache.set(cacheKey, cached);
                     }
+                    if (!cached.modules) { return undefined; }
 
                     const nameRange = new Range(position.line, header.nameStart, position.line, position.character);
                     const alterStart = new Position(position.line, header.alterStart);
+                    // Il filtro confronta il testo digitato: se è delimitato, anche filterText lo è.
+                    const delimiter = header.typed.startsWith('[')
+                        ? '['
+                        : header.typed.startsWith('"') ? '"' : '';
+                    const delimit = (name: string) =>
+                        delimiter === '[' ? bracketIdentifier(name) : delimiter ? `"${name}"` : name;
                     const items = cached.modules.map((module, index) => {
                         const fullName = `${module.schema}.${module.name}`;
                         const item = new CompletionItem(fullName, CompletionItemKind.Function);
-                        item.filterText = `${module.name} ${fullName}`;
+                        item.filterText =
+                            `${delimit(module.name)} ${delimit(module.schema)}.${delimit(module.name)}`;
                         item.sortText = `00_${String(index).padStart(6, '0')}`;
                         item.detail = 'Fill in the current definition';
                         item.range = nameRange;
-                        item.insertText = fullName;
+                        // Sempre delimitato: valido anche con spazi o parole riservate nel nome.
+                        item.insertText = bracketQualifiedName(module.schema, module.name);
                         item.command = {
                             command: 'sqlPrompt.scaffoldAlter',
                             title: 'Fill in the current definition',
@@ -1348,10 +1408,12 @@ export async function activate(context: ExtensionContext) {
                     `SQL Prompt: loading the definition of [${module.schema}].[${module.name}]…`,
                     fetchModuleDefinition(ownerUri, module.schema, module.name),
                 );
-                const script = definition ? toAlterScript(definition) : undefined;
+                // Il nome nell'header viene dall'oggetto scelto, non dal testo salvato
+                // (obsoleto dopo sp_rename / ALTER SCHEMA ... TRANSFER).
+                const script = definition ? toAlterScript(definition, module) : undefined;
                 if (!script) {
                     window.showWarningMessage(
-                        `SQL Prompt: definition not available for [${module.schema}].[${module.name}] (encrypted object?).`,
+                        `SQL Prompt: definition not available for [${module.schema}].[${module.name}] (encrypted, or VIEW DEFINITION permission missing).`,
                     );
                     return;
                 }
