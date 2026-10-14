@@ -39,6 +39,7 @@ import {
 import { StatementRange } from './documentTextService';
 import { generateAlias } from './utils';
 import { isReservedWord } from './sqlLexer';
+import { suggestKeywords } from './keywordSuggestions';
 import {
   ObjectKind,
   TABLE_SOURCE_BAND,
@@ -137,30 +138,39 @@ function collectUsedAliases(context: QueryContext): Set<string> {
 
 // ── Snippet completions ───────────────────────────────────────────────────────
 
+/** Riapre i suggerimenti dopo l'inserimento: dopo `JOIN ` servono subito le tabelle. */
+const RETRIGGER_SUGGEST: CompletionItem['command'] = {
+  title: '',
+  command: 'editor.action.triggerSuggest',
+};
+
+/** Scorciatoie di statement: sigla → testo inserito. */
+const STATEMENT_SNIPPETS: Array<[string, string]> = [
+  ['ssf', 'SELECT * FROM '],
+  ['scf', 'SELECT COUNT(*) FROM '],
+  ['st10', 'SELECT TOP 10 * FROM '],
+  ['st100', 'SELECT TOP 100 * FROM '],
+  ['ap', 'ALTER PROCEDURE '],
+  ['av', 'ALTER VIEW '],
+  ['af', 'ALTER FUNCTION '],
+];
+
 /**
  * Snippets that open a whole statement (`ssf` → `SELECT * FROM `).
+ * Dopo l'inserimento si riaprono i suggerimenti: tabelle per `ssf`, oggetti
+ * esistenti con la loro definizione per `ap`/`av`/`af`.
  */
 function buildStatementSnippets(replaceRange: Range): CompletionItem[] {
-  return [
-    {
-      label: 'ssf',
-      kind: CompletionItemKind.Snippet,
-      insertText: 'SELECT * FROM ',
-      insertTextFormat: InsertTextFormat.PlainText,
-      detail: 'SELECT * FROM',
-      sortText: '01_snippet_ssf',
-      textEdit: TextEdit.replace(replaceRange, 'SELECT * FROM '),
-    },
-    {
-      label: 'scf',
-      kind: CompletionItemKind.Snippet,
-      insertText: 'SELECT COUNT(*) FROM ',
-      insertTextFormat: InsertTextFormat.PlainText,
-      detail: 'SELECT COUNT(*) FROM',
-      sortText: '01_snippet_scf',
-      textEdit: TextEdit.replace(replaceRange, 'SELECT COUNT(*) FROM '),
-    },
-  ];
+  return STATEMENT_SNIPPETS.map(([label, text]) => ({
+    label,
+    kind: CompletionItemKind.Snippet,
+    insertText: text,
+    insertTextFormat: InsertTextFormat.PlainText,
+    detail: text.trim(),
+    sortText: `01_snippet_${label}`,
+    textEdit: TextEdit.replace(replaceRange, text),
+    command: RETRIGGER_SUGGEST,
+  }));
 }
 
 /**
@@ -181,7 +191,7 @@ function isStartingANewLine(lineText: string, position: Position, currentWord?: 
   return !isReservedWord(beforeCursor);
 }
 
-function buildSnippetCompletions(clause: string, position: Position): CompletionItem[] {
+function buildSnippetCompletions(clause: string, replaceRange: Range): CompletionItem[] {
   const items: CompletionItem[] = [];
 
   if (clause === 'join') {
@@ -193,10 +203,7 @@ function buildSnippetCompletions(clause: string, position: Position): Completion
       insertTextFormat: InsertTextFormat.PlainText,
       detail: 'OUTER APPLY',
       sortText: '01_outer',
-      textEdit: TextEdit.replace(
-        Range.create(position.line, position.character, position.line, position.character),
-        'OUTER APPLY ',
-      ),
+      textEdit: TextEdit.replace(replaceRange, 'OUTER APPLY '),
     });
     // CROSS APPLY snippet
     items.push({
@@ -206,10 +213,7 @@ function buildSnippetCompletions(clause: string, position: Position): Completion
       insertTextFormat: InsertTextFormat.PlainText,
       detail: 'CROSS APPLY',
       sortText: '01_cross',
-      textEdit: TextEdit.replace(
-        Range.create(position.line, position.character, position.line, position.character),
-        'CROSS APPLY ',
-      ),
+      textEdit: TextEdit.replace(replaceRange, 'CROSS APPLY '),
     });
   }
 
@@ -318,9 +322,20 @@ export function buildCompletions(
     items.push(...buildStatementSnippets(wordRange));
   }
 
+  // ── Parole chiave attese qui (ON dopo il JOIN, PROCEDURE dopo ALTER…) ────
+  const keywordContext = suggestKeywords(
+    statementRange.text.slice(0, context.cursorOffset - statementRange.start),
+  );
+  if (keywordContext.keywordRequired) {
+    return buildContextKeywordCompletions(keywordContext.keywords, wordRange);
+  }
+  items.push(...buildContextKeywordCompletions(keywordContext.keywords, wordRange));
+  // Con la table source già scritta (`FROM dbo.T t `) altre tabelle sono solo rumore.
+  const tableSourceExpected = !keywordContext.afterCompleteSource;
+
   switch (context.clause) {
     case 'select':
-      items.push(...buildSnippetCompletions('select', position));
+      items.push(...buildSnippetCompletions('select', wordRange));
       items.push(...buildColumnCompletionsForRefs(refs, true, false));
       items.push(...buildColumnCompletionsForSources(context.visibleSources));
       items.push(...buildScalarFunctionCompletions(routines.scalarFunctions));
@@ -330,14 +345,16 @@ export function buildCompletions(
 
     case 'from':
     case 'join': {
-      items.push(...buildSnippetCompletions(context.clause, position));
-      items.push(
-        ...buildTableSourceCompletions(context, tables, routines, position, lineText, wordRange, databases, {
-          withAlias: true,
-          includeFunctions: true,
-          refs,
-        }),
-      );
+      if (tableSourceExpected) {
+        items.push(...buildSnippetCompletions(context.clause, wordRange));
+        items.push(
+          ...buildTableSourceCompletions(context, tables, routines, position, lineText, wordRange, databases, {
+            withAlias: true,
+            includeFunctions: true,
+            refs,
+          }),
+        );
+      }
 
       // After a JOIN + table ref, suggest "ON fk.predicate"
       if (context.clause === 'join' && refs.length >= 2) {
@@ -355,12 +372,14 @@ export function buildCompletions(
       if (context.clause === 'insertTarget') {
         items.push(...buildInsertStatementItems(refs, position));
       }
-      items.push(
-        ...buildTableSourceCompletions(context, tables, routines, position, lineText, wordRange, databases, {
-          withAlias: false,
-          includeFunctions: false,
-        }),
-      );
+      if (tableSourceExpected) {
+        items.push(
+          ...buildTableSourceCompletions(context, tables, routines, position, lineText, wordRange, databases, {
+            withAlias: false,
+            includeFunctions: false,
+          }),
+        );
+      }
       break;
 
     case 'exec':
@@ -423,7 +442,10 @@ export function buildCompletions(
       items.push(...buildStatementSnippets(wordRange));
       // General SQL context: keywords + tables when in a recognisable DML statement.
       if (context.statementKind !== 'unknown') {
-        items.push(...buildSqlKeywordCompletions(position));
+        const contextual = new Set(keywordContext.keywords);
+        items.push(
+          ...buildSqlKeywordCompletions(wordRange).filter((item) => !contextual.has(String(item.label))),
+        );
         if (context.statementKind === 'exec') {
           items.push(...buildStoredProcedureCompletions(routines.storedProcedures));
         }
@@ -1688,17 +1710,33 @@ const SQL_KEYWORDS_LIST = [
   'INSERT INTO', 'UPDATE', 'SET', 'DELETE FROM', 'EXEC',
 ];
 
-function buildSqlKeywordCompletions(position: Position): CompletionItem[] {
+function buildSqlKeywordCompletions(replaceRange: Range): CompletionItem[] {
   return SQL_KEYWORDS_LIST.map((kw, idx) => ({
     label: kw,
     kind: CompletionItemKind.Keyword,
     insertText: `${kw} `,
     insertTextFormat: InsertTextFormat.PlainText,
-    textEdit: TextEdit.replace(
-      Range.create(position.line, position.character, position.line, position.character),
-      `${kw} `,
-    ),
+    textEdit: TextEdit.replace(replaceRange, `${kw} `),
     sortText: `04_${idx.toString().padStart(2, '0')}`,
+  }));
+}
+
+/** Parole chiave dopo cui non segue un nome o un'espressione da suggerire. */
+const NO_RETRIGGER = new Set(['ASC', 'DESC', 'NULL', 'NOT NULL', 'IS NULL', 'IS NOT NULL', 'TOP']);
+
+/**
+ * Parole chiave di contesto (vedi `suggestKeywords`): in cima alla lista, nell'ordine
+ * dato, e sostituiscono la parola digitata.
+ */
+function buildContextKeywordCompletions(keywords: string[], replaceRange: Range): CompletionItem[] {
+  return keywords.map((kw, idx) => ({
+    label: kw,
+    kind: CompletionItemKind.Keyword,
+    insertText: `${kw} `,
+    insertTextFormat: InsertTextFormat.PlainText,
+    textEdit: TextEdit.replace(replaceRange, `${kw} `),
+    sortText: `00_kw_${idx.toString().padStart(2, '0')}`,
+    command: NO_RETRIGGER.has(kw) ? undefined : RETRIGGER_SUGGEST,
   }));
 }
 
