@@ -2,7 +2,7 @@
     "name": "vscode-sqlprompt",
     "displayName": "SQL Prompt",
     "description": "SQL Server IntelliSense - schema-aware autocomplete like Redgate SQL Prompt",
-    "version": "0.1.30",
+    "version": "0.1.31",
     "publisher": "borile91",
     "repository": {
         "type": "git",
