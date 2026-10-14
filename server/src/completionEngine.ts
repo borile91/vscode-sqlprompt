@@ -19,6 +19,7 @@
 import {
   CompletionItem,
   CompletionItemKind,
+  CompletionList,
   InsertTextFormat,
   TextEdit,
   Range,
@@ -70,8 +71,15 @@ function recordUseCommand(schema: string, name: string): CompletionItem['command
  * best few hundred is what makes the score above actually show up in the UI,
  * and it costs nothing the user can see: nobody scrolls past 300 candidates,
  * they type another character and the list is rebuilt.
+ *
+ * Il ricalcolo è garantito da `buildCompletionList`: quando il taglio scarta
+ * candidati la lista è marcata `isIncomplete` e i candidati sono già filtrati
+ * per la parola digitata, così una tabella oltre la soglia resta raggiungibile.
  */
 const MAX_TABLE_SOURCE_ITEMS = 300;
+
+/** Stato del calcolo in corso: parola digitata e se il taglio ha scartato candidati. */
+let capState: { word: string; truncated: boolean } = { word: '', truncated: false };
 
 /** Usage history per lowercase `schema.name`, published by the client. */
 let usageScores: ReadonlyMap<string, number> | undefined;
@@ -204,6 +212,17 @@ function buildSnippetCompletions(clause: string, position: Position): Completion
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+/**
+ * Come `buildCompletions`, ma segnala a VS Code se la lista è stata tagliata:
+ * in quel caso va ricalcolata a ogni tasto invece di essere filtrata dal client.
+ */
+export function buildCompletionList(
+  ...args: Parameters<typeof buildCompletions>
+): CompletionList {
+  const items = buildCompletions(...args);
+  return { isIncomplete: capState.truncated, items };
+}
+
 /** `ALTER PROC[EDURE] | VIEW | FUNCTION` followed by a partial (qualified) name. */
 const ALTER_OBJECT_HEADER = /\bALTER\s+(?:PROC(?:EDURE)?|VIEW|FUNCTION)\s+[\w.\[\]]*$/i;
 
@@ -217,6 +236,11 @@ export function buildCompletions(
   databases: string[] = [],
   loadingDatabases: ReadonlySet<string> = new Set(),
 ): CompletionItem[] {
+  capState = {
+    word: (context.currentWord ?? '').replace(/[\[\]"]/g, '').toLowerCase(),
+    truncated: false,
+  };
+
   // ── 0. USE <database> completions ────────────────────────────────────────
   if (context.clause === 'use') {
     return buildDatabaseCompletions(databases, document, position);
@@ -626,12 +650,29 @@ function capTableSourceItems(items: CompletionItem[]): CompletionItem[] {
     return items;
   }
 
-  ranked.sort((a, b) => (String(a.sortText) < String(b.sortText) ? -1 : 1));
-  const keep = new Set(ranked.slice(0, MAX_TABLE_SOURCE_ITEMS));
+  // Lista tagliata: VS Code non può più filtrarla da sé, quindi i candidati che
+  // non corrispondono alla parola digitata si scartano qui, prima del taglio.
+  capState.truncated = true;
+  const word = capState.word;
+  const matching = word
+    ? ranked.filter((item) => isSubsequence(word, String(item.filterText ?? item.label).toLowerCase()))
+    : ranked;
+
+  matching.sort((a, b) => (String(a.sortText) < String(b.sortText) ? -1 : 1));
+  const keep = new Set(matching.slice(0, MAX_TABLE_SOURCE_ITEMS));
 
   return items.filter(
     (item) => !item.sortText?.startsWith(`${TABLE_SOURCE_BAND}_`) || keep.has(item),
   );
+}
+
+/** Vero se i caratteri di `word` compaiono in ordine in `text` (filtro fuzzy, largo come quello di VS Code). */
+function isSubsequence(word: string, text: string): boolean {
+  let i = 0;
+  for (let j = 0; j < text.length && i < word.length; j++) {
+    if (text[j] === word[i]) i++;
+  }
+  return i === word.length;
 }
 
 /** Literals and functions that make sense as a value inside `VALUES (...)`. */
