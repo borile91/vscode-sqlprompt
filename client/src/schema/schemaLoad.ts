@@ -210,6 +210,23 @@ export async function queryFirstCellText(
     return text || undefined;
 }
 
+/**
+ * Esegue `sql` e restituisce, per ogni riga, le colonne richieste come testo.
+ *
+ * Per le piccole letture fuori dal caricamento a stadi: oggi l'elenco dei
+ * moduli dell'ALTER scaffolding.
+ */
+export async function queryRowsText(
+    runner: QueryRunner,
+    ownerUri: string,
+    sql: string,
+    columns: string[],
+): Promise<string[][]> {
+    const { rows, index } = await query(runner, ownerUri, sql);
+    const positions = columns.map(index);
+    return rows.map((row) => positions.map((i) => (i < 0 ? '' : cellText(row[i]))));
+}
+
 // ── Identity and change detection ─────────────────────────────────────────────
 
 /**
