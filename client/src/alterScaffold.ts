@@ -96,18 +96,6 @@ export function buildObjectListQuery(kind: AlterObjectKind): string {
     `;
 }
 
-/** Query returning the module definition of one object (column: definition). */
-export function buildDefinitionQuery(schema: string, name: string): string {
-    const esc = (value: string) => value.replace(/'/g, "''");
-    return `
-        SELECT sm.definition
-        FROM sys.sql_modules sm
-        INNER JOIN sys.objects o ON sm.object_id = o.object_id
-        INNER JOIN sys.schemas s ON o.schema_id = s.schema_id
-        WHERE s.name = N'${esc(schema)}' AND o.name = N'${esc(name)}'
-    `;
-}
-
 /**
  * Copia del testo con commenti e stringhe sostituiti da spazi, a parità di
  * posizioni (gli a capo restano). I nomi delimitati da [] o "" restano intatti,

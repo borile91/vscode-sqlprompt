@@ -47,7 +47,8 @@ import {
     loadRoutines,
     loadSchemaToken,
     loadTableColumns,
-    queryFirstCellText,
+    loadModuleDefinition,
+    DefinitionTruncatedError,
     queryRowsText,
 } from './schema/schemaLoad';
 import {
@@ -61,7 +62,6 @@ import {
     AlterObjectKind,
     parseAlterHeader,
     buildObjectListQuery,
-    buildDefinitionQuery,
     toAlterScript,
     bracketIdentifier,
     bracketQualifiedName,
@@ -276,6 +276,8 @@ async function getMssqlApi(): Promise<any | undefined> {
  * Fetches the stored definition of a module (procedure, view, function).
  * Primary path is the mssql connectionSharing API; the language server is the
  * fallback for direct-connection mode. Returns undefined when unavailable.
+ * Una definizione arrivata troncata lancia `DefinitionTruncatedError`: meglio
+ * nessuno script che uno tagliato.
  */
 async function fetchModuleDefinition(
     ownerUri: string,
@@ -285,15 +287,19 @@ async function fetchModuleDefinition(
     const api = await getMssqlApi();
     if (api?.connectionSharing) {
         try {
-            const definition = await queryFirstCellText(
+            const definition = await loadModuleDefinition(
                 api.connectionSharing as QueryRunner,
                 ownerUri,
-                buildDefinitionQuery(schema, name),
+                schema,
+                name,
             );
             if (definition) {
                 return definition;
             }
-        } catch {
+        } catch (err) {
+            if (err instanceof DefinitionTruncatedError) {
+                throw err;
+            }
             // fall through to the server
         }
     }
@@ -1211,21 +1217,20 @@ export async function activate(context: ExtensionContext) {
                 const api = await getMssqlApi();
                 if (api?.connectionSharing) {
                     try {
-                        const schemaEsc = resolved.schema.replace(/'/g, "''");
-                        const nameEsc = resolved.name.replace(/'/g, "''");
-                        const scriptQuery = `
-                            SELECT sm.definition
-                            FROM sys.sql_modules sm
-                            INNER JOIN sys.objects o ON sm.object_id = o.object_id
-                            INNER JOIN sys.schemas s ON o.schema_id = s.schema_id
-                            WHERE s.name = N'${schemaEsc}' AND o.name = N'${nameEsc}'
-                        `;
-                        script = await queryFirstCellText(
+                        script = await loadModuleDefinition(
                             api.connectionSharing as QueryRunner,
                             ownerUri,
-                            scriptQuery,
+                            resolved.schema,
+                            resolved.name,
                         ) ?? null;
-                    } catch {
+                    } catch (err) {
+                        if (err instanceof DefinitionTruncatedError) {
+                            window.showWarningMessage(
+                                `SQL Prompt: the definition of [${resolved.schema}].[${resolved.name}] arrived truncated ` +
+                                `(${err.received} of ${err.expected} characters).`,
+                            );
+                            return null;
+                        }
                         // fallthrough to other strategies
                     }
                 }
@@ -1432,10 +1437,22 @@ export async function activate(context: ExtensionContext) {
                 const end = editor.selection.active;
                 const version = document.version;
 
-                const definition = await withDelayedProgress(
-                    `SQL Prompt: loading the definition of [${module.schema}].[${module.name}]…`,
-                    fetchModuleDefinition(ownerUri, module.schema, module.name),
-                );
+                let definition: string | undefined;
+                try {
+                    definition = await withDelayedProgress(
+                        `SQL Prompt: loading the definition of [${module.schema}].[${module.name}]…`,
+                        fetchModuleDefinition(ownerUri, module.schema, module.name),
+                    );
+                } catch (err) {
+                    if (err instanceof DefinitionTruncatedError) {
+                        window.showErrorMessage(
+                            `SQL Prompt: the definition of [${module.schema}].[${module.name}] arrived truncated ` +
+                            `(${err.received} of ${err.expected} characters); not inserted.`,
+                        );
+                        return;
+                    }
+                    throw err;
+                }
                 // Il nome nell'header viene dall'oggetto scelto, non dal testo salvato
                 // (obsoleto dopo sp_rename / ALTER SCHEMA ... TRANSFER).
                 const script = definition ? toAlterScript(definition, module) : undefined;

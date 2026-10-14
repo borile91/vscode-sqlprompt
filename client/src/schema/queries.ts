@@ -308,3 +308,37 @@ export function buildTableColumnsQuery(schema: string, name: string): string {
     ORDER BY c.column_id
 `;
 }
+
+/**
+ * Caratteri per pezzo nella lettura di `sys.sql_modules.definition`.
+ *
+ * SQL Tools Service tronca ogni valore di testo a `mssql.query.maxCharsToStore`
+ * (65535 di default): una procedura più lunga arriverebbe tagliata senza avviso.
+ * Letta a pezzi più corti del limite, si ricompone per intero.
+ */
+export const DEFINITION_CHUNK_CHARS = 30000;
+
+/**
+ * Definizione di un modulo in pezzi ordinati (colonne: chunk_index, chunk,
+ * total_chars). Nessuna riga se l'oggetto non esiste o la definizione è NULL
+ * (cifrato o senza VIEW DEFINITION).
+ */
+export function buildModuleDefinitionQuery(schema: string, name: string): string {
+    return `
+    SELECT
+        c.n AS chunk_index,
+        SUBSTRING(sm.definition, c.n * ${DEFINITION_CHUNK_CHARS} + 1, ${DEFINITION_CHUNK_CHARS}) AS chunk,
+        DATALENGTH(sm.definition) / 2 AS total_chars
+    FROM sys.sql_modules sm
+    INNER JOIN sys.objects o ON sm.object_id = o.object_id
+    INNER JOIN sys.schemas s ON o.schema_id = s.schema_id
+    CROSS APPLY (
+        SELECT TOP (CAST(CEILING(ISNULL(DATALENGTH(sm.definition), 0) / 2 / ${DEFINITION_CHUNK_CHARS}.0) AS int))
+            ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) - 1 AS n
+        FROM sys.all_columns
+    ) c
+    WHERE s.name = ${nLiteral(schema)}
+      AND o.name = ${nLiteral(name)}
+    ORDER BY c.n
+`;
+}
