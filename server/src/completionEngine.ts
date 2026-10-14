@@ -41,6 +41,13 @@ import { generateAlias } from './utils';
 import { isReservedWord } from './sqlLexer';
 import { suggestKeywords } from './keywordSuggestions';
 import {
+  isTypingTopN,
+  resolveShortcuts,
+  shortcutsFor,
+  shouldRetrigger,
+  toSnippetText,
+} from './statementShortcuts';
+import {
   ObjectKind,
   TABLE_SOURCE_BAND,
   buildObjectRanker,
@@ -144,32 +151,33 @@ const RETRIGGER_SUGGEST: CompletionItem['command'] = {
   command: 'editor.action.triggerSuggest',
 };
 
-/** Scorciatoie di statement: sigla → testo inserito. */
-const STATEMENT_SNIPPETS: Array<[string, string]> = [
-  ['ssf', 'SELECT * FROM '],
-  ['scf', 'SELECT COUNT(*) FROM '],
-  ['st10', 'SELECT TOP 10 * FROM '],
-  ['st100', 'SELECT TOP 100 * FROM '],
-  ['ap', 'ALTER PROCEDURE '],
-  ['av', 'ALTER VIEW '],
-  ['af', 'ALTER FUNCTION '],
-];
+/** Scorciatoie di statement in uso: predefinite più quelle dell'utente. */
+let statementShortcuts: ReadonlyMap<string, string> = resolveShortcuts(undefined);
+
+/** Sostituisce le scorciatoie dell'utente (`sqlPrompt.snippets.shortcuts`). */
+export function setStatementShortcuts(custom: unknown): void {
+  statementShortcuts = resolveShortcuts(custom);
+}
 
 /**
- * Snippets that open a whole statement (`ssf` → `SELECT * FROM `).
- * Dopo l'inserimento si riaprono i suggerimenti: tabelle per `ssf`, oggetti
- * esistenti con la loro definizione per `ap`/`av`/`af`.
+ * Snippets that open a whole statement (`ssf` → `SELECT * FROM `), compresi
+ * `st<N>` e le scorciatoie dell'utente. Dopo l'inserimento si riaprono i
+ * suggerimenti: tabelle per `ssf`, oggetti esistenti per `ap`/`av`/`af`.
  */
 function buildStatementSnippets(replaceRange: Range): CompletionItem[] {
-  return STATEMENT_SNIPPETS.map(([label, text]) => ({
+  // `st1` → `st10` → `st100`: con ogni cifra cambia la scorciatoia proposta.
+  if (isTypingTopN(capState.typed)) capState.incomplete = true;
+
+  return shortcutsFor(capState.typed, statementShortcuts).map(({ label, text }) => ({
     label,
     kind: CompletionItemKind.Snippet,
-    insertText: text,
-    insertTextFormat: InsertTextFormat.PlainText,
-    detail: text.trim(),
+    insertText: toSnippetText(text),
+    insertTextFormat: InsertTextFormat.Snippet,
+    detail: text.replace(/\$CURSOR\$/g, '').replace(/\s+/g, ' ').trim(),
+    documentation: { kind: 'markdown', value: '```sql\n' + text.replace(/\$CURSOR\$/g, '') + '\n```' },
     sortText: `01_snippet_${label}`,
-    textEdit: TextEdit.replace(replaceRange, text),
-    command: RETRIGGER_SUGGEST,
+    textEdit: TextEdit.replace(replaceRange, toSnippetText(text)),
+    command: shouldRetrigger(text) ? RETRIGGER_SUGGEST : undefined,
   }));
 }
 

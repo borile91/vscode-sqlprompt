@@ -20,7 +20,12 @@ import { TextDocument } from "vscode-languageserver-textdocument";
 import { SchemaLoader, TableInfo, RoutineSnapshot } from "./schemaLoader";
 import { extractStatementAtOffset } from "./documentTextService";
 import { resolveContext } from "./cursorContextResolver";
-import { buildCompletionList, resolveTableCompletionItem, setUsageScores } from "./completionEngine";
+import {
+  buildCompletionList,
+  resolveTableCompletionItem,
+  setStatementShortcuts,
+  setUsageScores,
+} from "./completionEngine";
 import { collidesWithExistingAlias, findAliasRenameTarget, formatAliasName } from "./aliasRename";
 import { listModulesFromSnapshot, ModuleName } from "./alterModules";
 import {
@@ -483,6 +488,19 @@ connection.onRequest(
     );
     setUsageScores(new Map(usable));
     connection.console.info(`SQL Prompt: usage history updated — ${usable.length} object(s).`);
+    return { success: true };
+  },
+);
+
+// ── Scorciatoie di statement ──────────────────────────────────────────────────
+//
+// `sqlPrompt.snippets.shortcuts` vive nelle impostazioni di VS Code: il client
+// le invia all'avvio e a ogni modifica.
+
+connection.onRequest(
+  "sqlPrompt/setStatementShortcuts",
+  (params: { shortcuts?: unknown }) => {
+    setStatementShortcuts(params?.shortcuts);
     return { success: true };
   },
 );

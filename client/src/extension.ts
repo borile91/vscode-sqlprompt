@@ -165,6 +165,20 @@ let usageFlushDebounce: ReturnType<typeof setTimeout> | undefined;
  * altrimenti il server continuerebbe a ordinare con quello del DB precedente,
  * le cui chiavi `schema.nome` coincidono con oggetti omonimi di questo.
  */
+/** Invia al server le scorciatoie di statement dell'utente (`sqlPrompt.snippets.shortcuts`). */
+async function publishStatementShortcuts(): Promise<void> {
+    if (!client) {
+        return;
+    }
+    try {
+        await client.sendRequest('sqlPrompt/setStatementShortcuts', {
+            shortcuts: workspace.getConfiguration('sqlPrompt.snippets').get('shortcuts', {}),
+        });
+    } catch (err: any) {
+        console.error(`[SQL Prompt] setStatementShortcuts failed: ${err?.message ?? err}`);
+    }
+}
+
 async function publishUsageScores(): Promise<void> {
     if (!client) {
         return;
@@ -1087,6 +1101,7 @@ export async function activate(context: ExtensionContext) {
 
     await client.start();
     console.log("SQL Prompt: language server started.");
+    await publishStatementShortcuts();
 
     // ── Schema Loading Notifications ──────────────────────────────────────────
     // Pending progress resolvers for cross-DB demand loads (keyed by db name).
@@ -1543,6 +1558,9 @@ export async function activate(context: ExtensionContext) {
             updateFormatterStatusBar();
         }),
         workspace.onDidChangeConfiguration(async (event) => {
+            if (event.affectsConfiguration('sqlPrompt.snippets.shortcuts')) {
+                await publishStatementShortcuts();
+            }
             if (event.affectsConfiguration('sqlPrompt.formatting.stylesFolder')) {
                 const newFolder = workspace
                     .getConfiguration('sqlPrompt.formatting')
