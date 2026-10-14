@@ -553,9 +553,10 @@ async function restoreMssqlIntellisense(): Promise<void> {
         return;
     }
     try {
-        // Removing the workspace-level override restores the user/default value
+        // Removing the workspace-level override restores the user/default value.
+        // Stessa chiave impostata da suppressMssqlIntellisense.
         await workspace.getConfiguration("mssql").update(
-            "intelliSense.enable",
+            "intelliSense.enableSuggestions",
             undefined,
             ConfigurationTarget.Workspace,
         );
