@@ -23,10 +23,18 @@ export interface ColumnInfo {
 export interface TableInfo {
     /** The database this table belongs to. Populated for cross-database schemas. */
     database?: string;
-  schema: string;
-  name: string;
-  columns: ColumnInfo[];
+    schema: string;
+    name: string;
+    columns: ColumnInfo[];
     foreignKeys: ForeignKeyInfo[];
+    /**
+     * True for a view rather than a base table.
+     *
+     * Optional because a snapshot that predates the field does not carry it;
+     * absent is read as "base table", which is the safer default — it only
+     * costs a view a small ranking bonus it would not have had anyway.
+     */
+    isView?: boolean;
 }
 
 export interface ForeignKeyMapping {
