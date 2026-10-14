@@ -4,6 +4,7 @@ import {
     QueryRunner,
     isAggregationUnsupportedError,
     loadColumns,
+    loadDatabases,
 } from '../schemaLoad.js';
 
 /** Result set nel formato di SQL Tools Service: celle `{ displayValue, isNull }`. */
@@ -98,5 +99,47 @@ describe('loadColumns: fallback legacy', () => {
 
         await assert.rejects(() => loadColumns(runner, 'uri'), /Timeout/);
         assert.equal(runner.queries.length, 1);
+    });
+});
+
+describe('loadDatabases', () => {
+    it('usa sys.databases filtrato ONLINE e non listDatabases', async () => {
+        let listCalled = false;
+        const runner: QueryRunner = {
+            async executeSimpleQuery(_uri, sql) {
+                assert.match(sql, /state_desc = 'ONLINE'/);
+                return resultSet(['name'], [['master'], ['Prod']]);
+            },
+            async listDatabases() {
+                listCalled = true;
+                return ['master', 'Prod', 'Offline'];
+            },
+        };
+
+        assert.deepEqual(await loadDatabases(runner, 'uri'), ['master', 'Prod']);
+        assert.equal(listCalled, false);
+    });
+
+    it('ripiega su listDatabases se la query fallisce', async () => {
+        const runner: QueryRunner = {
+            async executeSimpleQuery() {
+                throw new Error('permission denied');
+            },
+            async listDatabases() {
+                return ['master', '', 'Prod'];
+            },
+        };
+
+        assert.deepEqual(await loadDatabases(runner, 'uri'), ['master', 'Prod']);
+    });
+
+    it('restituisce un elenco vuoto se entrambe le fonti falliscono', async () => {
+        const runner: QueryRunner = {
+            async executeSimpleQuery() {
+                throw new Error('down');
+            },
+        };
+
+        assert.deepEqual(await loadDatabases(runner, 'uri'), []);
     });
 });
