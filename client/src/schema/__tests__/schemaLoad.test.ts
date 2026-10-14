@@ -6,6 +6,7 @@ import {
     loadColumns,
     loadCrossDatabaseSchema,
     loadDatabases,
+    loadTableColumns,
 } from '../schemaLoad.js';
 
 /** Result set nel formato di SQL Tools Service: celle `{ displayValue, isNull }`. */
@@ -142,6 +143,33 @@ describe('loadDatabases', () => {
         };
 
         assert.deepEqual(await loadDatabases(runner, 'uri'), []);
+    });
+});
+
+describe('loadTableColumns', () => {
+    it('legge le colonne di una tabella con apici nel nome escapati', async () => {
+        const runner = fakeRunner(() =>
+            resultSet(
+                ['column_name', 'data_type', 'max_length', 'is_nullable', 'is_primary_key'],
+                [
+                    ['Id', 'int', 4, 'false', 1],
+                    ['Note', 'nvarchar', -1, 'true', 0],
+                ],
+            ),
+        );
+
+        const columns = await loadTableColumns(runner, 'uri', 'dbo', "O'Brien");
+        assert.deepEqual(columns, [
+            { name: 'Id', dataType: 'int', maxLength: 4, isNullable: false, isPrimaryKey: true },
+            { name: 'Note', dataType: 'nvarchar', maxLength: -1, isNullable: true, isPrimaryKey: false },
+        ]);
+        assert.match(runner.queries[0], /o\.name = N'O''Brien'/);
+        assert.match(runner.queries[0], /s\.name = N'dbo'/);
+    });
+
+    it('restituisce un elenco vuoto se l\'oggetto non esiste', async () => {
+        const runner = fakeRunner(() => resultSet(['column_name'], []));
+        assert.deepEqual(await loadTableColumns(runner, 'uri', 'dbo', 'Nessuna'), []);
     });
 });
 
