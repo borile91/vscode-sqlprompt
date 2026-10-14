@@ -22,6 +22,7 @@ import { extractStatementAtOffset } from "./documentTextService";
 import { resolveContext } from "./cursorContextResolver";
 import {
   buildCompletionList,
+  buildSignatureHelp,
   resolveTableCompletionItem,
   setStatementShortcuts,
   setUsageScores,
@@ -138,6 +139,10 @@ connection.onInitialize((params: InitializeParams) => {
       },
       renameProvider: {
         prepareProvider: true,
+      },
+      signatureHelpProvider: {
+        triggerCharacters: ["(", ","],
+        retriggerCharacters: [","],
       },
     },
   };
@@ -656,6 +661,21 @@ connection.onCompletion(
     return buildCompletionList(context, tables, routines, document, position, statementRange, databases, loadingDatabaseNames);
   },
 );
+
+// ── Signature help: parametri della funzione sotto il cursore ─────────────────
+
+connection.onSignatureHelp((params: TextDocumentPositionParams) => {
+  const document = documents.get(params.textDocument.uri);
+  if (!document) return null;
+  const cursorAbsolute = document.offsetAt(params.position);
+  const statementRange = extractStatementAtOffset(document.getText(), cursorAbsolute);
+  const context = resolveContext(statementRange.text, statementRange.start, cursorAbsolute, tables);
+  return buildSignatureHelp(
+    context,
+    routines,
+    statementRange.text.slice(0, cursorAbsolute - statementRange.start),
+  );
+});
 
 connection.onCompletionResolve((item: CompletionItem): CompletionItem => {
   return resolveTableCompletionItem(item, tables);

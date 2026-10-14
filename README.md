@@ -12,6 +12,8 @@ SQL Prompt is a SQL Server IntelliSense and formatting extension for VS Code, in
 - The keyword that comes next: `ON` after a joined table, `BY` after `ORDER`/`GROUP`, the object type after `ALTER`/`CREATE`/`DROP`, `SET` after `UPDATE <table>`, `AND`/`OR` after a complete predicate…
 - Other databases on the same server: `OtherDb.schema.` loads that database on demand
 - Scalar functions with their parameters, stored procedures with named parameters after `EXEC`
+- Built-in T-SQL functions (`MIN`, `MAX`, `AVG`, `COUNT`, `ISNULL`, `COALESCE`, `CAST`, `CONVERT`, `DATEADD`, `DATEDIFF`, `LEN`, `SUBSTRING`, `ROW_NUMBER() OVER (…)`…) with argument placeholders, only where they are valid (no aggregates in `WHERE`); `DATEADD(` offers the dateparts, `CAST(x AS ` and `CONVERT(` the data types
+- Parameter hints while typing inside the parentheses of a built-in or database function (signature help)
 
 **Ranking**
 - What starts with what you typed comes first: typing `articol` puts `dbo.ARTICOLI` before `ui.vwArticoli`
