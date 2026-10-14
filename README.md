@@ -7,6 +7,7 @@ SQL Prompt is a SQL Server IntelliSense and formatting extension for VS Code. It
 - Uses your active ms-mssql connection for the current SQL file
 - Suggests schema-qualified table names after `FROM` and `JOIN`
 - Inserts automatic aliases, for example `dbo.TABLE_NAME AS tn`
+- After `JOIN`, offers the tables related by a foreign key first, with the `ON` condition already written (`dbo.Customers AS c ON o.CustomerId = c.CustomerId`, all columns of a composite key)
 - Accepting a suggestion replaces the whole word being typed, wherever the cursor is in it (`EasyStock.dbo.ordinite` → `EasyStock.dbo.ORDINI_TESTATA AS ot`)
 - Renames a table alias with `F2`, updating every reference in the statement
 - Suggests the keyword that comes next: `ON` after a joined table, `BY` after `ORDER`, the object type after `ALTER`/`CREATE`/`DROP`, `SET` after `UPDATE <table>`…

@@ -1183,3 +1183,61 @@ describe('completionEngine — scorciatoie di statement (#26)', () => {
     assert.equal((snippet('sct', 'sct')?.textEdit as any)?.newText, 'SELECT COUNT(*) FROM ');
   });
 });
+
+describe('completionEngine — JOIN con ON dalle FK (#27)', () => {
+  const col = (name: string, isPrimaryKey = false) => ({
+    name, dataType: 'int', maxLength: null, isNullable: false, isPrimaryKey,
+  });
+  const schema: TableInfo[] = [
+    {
+      schema: 'dbo', name: 'Orders', columns: [col('OrderId', true), col('CustomerId')],
+      foreignKeys: [{
+        name: 'FK_Orders_Customers', parentSchema: 'dbo', parentTable: 'Orders',
+        referencedSchema: 'dbo', referencedTable: 'Customers',
+        mappings: [{ column: 'CustomerId', referencedColumn: 'CustomerId' }],
+      }],
+    },
+    { schema: 'dbo', name: 'Customers', columns: [col('CustomerId', true)], foreignKeys: [] },
+    { schema: 'dbo', name: 'Products', columns: [col('ProductId', true)], foreignKeys: [] },
+  ];
+
+  /** Table source nell'ordine in cui VS Code le mostra. */
+  function sources(sql: string) {
+    const document = TextDocument.create('file:///test.sql', 'sql', 1, sql);
+    const context = resolveContext(sql, 0, sql.length, schema);
+    const { items } = buildCompletionList(context, schema, emptyRoutines, document, document.positionAt(sql.length), {
+      text: sql, start: 0, end: sql.length, cursorOffset: sql.length,
+    });
+    return items
+      .filter((i) => String(i.sortText).startsWith('01a_'))
+      .sort((a, b) => (String(a.sortText) < String(b.sortText) ? -1 : 1));
+  }
+  const newText = (item: any) => String(item?.textEdit?.newText ?? '');
+
+  it('dopo INNER JOIN la tabella legata da FK arriva per prima con l\'ON già scritto', () => {
+    const list = sources('SELECT * FROM dbo.Orders o INNER JOIN ');
+    assert.equal(newText(list[0]), 'dbo.Customers AS c ON o.CustomerId = c.CustomerId');
+    assert.equal(list[0].detail, 'Join on FK FK_Orders_Customers');
+    assert.equal(newText(list[1]), 'dbo.Customers AS c');
+  });
+
+  it('vale anche per LEFT JOIN, dopo schema. e con tabelle senza alias', () => {
+    assert.equal(newText(sources('SELECT * FROM dbo.Orders o LEFT JOIN dbo.')[0]), 'Customers AS c ON o.CustomerId = c.CustomerId');
+    assert.equal(newText(sources('SELECT * FROM dbo.Orders RIGHT OUTER JOIN Cus')[0]), 'dbo.Customers AS c ON Orders.CustomerId = c.CustomerId');
+  });
+
+  it('niente ON per CROSS JOIN né per tabelle senza FK', () => {
+    assert.ok(!sources('SELECT * FROM dbo.Orders o CROSS JOIN ').some((i) => newText(i).includes(' ON ')));
+    assert.ok(!sources('SELECT * FROM dbo.Orders o JOIN ').some((i) => newText(i).startsWith('dbo.Products AS p ON')));
+  });
+
+  it('dopo JOIN non propone gli snippet CROSS/OUTER APPLY', () => {
+    const sql = 'SELECT * FROM dbo.Orders o JOIN ';
+    const document = TextDocument.create('file:///test.sql', 'sql', 1, sql);
+    const context = resolveContext(sql, 0, sql.length, schema);
+    const items = buildCompletions(context, schema, emptyRoutines, document, document.positionAt(sql.length), {
+      text: sql, start: 0, end: sql.length, cursorOffset: sql.length,
+    });
+    assert.ok(!items.some((i) => i.label === 'CROSS' || i.label === 'OUTER'));
+  });
+});
