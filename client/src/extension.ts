@@ -45,6 +45,7 @@ import {
     loadObjects,
     loadRoutines,
     loadSchemaToken,
+    loadTableColumns,
     queryFirstCellText,
     queryRowsText,
 } from './schema/schemaLoad';
@@ -156,14 +157,18 @@ let usageFlushDebounce: ReturnType<typeof setTimeout> | undefined;
  *
  * Called after a schema sync — so a fresh server process is ranking with the
  * history from the start — and after an accepted completion has been recorded.
+ *
+ * Senza un database d'uso (token non disponibile) pubblica uno storico vuoto:
+ * altrimenti il server continuerebbe a ordinare con quello del DB precedente,
+ * le cui chiavi `schema.nome` coincidono con oggetti omonimi di questo.
  */
 async function publishUsageScores(): Promise<void> {
-    if (!client || !usageStore || !usageDatabase) {
+    if (!client) {
         return;
     }
     try {
         await client.sendRequest('sqlPrompt/updateUsageScores', {
-            entries: usageStore.scores(usageDatabase),
+            entries: usageStore && usageDatabase ? usageStore.scores(usageDatabase) : [],
         });
     } catch (err: any) {
         console.error(`[SQL Prompt] updateUsageScores failed: ${err?.message ?? err}`);
@@ -548,9 +553,10 @@ async function restoreMssqlIntellisense(): Promise<void> {
         return;
     }
     try {
-        // Removing the workspace-level override restores the user/default value
+        // Removing the workspace-level override restores the user/default value.
+        // Stessa chiave impostata da suppressMssqlIntellisense.
         await workspace.getConfiguration("mssql").update(
-            "intelliSense.enable",
+            "intelliSense.enableSuggestions",
             undefined,
             ConfigurationTarget.Workspace,
         );
@@ -1226,12 +1232,34 @@ export async function activate(context: ExtensionContext) {
 
                 // For tables (no sql_modules entry): generate CREATE TABLE from snapshot
                 if (script === null && resolved.kind === 'tableOrView') {
-                    if (resolved.columns) {
+                    let columns: ResolvedColumn[] = resolved.columns ?? [];
+                    // Prima dello stadio 1 (o se è fallito) il server non ha le
+                    // colonne: lette al volo, mai uno script `CREATE TABLE` vuoto.
+                    if (columns.length === 0 && api?.connectionSharing) {
+                        try {
+                            columns = await loadTableColumns(
+                                api.connectionSharing as QueryRunner,
+                                ownerUri,
+                                resolved.schema,
+                                resolved.name,
+                            );
+                        } catch (err: any) {
+                            console.error(
+                                `[SQL Prompt] column lookup for Go to Definition failed: ${err?.message ?? err}`,
+                            );
+                        }
+                    }
+                    if (columns.length > 0) {
                         script = generateCreateTableScript(
                             resolved.schema,
                             resolved.name,
-                            resolved.columns,
+                            columns,
                         );
+                    } else {
+                        window.showWarningMessage(
+                            `SQL Prompt: the columns of [${resolved.schema}].[${resolved.name}] are not available yet — try again once the schema has loaded.`,
+                        );
+                        return null;
                     }
                 }
 
