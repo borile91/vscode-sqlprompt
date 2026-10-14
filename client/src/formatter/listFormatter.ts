@@ -195,6 +195,14 @@ function collectItems(
         if (afterPrefix === ' ') break;
 
         const [rawExpr, comment] = splitComment(contLine.slice(kwWidth).trim());
+        // Riga di solo commento: non è un elemento (avrebbe una virgola in più),
+        // si accoda al commento dell'elemento precedente
+        if (!rawExpr && comment) {
+            const last = items[items.length - 1];
+            last.comment = last.comment ? `${last.comment} ${comment}` : comment;
+            i++;
+            continue;
+        }
         const hasTrailing = rawExpr.trimEnd().endsWith(',');
         const expr = hasTrailing ? rawExpr.trimEnd().slice(0, -1).trimEnd() : rawExpr.trimEnd();
         items.push({ expression: expr, comment });
@@ -386,6 +394,15 @@ function removeCharAt(line: string, idx: number): string {
     return after ? `${before} ${after}` : before;
 }
 
+/**
+ * True se l'ultima riga di `text` termina con un commento `--`: niente può
+ * esserle accodato sulla stessa riga, finirebbe dentro il commento.
+ */
+function endsWithLineComment(text: string): boolean {
+    const lastLine = text.slice(text.lastIndexOf('\n') + 1);
+    return scanLine(lastLine).commentStart >= 0;
+}
+
 /** Applica formatStandaloneList a tutte le liste contenute in `lines`. */
 function formatNestedStandaloneLists(lines: string[], opts: StandaloneListOptions): string[] {
     const out: string[] = [];
@@ -560,6 +577,8 @@ function collapseSelectItems(
     }
 
     if (items.length <= 1) return null;
+    // Un commento `--` inghiottirebbe gli elementi accodati sulla stessa riga
+    if (items.some(endsWithLineComment)) return null;
 
     return {
         line: `${selectIndent}SELECT ${items.join(', ')}${hasFinalSemi ? ';' : ''}`,
@@ -693,6 +712,12 @@ export function applyLeadingCommaFormat(
                     if (trimmed) columns.push(trimmed.replace(/,\s*$/, ''));
                     j++;
                 }
+                // Colonne con commento `--`: non si possono unire su una riga
+                if (columns.some(endsWithLineComment)) {
+                    result.push(line);
+                    i++;
+                    continue;
+                }
                 const closingTrimmed = (lines[j] ?? '').trim();
                 const hasSemicolon = closingTrimmed === ');';
                 j++;
@@ -739,17 +764,20 @@ export function applyLeadingCommaFormat(
                         it.expression + (it.comment ? ' ' + it.comment : ''),
                     );
                     const oneLine = kwPrefix + allExprs.join(', ');
+                    // Un elemento (non ultimo) che termina con un commento `--`
+                    // impedisce la riga unica: il resto finirebbe nel commento.
+                    const commentBreaks = allExprs.slice(0, -1).some(endsWithLineComment);
 
                     if (listBreakMode === 'ifLongerThanMaxLineLength') {
                         // Keep inline if fits; otherwise fall back to vertical.
-                        if (isFinite(maxLineLen) && oneLine.length > maxLineLen) {
+                        if (commentBreaks || (isFinite(maxLineLen) && oneLine.length > maxLineLen)) {
                             result.push(...formatItems(kwPrefix, kwWidthBase, items, alignComments, alignAliases, layout));
                         } else {
                             result.push(oneLine);
                         }
                     } else {
                         // 'never': pack items greedily onto lines ≤ maxLineLen.
-                        if (!isFinite(maxLineLen) || oneLine.length <= maxLineLen) {
+                        if (!commentBreaks && (!isFinite(maxLineLen) || oneLine.length <= maxLineLen)) {
                             result.push(oneLine);
                         } else {
                             const stmtCol = kwPrefix.length - kwPrefix.trimStart().length;
@@ -762,7 +790,8 @@ export function applyLeadingCommaFormat(
                                     first = false;
                                 } else {
                                     const candidate = currentLine + ', ' + expr;
-                                    if (candidate.length >= maxLineLen - tabWidth) {
+                                    // Dopo un commento `--` si va sempre a capo
+                                    if (endsWithLineComment(currentLine) || candidate.length >= maxLineLen - tabWidth) {
                                         result.push(currentLine);
                                         currentLine = commaPrefix + expr;
                                     } else {

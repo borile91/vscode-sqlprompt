@@ -17,6 +17,10 @@
  * character whose count ever changed was the comma — and every one of those
  * cases was a genuine defect.
  *
+ * The same count is repeated on the code alone (comments stripped), so a pass
+ * that pushes code into a `--` comment is refused too: Lo stesso conteggio
+ * sul solo codice rileva codice finito dentro un commento.
+ *
  * Deliberately ignored:
  *   - whitespace, which is the whole point of formatting;
  *   - letter case, since keyword casing is a formatting option;
@@ -39,15 +43,52 @@ function countSignificantCharacters(sql: string): Map<string, number> {
 }
 
 /**
- * Returns a human-readable reason when `formatted` cannot be trusted as a
- * formatting of `original`, or `null` when it is safe to apply.
- *
- * The reason is meant to be shown to the user, so it names what changed.
+ * Rimuove i commenti (`--` e `/* *\/`, anche annidati) lasciando il codice;
+ * stringhe e identificatori delimitati restano intatti.
  */
-export function describeFormattingRisk(original: string, formatted: string): string | null {
-    const before = countSignificantCharacters(original);
-    const after = countSignificantCharacters(formatted);
+function stripComments(sql: string): string {
+    let out = '';
+    let i = 0;
+    while (i < sql.length) {
+        const ch = sql[i];
+        if (ch === '-' && sql[i + 1] === '-') {
+            const end = sql.indexOf('\n', i);
+            i = end === -1 ? sql.length : end;
+            continue;
+        }
+        if (ch === '/' && sql[i + 1] === '*') {
+            let depth = 1;
+            i += 2;
+            while (i < sql.length && depth > 0) {
+                if (sql[i] === '/' && sql[i + 1] === '*') { depth++; i += 2; }
+                else if (sql[i] === '*' && sql[i + 1] === '/') { depth--; i += 2; }
+                else i++;
+            }
+            out += ' ';
+            continue;
+        }
+        if (ch === "'" || ch === '"' || ch === '[') {
+            const close = ch === '[' ? ']' : ch;
+            let j = i + 1;
+            while (j < sql.length) {
+                if (sql[j] === close) {
+                    if (sql[j + 1] === close) { j += 2; continue; } // carattere raddoppiato = escape
+                    break;
+                }
+                j++;
+            }
+            out += sql.slice(i, j + 1);
+            i = j + 1;
+            continue;
+        }
+        out += ch;
+        i++;
+    }
+    return out;
+}
 
+/** Differenze nei conteggi dei caratteri significativi, come testo. */
+function describeChanges(before: Map<string, number>, after: Map<string, number>): string[] {
     const changes: string[] = [];
     for (const character of new Set([...before.keys(), ...after.keys()])) {
         const delta = (after.get(character) ?? 0) - (before.get(character) ?? 0);
@@ -58,13 +99,39 @@ export function describeFormattingRisk(original: string, formatted: string): str
             `${delta > 0 ? 'added' : 'removed'} ${Math.abs(delta)} "${character}"`,
         );
     }
+    return changes;
+}
 
-    if (changes.length === 0) {
-        return null;
-    }
-
-    // Keep the message short: the first few changes already identify the problem.
+/** Riassume le differenze: le prime bastano a identificare il problema. */
+function summarise(changes: string[]): string {
     const shown = changes.slice(0, 3).join(', ');
     const rest = changes.length > 3 ? `, and ${changes.length - 3} more` : '';
     return `${shown}${rest}`;
+}
+
+/**
+ * Returns a human-readable reason when `formatted` cannot be trusted as a
+ * formatting of `original`, or `null` when it is safe to apply.
+ *
+ * The reason is meant to be shown to the user, so it names what changed.
+ */
+export function describeFormattingRisk(original: string, formatted: string): string | null {
+    const changes = describeChanges(
+        countSignificantCharacters(original),
+        countSignificantCharacters(formatted),
+    );
+    if (changes.length > 0) {
+        return summarise(changes);
+    }
+
+    // Stessi caratteri ma codice finito dentro un commento (o viceversa), es.
+    // "a -- primo, b" con b inghiottita dal commento: confronta il solo codice.
+    const codeChanges = describeChanges(
+        countSignificantCharacters(stripComments(original)),
+        countSignificantCharacters(stripComments(formatted)),
+    );
+    if (codeChanges.length > 0) {
+        return `code moved into or out of a comment (${summarise(codeChanges)})`;
+    }
+    return null;
 }
