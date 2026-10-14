@@ -199,35 +199,6 @@ function isStartingANewLine(lineText: string, position: Position, currentWord?: 
   return !isReservedWord(beforeCursor);
 }
 
-function buildSnippetCompletions(clause: string, replaceRange: Range): CompletionItem[] {
-  const items: CompletionItem[] = [];
-
-  if (clause === 'join') {
-    // OUTER APPLY snippet
-    items.push({
-      label: 'OUTER',
-      kind: CompletionItemKind.Snippet,
-      insertText: 'OUTER APPLY ',
-      insertTextFormat: InsertTextFormat.PlainText,
-      detail: 'OUTER APPLY',
-      sortText: '01_outer',
-      textEdit: TextEdit.replace(replaceRange, 'OUTER APPLY '),
-    });
-    // CROSS APPLY snippet
-    items.push({
-      label: 'CROSS',
-      kind: CompletionItemKind.Snippet,
-      insertText: 'CROSS APPLY ',
-      insertTextFormat: InsertTextFormat.PlainText,
-      detail: 'CROSS APPLY',
-      sortText: '01_cross',
-      textEdit: TextEdit.replace(replaceRange, 'CROSS APPLY '),
-    });
-  }
-
-  return items;
-}
-
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
@@ -296,6 +267,7 @@ export function buildCompletions(
       wordRangeAt(document, position),
       databases,
       loadingDatabases,
+      isJoinNeedingOn(statementRange.text.slice(0, context.cursorOffset - statementRange.start)),
     );
   }
 
@@ -343,7 +315,6 @@ export function buildCompletions(
 
   switch (context.clause) {
     case 'select':
-      items.push(...buildSnippetCompletions('select', wordRange));
       items.push(...buildColumnCompletionsForRefs(refs, true, false));
       items.push(...buildColumnCompletionsForSources(context.visibleSources));
       items.push(...buildScalarFunctionCompletions(routines.scalarFunctions));
@@ -354,12 +325,14 @@ export function buildCompletions(
     case 'from':
     case 'join': {
       if (tableSourceExpected) {
-        items.push(...buildSnippetCompletions(context.clause, wordRange));
         items.push(
           ...buildTableSourceCompletions(context, tables, routines, position, lineText, wordRange, databases, {
             withAlias: true,
             includeFunctions: true,
             refs,
+            joinOn:
+              context.clause === 'join' &&
+              isJoinNeedingOn(statementRange.text.slice(0, context.cursorOffset - statementRange.start)),
           }),
         );
       }
@@ -537,6 +510,8 @@ interface TableSourceOptions {
   includeFunctions: boolean;
   /** Tables already in scope, used to rank FK-related tables first. */
   refs?: ResolvedRef[];
+  /** Dopo `[INNER|LEFT|RIGHT|FULL] JOIN`: proponi anche la tabella con l'ON dalla FK (#27). */
+  joinOn?: boolean;
 }
 
 /**
@@ -623,7 +598,9 @@ function buildTableSourceCompletions(
         });
     }
 
-    return capTableSourceItems(items);
+    return capTableSourceItems(
+    options.joinOn ? withJoinOnVariants(items, tables, options.refs ?? []) : items,
+  );
   }
 
   tables.forEach((table, idx) => {
@@ -689,7 +666,9 @@ function buildTableSourceCompletions(
     });
   });
 
-  return capTableSourceItems(items);
+  return capTableSourceItems(
+    options.joinOn ? withJoinOnVariants(items, tables, options.refs ?? []) : items,
+  );
 }
 
 /**
@@ -910,6 +889,7 @@ function buildDotCompletions(
   replaceRange: Range,
   databases: string[] = [],
   loadingDatabases: ReadonlySet<string> = new Set(),
+  joinOn = false,
 ): CompletionItem[] {
   const chain = context.qualifierChain!;
   const qualifier = chain[chain.length - 1]; // last part before the dot
@@ -1071,7 +1051,10 @@ function buildDotCompletions(
       sortText: `02_proc_${proc.name}`,
     }));
 
-    return capTableSourceItems([...tableItems, ...tvfItems, ...procedureItems]);
+    const sources: CompletionItem[] = [...tableItems, ...tvfItems, ...procedureItems];
+    return capTableSourceItems(
+      joinOn ? withJoinOnVariants(sources, tables, resolveRefs(context.visibleSources, tables)) : sources,
+    );
   }
 
   // Is it a table name? → offer columns
@@ -1629,6 +1612,61 @@ function buildFkPredicateSuggestions(
   }
 
   return suggestions;
+}
+
+/**
+ * Vero se il cursore è sulla table source di un JOIN che vuole un ON:
+ * `[INNER|LEFT|RIGHT|FULL [OUTER]] JOIN <nome parziale>`, non `CROSS JOIN` né `APPLY`.
+ */
+function isJoinNeedingOn(textBeforeCursor: string): boolean {
+  const match = /(\w+)?\s*\bJOIN\s+[\w.\[\]"]*$/i.exec(textBeforeCursor);
+  return !!match && (match[1] ?? '').toUpperCase() !== 'CROSS';
+}
+
+/**
+ * Per ogni tabella proposta dopo un JOIN e legata da FK a una tabella già nella
+ * query, aggiunge la variante con l'ON già scritto (#27):
+ * `dbo.CLIENTI AS c ON o.ClienteId = c.Id`. Una variante per FK (le composite in
+ * AND), mostrata subito prima della tabella semplice, con il nome della FK.
+ */
+function withJoinOnVariants(
+  items: CompletionItem[],
+  tables: TableInfo[],
+  refs: ResolvedRef[],
+): CompletionItem[] {
+  if (refs.length === 0) return items;
+  const result: CompletionItem[] = [];
+  for (const item of items) {
+    const edit = item.textEdit as TextEdit | undefined;
+    const table = item.data?.type === 'table' ? tables[item.data.index] : undefined;
+    const alias = edit && /\sAS\s+(\S+)$/.exec(edit.newText)?.[1];
+    if (!edit || !table || !alias) {
+      result.push(item);
+      continue;
+    }
+
+    const candidate: ResolvedRef = { table, alias, isAutoAlias: false, sourceIndex: refs.length };
+    // Una condizione per FK: la voce combinata (composita) arriva prima dei singoli.
+    const byFk = new Map<string, PredicateSuggestion>();
+    for (const suggestion of buildFkPredicateSuggestions([...refs, candidate])) {
+      const key = `${suggestion.detail}|${suggestion.sortKey.slice(3)}`;
+      if (!byFk.has(key)) byFk.set(key, suggestion);
+    }
+
+    for (const suggestion of byFk.values()) {
+      const text = `${edit.newText} ON ${suggestion.insertText}`;
+      result.push({
+        ...item,
+        labelDetails: { detail: ` ON ${suggestion.insertText}` },
+        detail: `Join on ${suggestion.detail}`,
+        documentation: { kind: 'markdown', value: '```sql\n' + text + '\n```' },
+        textEdit: TextEdit.replace(edit.range, text),
+        sortText: `${item.sortText}_0`,
+      });
+    }
+    result.push(byFk.size ? { ...item, sortText: `${item.sortText}_1` } : item);
+  }
+  return result;
 }
 
 /** Keyword che, attaccate al cursore (`ON|`, `AND|`), restano e il predicato si accoda. */
