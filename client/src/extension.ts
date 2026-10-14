@@ -28,6 +28,7 @@ import {
     LanguageClientOptions,
     RevealOutputChannelOn,
     ServerOptions,
+    State,
     TransportKind,
 } from "vscode-languageclient/node";
 
@@ -50,6 +51,7 @@ import {
 import {
     WireColumns,
     WireForeignKey,
+    WireObject,
     WireRoutine,
     WireSnapshot,
 } from './schema/wireFormat';
@@ -129,6 +131,14 @@ let schemaDiskCache: SchemaDiskCache | undefined;
  * tell the server something it already knows.
  */
 let publishedSnapshot: WireSnapshot | undefined;
+
+/**
+ * Generazione dello stadio 0 sul server: cresce a ogni sostituzione degli oggetti.
+ * Gli stadi successivi di un caricamento superato (es. l'utente è passato a un
+ * editor su un altro database) non vanno più pubblicati, altrimenti colonne e FK
+ * di un database finirebbero sulle tabelle omonime dell'altro.
+ */
+let schemaPublishGeneration = 0;
 
 // ── Completion usage history ──────────────────────────────────────────────────
 
@@ -327,6 +337,9 @@ async function publishSchemaObjects(snapshot: WireSnapshot): Promise<boolean> {
     if (!client) {
         return false;
     }
+    // Incrementata prima di ogni await: chi chiama legge la propria generazione
+    // subito dopo la chiamata (vedi loadSchemaStaged).
+    schemaPublishGeneration++;
     try {
         const result = await client.sendRequest<{ success: boolean }>(
             "sqlPrompt/setSchemaObjects",
@@ -397,10 +410,17 @@ async function loadSchemaStaged(
     ownerUri: string,
     database: string | undefined,
     report: (message: string) => void,
-): Promise<WireSnapshot | undefined> {
+): Promise<StagedLoad | undefined> {
     report("objects…");
-    const objects = await loadObjects(runner, ownerUri);
-    const databases = await loadDatabases(runner, ownerUri);
+    let objects: WireObject[];
+    let databases: string[];
+    try {
+        objects = await loadObjects(runner, ownerUri);
+        databases = await loadDatabases(runner, ownerUri);
+    } catch (err: any) {
+        console.error(`[SQL Prompt] stage 0 (objects) failed: ${err?.message ?? err}`);
+        return undefined;
+    }
 
     const snapshot: WireSnapshot = {
         objects,
@@ -411,7 +431,9 @@ async function loadSchemaStaged(
         database,
     };
 
-    if (!(await publishSchemaObjects(snapshot))) {
+    const stageZero = publishSchemaObjects(snapshot);
+    const generation = schemaPublishGeneration;
+    if (!(await stageZero)) {
         return undefined;
     }
     publishedSnapshot = snapshot;
@@ -419,34 +441,60 @@ async function loadSchemaStaged(
         `[SQL Prompt] stage 0: ${objects.length} object(s), ${databases.length} database(s)`,
     );
 
+    let complete = true;
+    let superseded = false;
+    /** Pubblica uno stadio solo se il server ha ancora lo stadio 0 di questo caricamento. */
+    const publishStage = async (details: Parameters<typeof publishSchemaDetails>[0]) => {
+        if (generation !== schemaPublishGeneration) {
+            superseded = true;
+            return;
+        }
+        await publishSchemaDetails(details);
+    };
+
     report("columns…");
     try {
         snapshot.columns = await loadColumns(runner, ownerUri);
-        await publishSchemaDetails({ columns: snapshot.columns });
+        await publishStage({ columns: snapshot.columns });
         console.log(`[SQL Prompt] stage 1: columns for ${snapshot.columns.length} object(s)`);
     } catch (err: any) {
         console.error(`[SQL Prompt] stage 1 (columns) failed: ${err?.message ?? err}`);
+        complete = false;
     }
 
     report("relationships…");
     try {
         snapshot.foreignKeys = await loadForeignKeys(runner, ownerUri);
-        await publishSchemaDetails({ foreignKeys: snapshot.foreignKeys });
+        await publishStage({ foreignKeys: snapshot.foreignKeys });
         console.log(`[SQL Prompt] stage 2: ${snapshot.foreignKeys.length} foreign key(s)`);
     } catch (err: any) {
         console.error(`[SQL Prompt] stage 2 (foreign keys) failed: ${err?.message ?? err}`);
+        complete = false;
     }
 
     report("routine signatures…");
     try {
         snapshot.routines = await loadRoutines(runner, ownerUri);
-        await publishSchemaDetails({ routines: snapshot.routines });
+        await publishStage({ routines: snapshot.routines });
         console.log(`[SQL Prompt] stage 3: ${snapshot.routines.length} routine(s)`);
     } catch (err: any) {
         console.error(`[SQL Prompt] stage 3 (routines) failed: ${err?.message ?? err}`);
+        complete = false;
     }
 
-    return snapshot;
+    if (superseded) {
+        console.log("[SQL Prompt] staged load superseded by another database: later stages not published");
+    }
+    return { snapshot, complete, superseded };
+}
+
+/** Esito di `loadSchemaStaged`. */
+interface StagedLoad {
+    snapshot: WireSnapshot;
+    /** Falso se uno degli stadi 1-3 è fallito: lo snapshot non va messo in cache. */
+    complete: boolean;
+    /** Vero se nel frattempo il server ha ricevuto lo schema di un altro database. */
+    superseded: boolean;
 }
 
 /**
@@ -697,7 +745,7 @@ async function syncMssqlConnection(
             }
 
             // 3. Staged load.
-            const snapshot = await window.withProgress(
+            const staged = await window.withProgress(
                 { location: ProgressLocation.Window, title: "SQL Prompt: loading schema" },
                 (progress) =>
                     loadSchemaStaged(
@@ -708,24 +756,30 @@ async function syncMssqlConnection(
                     ),
             );
 
-            if (!snapshot) {
+            if (!staged) {
                 return false;
             }
+            const { snapshot, complete, superseded } = staged;
 
-            if (cacheKey) {
+            // Uno snapshot con uno stadio fallito non va in cache: resterebbe
+            // valido (su disco fino a 14 giorni) senza colonne, FK o parametri.
+            if (complete && cacheKey) {
                 setCachedSchemaSnapshot(cacheKey, snapshot, token);
             }
 
-            await publishUsageScores();
-            const announced = announce(snapshot, false);
-
             // Persisting is what makes the *next* window reload cheap, so it
             // must not delay this one: fire it off and let it finish on its own.
-            if (token && schemaDiskCache) {
+            if (complete && token && schemaDiskCache) {
                 void schemaDiskCache.write(token, snapshot);
             }
 
-            return announced;
+            // Il server ora ha lo schema di un altro database: questo resta solo in cache.
+            if (superseded) {
+                return true;
+            }
+
+            await publishUsageScores();
+            return announce(snapshot, false);
         } finally {
             const currentSync = inFlightSchemaSyncs.get(ownerUri);
             if (currentSync === syncPromise) {
@@ -979,6 +1033,14 @@ export async function activate(context: ExtensionContext) {
             }
         }),
     );
+
+    // Un server riavviato (es. dopo un crash) riparte senza schema: il prossimo
+    // sync deve ripubblicarlo anche se lo snapshot in cache è lo stesso.
+    client.onDidChangeState((event) => {
+        if (event.newState === State.Running) {
+            publishedSnapshot = undefined;
+        }
+    });
 
     await client.start();
     console.log("SQL Prompt: language server started.");
