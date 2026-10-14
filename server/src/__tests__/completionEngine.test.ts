@@ -854,3 +854,65 @@ describe('completionEngine — schemi con molte tabelle', () => {
     assert.equal(result.isIncomplete, false);
   });
 });
+
+// ── Sostituzione della parola digitata ────────────────────────────────────────
+
+/**
+ * Accetta il suggerimento `label` con il cursore su `|` e restituisce il testo
+ * risultante, applicando il textEdit come fa VS Code.
+ */
+function accept(
+  sqlWithCursor: string,
+  label: string,
+  schema: TableInfo[] = crossDbTables,
+  databases: string[] = ['DB'],
+): string {
+  const cursor = sqlWithCursor.indexOf('|');
+  const sql = sqlWithCursor.replace('|', '');
+  const document = TextDocument.create('file:///test.sql', 'sql', 1, sql);
+  const position = document.positionAt(cursor);
+  const context = resolveContext(sql, 0, cursor, schema);
+  const items = buildCompletions(
+    context,
+    schema,
+    emptyRoutines,
+    document,
+    position,
+    { text: sql, start: 0, end: sql.length, cursorOffset: cursor },
+    databases,
+  );
+  const item = items.find((i) => i.label === label);
+  assert.ok(item, `Expected "${label}" among the suggestions`);
+  const edit = item!.textEdit as any;
+  assert.ok(edit?.range, `Expected "${label}" to carry a textEdit`);
+  return (
+    sql.slice(0, document.offsetAt(edit.range.start)) +
+    edit.newText +
+    sql.slice(document.offsetAt(edit.range.end))
+  );
+}
+
+describe('completionEngine — la scelta sostituisce la parola digitata', () => {
+  it('db.schema.parziale: sostituisce la parte digitata invece di accodarla', () => {
+    const out = accept('SELECT * FROM DB.imp.Tab|', 'Tabella');
+    assert.match(out, /^SELECT \* FROM DB\.imp\.Tabella\b/);
+    assert.doesNotMatch(out, /TabTabella/);
+  });
+
+  it('db.schema.parziale con il cursore a metà: sostituisce anche il resto della parola', () => {
+    const out = accept('SELECT * FROM DB.imp.Ta|bxx', 'Tabella');
+    assert.match(out, /^SELECT \* FROM DB\.imp\.Tabella\b/);
+    assert.doesNotMatch(out, /bxx/);
+  });
+
+  it('nome senza qualificatore con il cursore a metà: sostituisce tutta la parola', () => {
+    const out = accept('SELECT * FROM Loc|alXX', 'dbo.LocalTable');
+    assert.match(out, /^SELECT \* FROM dbo\.LocalTable\b/);
+    assert.doesNotMatch(out, /alXX/);
+  });
+
+  it('colonna dopo alias.: sostituisce la parte digitata e il resto della parola', () => {
+    const out = accept('SELECT o.Or|dXX FROM dbo.Orders o', 'OrderId', tables, []);
+    assert.equal(out, 'SELECT o.OrderId FROM dbo.Orders o');
+  });
+});

@@ -23,6 +23,11 @@
     ],
     "main": "./client/dist/extension",
     "contributes": {
+        "configurationDefaults": {
+            "[sql]": {
+                "editor.suggest.insertMode": "replace"
+            }
+        },
         "languages": [
             {
                 "id": "sql",
