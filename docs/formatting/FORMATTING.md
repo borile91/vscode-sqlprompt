@@ -118,33 +118,41 @@ The casing options are only set when the style has a `casing` section; otherwise
 
 ### 2. SQL Prompt post-processing
 
-`sql-formatter` does not know most SQL Prompt options, so `sqlFormattingProvider.ts` runs a sequence of post-processing passes on its output. The order matters: several passes rely on the layout produced by the previous ones. In order:
+`sql-formatter` does not know most SQL Prompt options, so `formatSqlText` in `formatPipeline.ts` runs a sequence of post-processing passes on its output. It is the only implementation of the pipeline and has no `vscode` dependency: `sqlFormattingProvider.ts` and the fixture suite both call it, so the tests exercise exactly what ships. The order matters: several passes rely on the layout produced by the previous ones. In order:
 
 | Pass | Module | What it does |
 |---|---|---|
 | SET line joining | `keywordPaddingFormatter.ts` | Rejoins `SET <option>` / `SET @var = …` that `sql-formatter` splits on two lines |
 | Keyword re-padding | `keywordPaddingFormatter.ts` | Replaces the fixed keyword column of `tabularLeft` with the minimum width needed by each query block |
-| Spaces inside parentheses | provider | `IN`, `TOP`, `EXISTS`, `ANY`, `ALL`, `SOME`, `IF`/`WHILE` conditions (single-line groups only) |
-| Single-statement `IF` / `WHILE` | provider | Puts a one-statement body on its own line |
+| Spaces inside parentheses | `formatPipeline.ts` | `IN`, `TOP`, `EXISTS`, `ANY`, `ALL`, `SOME`, `IF`/`WHILE` conditions (single-line groups only) |
+| Single-statement `IF` / `WHILE` | `formatPipeline.ts` | Puts a one-statement body on its own line (skipped with `controlFlow.collapseShortStatements`) |
 | `DECLARE` | `declareFormatter.ts` | Variable lists, data type and value alignment |
 | Procedures and functions | `ddlFormatter.ts` | Parameter list layout, `AS` placement, parameterless procedures |
 | Views and tables | `ddlFormatter.ts` | `CREATE VIEW … AS` layout; `CREATE TABLE` column and constraint layout |
 | `STUFF(… FOR XML PATH …)` | `stuffFormatter.ts` | Layout of the string-aggregation idiom |
 | Comma lists | `listFormatter.ts` | Leading or trailing commas, item breaking, alias and comment alignment, `INSERT` column lists |
 | `CASE` | `caseFormatter.ts` | Collapses `CASE … END` before the list pass, then re-expands it with `WHEN` / `ELSE` / `END` placement |
+| Compact clauses | `scriptingFormatter.ts` | With `lists.placeSubsequentItemsOnNewLines: never`: `SELECT` / `FROM` / `WHERE` / `ORDER BY` items on the keyword line, `GROUP BY` / `HAVING` items packed; commas only between list items |
 | `JOIN … ON` | `joinFormatter.ts` | `JOIN` indentation, `ON` placement and condition alignment, inline `OUTER APPLY` |
 | DDL data types | `ddlFormatter.ts` | Vertical alignment of column data types |
 | Control flow | `controlFlowFormatter.ts` | `BEGIN` / `END` indentation and content indentation of `IF`, `WHILE`, `ELSE` |
 | Semicolons | `semicolonFormatter.ts` | Space or line break before `;` |
 | Procedure body | `ddlFormatter.ts` | Indents the body of procedures and functions |
+| Short control flow | `scriptingFormatter.ts` | With `controlFlow.collapseShortStatements`: `IF` / `WHILE` and a one-statement body on one line when shorter than `controlFlow.collapseStatementsShorterThan` |
+| `OUTER APPLY` | `joinFormatter.ts` | Inline `OUTER` / `CROSS APPLY` subqueries |
+| Compact statements | `scriptingFormatter.ts` | With `lists.placeSubsequentItemsOnNewLines: never`: `EXEC` and `DECLARE` packing, short `INSERT` / `VALUES` / `UPDATE` and `IF [NOT] EXISTS` on one line (thresholds from `dml` and `controlFlow`) |
 | `EXEC` | `execFormatter.ts` | Parameter list layout of `EXEC` calls |
-| Clean-up | provider | `GO` separators, blank lines, `ALTER TABLE … ADD CONSTRAINT`, `FOREIGN KEY` expansion and wrapping, short `EXISTS` subqueries, spacing around `(` |
+| Clean-up | `formatPipeline.ts` | `GO` separators and blank lines (`emptyLinesAfterBatchSeparator: 0`), `ALTER TABLE … ADD CONSTRAINT`, `FOREIGN KEY` expansion and wrapping, short `EXISTS` subqueries, spacing around `(` |
+
+The passes that join lines never append code after a `--` comment: when a line to join ends with a comment, the lines are left as they are.
+
+If `formatSqlText` throws, the provider logs the error to the console, shows it to the user and leaves the document unchanged.
 
 ### 3. Safety guard
 
 Formatting is cosmetic, so it must never change what the query does. `formatGuard.ts` compares the significant characters of the original and of the result, **ignoring whitespace, letter case and `;`**. If any other character was added or removed (in practice, almost always a comma), the edit is discarded and a warning names the difference, for example `removed 1 ","`.
 
-The guard catches characters that appear or disappear; it cannot catch characters that only **move**. For example, a list item moved after a `--` comment on the same line keeps every character but ends up commented out.
+The same count is repeated on the code alone, with comments stripped, so a pass that moves code into or out of a `--` comment is rejected too. Other characters that only **move** (for example a parenthesis moved to the wrong place) are not detected.
 
 ---
 
@@ -165,15 +173,16 @@ The tables list the style keys the formatter reads today. **Any other key is acc
 | `whitespace.wrapLinesLongerThan` | number | Maximum line length for the engine and for the list, `DECLARE`, `EXEC`, `SET` and `FOREIGN KEY` wrapping |
 | `whitespace.whiteSpaceBeforeSemiColon` | `none`, `spaceBefore`, `newLineBefore` | Placement of `;` |
 | `whitespace.newLines.emptyLinesBetweenStatements` | number (default `1`) | Blank lines between statements |
+| `whitespace.newLines.emptyLinesAfterBatchSeparator` | `0` or other | `0` removes the blank line after `GO` |
 
 ### Lists, parentheses and `INSERT`
 
-The comma-list, `DECLARE` and `EXEC` passes only run when `lists.placeCommasBeforeItems` is `true`: with trailing commas, `alignAliases`, `alignComments` and the `INSERT` column options have no effect and the lists stay as `sql-formatter` produces them.
+The comma-list, `DECLARE` and `EXEC` passes only run when `lists.placeCommasBeforeItems` is `true`: with trailing commas, `alignAliases`, `alignComments` and the `INSERT` column options have no effect and the lists stay as `sql-formatter` produces them, except for the compact layout (`placeSubsequentItemsOnNewLines: never`), which packs clause items, `DECLARE` and `EXEC` parameters within `wrapLinesLongerThan`.
 
 | Key | Values | Effect |
 |---|---|---|
 | `lists.placeCommasBeforeItems` | boolean | Leading commas (`SELECT`, `GROUP BY`, `ORDER BY`, `DECLARE`, `EXEC`, procedure parameters, `STUFF`) |
-| `lists.placeSubsequentItemsOnNewLines` | `never`, `always`, `ifLongerThanMaxLineLength`, … | One item per line, or packed items |
+| `lists.placeSubsequentItemsOnNewLines` | `never`, `always`, `ifLongerThanMaxLineLength`, … | One item per line, or packed items; `never` enables the compact passes of `scriptingFormatter.ts` |
 | `lists.alignAliases` | boolean | Aligns `AS alias` in `SELECT` lists |
 | `lists.alignComments` | boolean | Aligns trailing `--` comments in lists |
 | `parentheses.addSpacesInsideParentheses` | boolean | `( a, b )` instead of `(a, b)` in the supported constructs |
@@ -185,7 +194,7 @@ The comma-list, `DECLARE` and `EXEC` passes only run when `lists.placeCommasBefo
 | Key | Values | Effect |
 |---|---|---|
 | `ddl.parenthesisStyle` | any value | When absent and `ddl.collapseShortStatements` is `true`, `CREATE TABLE` uses the compact scripting layout |
-| `ddl.collapseShortStatements` | boolean | See above |
+| `ddl.collapseShortStatements` | boolean | See above; also puts a short `ALTER TABLE … ADD CONSTRAINT` on one line (fixed threshold: under 97 characters) |
 | `ddl.indentClauses` | boolean | Indents the `AS` of views and the body of procedures and functions |
 | `ddl.indentParenthesesContents` | boolean | Extra indent for procedure parameters and table definitions |
 | `ddl.placeFirstProcedureParameterOnNewLine` | `always`, `never`, `ifMultiple` | First procedure parameter on its own line |
@@ -193,6 +202,9 @@ The comma-list, `DECLARE` and `EXEC` passes only run when `lists.placeCommasBefo
 | `ddl.verticallyAlignDataTypes` | boolean | Aligns column data types in `CREATE` / `ALTER TABLE` |
 | `controlFlow.indentBeginAndEndKeywords` | boolean | Indents `BEGIN` / `END` one level under `IF`, `WHILE`, `ELSE`; also enables view and procedure body indentation |
 | `controlFlow.indentContentsOfStatements` | boolean (default `true`) | Indents the content of `BEGIN … END` |
+| `controlFlow.collapseShortStatements` / `collapseStatementsShorterThan` | boolean / number | `IF` / `WHILE` with a one-statement body on one line; in the compact layout also a two-line `IF … AND/OR` condition |
+| `dml.collapseShortStatements` / `collapseStatementsShorterThan` | boolean / number | Compact layout only: short `INSERT … VALUES` and `UPDATE … SET … WHERE` on one line |
+| `dml.collapseShortSubqueries` / `collapseSubqueriesShorterThan` | boolean / number | Compact layout only: short `IF [NOT] EXISTS (…)` on one line |
 | `variables.alignDataTypesAndValues` | boolean (default `true`) | Aligns data types and values in `DECLARE` lists |
 
 ### Joins, operators and `CASE`
@@ -219,11 +231,10 @@ These keys are declared in `SqlPromptStyleJson` but no pass reads them. Setting 
 - `casing.useObjectDefinitionCase`
 - `lists.addSpaceBeforeComma`, `addSpaceAfterComma`, `placeFirstItemOnNewLines`, `alignSubsequentItemsWithFirstItem`, `alignClauseItems`, `alignItemsAcrossClauses`, `alignItemsToTabStops`, `commaAlignment`
 - `parentheses.collapseParenthesesShorterThan`
-- `whitespace.newLines.emptyLinesAfterBatchSeparator`, `preserveExistingEmptyLinesBetweenStatements`, `preserveExistingEmptyLinesAfterBatchSeparator`
+- `whitespace.newLines.preserveExistingEmptyLinesBetweenStatements`, `preserveExistingEmptyLinesAfterBatchSeparator`
 - `operators.between.*`, `operators.in.*`
-- the whole `dml`, `cte` and `functionCalls` sections
+- the `dml` section except the collapse options above, the whole `cte` and `functionCalls` sections
 - `ddl.overrideParenthesesForCreateAlter`, `indentContents`, `placeClosingParenthesisOnNewLine`, `firstDefinitionBreakType`, `placeFirstDefinitionOnNewLine`, `collapseStatementsShorterThan`, `breakOnConstraints`, `constraintColumnsBreakType`, `verticallyAlignColumnDefinitions`, `openingParenthesisAlignment`, `openingParenthesisBreakType`, `closingParenthesisAlignment`, `contentsBreakType`
-- `controlFlow.collapseStatementsShorterThan`, `collapseShortStatements`
 - `joinStatements.join.indentJoinTable`
 - `insertStatements.columns.indentContents`, `insertStatements.values.*`
 - `caseExpressions.placeExpressionOnNewLine`, `expressionAlignment`, `placeThenOnNewLine`, `collapseCaseExpressionsShorterThan`, `collapseShortCaseExpressions`
@@ -237,14 +248,16 @@ cd client && npm test
 ```
 
 - Unit tests for each pass are in `client/src/formatter/__tests__/`.
-- `examples.test.ts` checks that every fixture in `client/src/formatter/__tests__/examples/<profile>/` is a fixed point: formatting the expected output must return it unchanged. Each profile folder holds one `config.json` (the style) and the `.sql` fixtures.
+- `examples.test.ts` runs `formatSqlText`, the shipped pipeline, on every fixture in `client/src/formatter/__tests__/examples/<profile>/`. Each profile folder holds one `config.json` (the style) and the `.sql` fixtures. Three checks per fixture:
+  - **fixed point**: formatting the expected output returns it unchanged;
+  - **round trip**: formatting the fixture with every statement joined on one line rebuilds the fixture;
+  - **convergence**: a second pass on that result changes nothing.
 - Fixtures that do not pass yet are kept in [example-not-passing/](example-not-passing/), with their analysis.
 
 ---
 
 ## Known limitations
 
-- **The fixture suite does not run the shipped pipeline.** `examples.test.ts` contains its own copy of the provider pipeline, and the two have diverged. Some fixtures that pass in the suite are formatted differently by the extension, notably the `4_Scripting` profile. Unifying them is tracked in issue #16.
 - **Text-level passes.** The post-processing passes are regular expressions on the formatted text. They do not distinguish code from string literals and comments, so a keyword inside a string or a comment can be reformatted, and list passes can misplace items next to a `--` comment.
 - **`STUFF()`, nested parentheses and nested `AND` / `OR`** are not formatted correctly in every profile; see [example-not-passing/example7-formatting-issues.md](example-not-passing/example7-formatting-issues.md).
 - **Whole document only**: there is no range formatting and no format-on-type.
@@ -257,7 +270,8 @@ cd client && npm test
 client/src/formatter/
 ├── styleLoader.ts               Reads the style files; declares SqlPromptStyleJson
 ├── formatOptionsMapper.ts       Maps a style to sql-formatter options
-├── sqlFormattingProvider.ts     DocumentFormattingEditProvider: runs the pipeline
+├── formatPipeline.ts            formatSqlText: the pipeline, no vscode dependency
+├── sqlFormattingProvider.ts     DocumentFormattingEditProvider: calls formatSqlText, guard
 ├── formatGuard.ts               Rejects results that alter the query
 ├── keywordPaddingFormatter.ts   SET joining, keyword column width
 ├── listFormatter.ts             Comma lists, INSERT column lists
@@ -268,14 +282,16 @@ client/src/formatter/
 ├── joinFormatter.ts             JOIN / ON / APPLY
 ├── controlFlowFormatter.ts      BEGIN / END, IF / WHILE / ELSE
 ├── semicolonFormatter.ts        Semicolon placement
-└── execFormatter.ts             EXEC parameter lists
+├── execFormatter.ts             EXEC parameter lists
+└── scriptingFormatter.ts        Compact layout, collapse of short statements
 ```
 
 The status bar item, the style picker and the configuration listeners are in `client/src/extension.ts`.
 
 ## Future work
 
-- Run the shipped pipeline in the fixture suite (issue #16).
+- Split the clean-up regexes of `formatPipeline.ts` into named, tested passes and make their order explicit (issue #16).
+- Derive the fixed thresholds (for example the 97 characters of `ALTER TABLE … ADD CONSTRAINT`) from the style options.
 - Protect string literals and comments from the text-level passes.
 - Implement the options listed under [Accepted but not applied yet](#accepted-but-not-applied-yet).
 - Watch `stylesFolder` so that new style files appear without reopening the picker.
