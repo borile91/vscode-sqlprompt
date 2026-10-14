@@ -1,99 +1,282 @@
 # SQL Formatting
 
-## Quick Navigation
+The extension formats T-SQL documents with **style profiles exported from Redgate SQL Prompt** (portable `.json` format). A folder of style files is configured once; each file becomes a selectable style, and **Format Document** applies the active one.
+
+This page describes what the formatter **actually does today**. The documents below describe the target behaviour, which is wider than what is implemented.
 
 | Document | Description |
 |---|---|
-| [IMPLEMENTATION.md](IMPLEMENTATION.md) | Feature-by-feature implementation guide with test cases |
-| [configurations/](configurations/) | Per-category option docs with examples |
-| [Defaults.json](Defaults.json) | Reference profile listing every supported option |
+| [IMPLEMENTATION.md](IMPLEMENTATION.md) | Target behaviour, option by option, with input → expected output pairs |
+| [configurations/](configurations/) | Per-category option examples |
+| [Defaults.json](Defaults.json) | Reference profile listing every SQL Prompt option (implemented or not) |
+| [example-not-passing/](example-not-passing/) | Fixtures that do not format correctly yet, with the analysis of each problem |
 
 ---
 
-## VS Code Integration
+## Using the formatter in VS Code
 
-VS Code's extension API allows a single `DocumentFormattingEditProvider` per extension to participate in **Format Document** (`⇧⌥F`) and **Format Document With…**. Because all providers from the same extension share the same display name in the formatter picker, named per-style entries cannot be surfaced through that UI mechanism.
+### Settings
 
-The implementation therefore exposes style selection through two complementary channels:
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `sqlPrompt.formatting.stylesFolder` | `string` | `""` | Absolute path to the folder containing the `.json` style files. Changing it reloads the styles immediately, no window reload needed. |
+| `sqlPrompt.formatting.activeStyle` | `string` | `""` | Name of the active style (`metadata.name`, or the file name without `.json`). Written by the style picker at **workspace** scope; can also be set by hand. |
 
-| Channel | How |
+Both settings have `resource` scope, so they can differ per workspace folder.
+
+### Selecting a style
+
+| Entry point | Behaviour |
 |---|---|
-| **Status bar item** | Shows the active style name; click to open the style picker |
-| **Command: Select Formatting Style** | `SQL Prompt: Select Formatting Style` in the Command Palette |
-| **Per-style commands** | `SQL Prompt: Format with <Style Name>` — one per loaded file; bindable to keyboard shortcuts |
-| **Format Document (⇧⌥F)** | Uses the currently active style (set via the picker) |
+| **Status bar item** | Shows the active style name (or `No SQL style`); click it to open the style picker |
+| **`SQL Prompt: Select Formatting Style`** | Command Palette entry; rescans `stylesFolder`, then opens the picker |
+| **Format Document** (`⇧⌥F`) | Formats the whole document with the active style |
 
-Setting `"[sql]": { "editor.defaultFormatter": "borile91.vscode-sqlprompt" }` makes our provider the default formatter for all SQL files.
+There is **one formatting provider** and **no per-style command**: VS Code shows a single entry per extension in the **Format Document With…** picker, so the style is chosen through the picker above, not through the formatter picker.
+
+To make the extension the default formatter for SQL files:
+
+```json
+{
+  "[sql]": {
+    "editor.defaultFormatter": "borile91.vscode-sqlprompt"
+  }
+}
+```
+
+The provider is registered for `sql` documents with the `file` and `untitled` schemes. **Format Selection** is not supported.
+
+### What happens when formatting cannot run
+
+| Situation | Result |
+|---|---|
+| No active style (empty setting, or a name not found in the folder) | An information message asks to run `SQL Prompt: Select Formatting Style`; the document is not changed |
+| The formatting engine throws (e.g. a syntax it cannot parse) | The document is not changed |
+| The result would alter the query (see [Safety guard](#safety-guard)) | A warning names what would have changed; the document is not changed |
 
 ---
 
-## Extension Settings
+## Style files
 
-| Setting | Type | Description |
-|---|---|---|
-| `sqlPrompt.formatting.stylesFolder` | `string` | Absolute path to the folder containing `.json` style files. Changes take effect immediately without reloading the extension. |
-| `sqlPrompt.formatting.activeStyle` | `string` | Name of the currently active style (filename without `.json`, or `metadata.name` from the file). Persisted at workspace or user scope. |
+The extension reads the **JSON export** produced by Redgate SQL Prompt, not the legacy `.sqlpromptstylev2` XML format.
 
----
+Loading rules (`styleLoader.ts`):
 
-## Style File Format
+- every `*.json` file **directly** inside `stylesFolder` is loaded; subfolders are ignored;
+- the style name is `metadata.name`, or the file name without `.json` when the name is missing;
+- files that cannot be read or parsed are **skipped silently**;
+- styles are sorted by name; if two files share a name, the first one in that order wins;
+- the folder is rescanned when `stylesFolder` changes and every time the picker is opened. Files added later are not picked up until then (there is no file watcher).
 
-Style files are JSON exports from Redgate SQL Prompt (portable `.json` format, not `.sqlpromptstylev2` XML).
+Minimal example:
 
 ```json
 {
   "metadata": { "name": "My Style" },
   "casing": {
-    "reservedKeywords": "uppercase"
+    "reservedKeywords": "uppercase",
+    "builtInFunctions": "uppercase",
+    "builtInDataTypes": "uppercase"
   },
   "lists": {
     "placeCommasBeforeItems": true,
-    "commaAlignment": "toList"
+    "placeSubsequentItemsOnNewLines": "always"
   },
   "whitespace": {
-    "wrapLinesLongerThan": 200
+    "numberOfSpacesInTabs": 4,
+    "wrapLinesLongerThan": 120
   }
 }
 ```
 
-See [Defaults.json](Defaults.json) for the full set of supported keys.
+Unknown keys are ignored, so a complete SQL Prompt export can be used as is.
 
 ---
 
-## Configuration Categories
+## How a document is formatted
 
-| Category | Config doc | Covers |
+Formatting runs entirely in the extension client (`client/src/formatter/`); the language server is not involved. It has three stages.
+
+### 1. Base formatting with `sql-formatter`
+
+The document is first formatted by [`sql-formatter`](https://github.com/sql-formatter-org/sql-formatter) 15.x with the `tsql` dialect. `formatOptionsMapper.ts` maps the style to its options:
+
+| Style key | `sql-formatter` option | Mapping |
 |---|---|---|
-| `whitespace` | [configurations/whitespace.md](configurations/whitespace.md) | Tabs, line wrapping, semicolons, blank lines |
-| `lists` | [configurations/lists.md](configurations/lists.md) | Comma placement and column list alignment |
-| `parentheses` | — | Spacing, layout, collapse thresholds |
-| `casing` | — | Keywords, functions, data types |
-| `dml` | [configurations/dml.md](configurations/dml.md) | SELECT / INSERT / UPDATE / DELETE |
-| `ddl` | [configurations/ddl.md](configurations/ddl.md) | CREATE / ALTER / DROP |
-| `controlFlow` | [configurations/controlFlow.md](configurations/controlFlow.md) | IF / WHILE / BEGIN-END |
-| `cte` | [configurations/cte.md](configurations/cte.md) | WITH clause |
-| `variables` | [configurations/variables.md](configurations/variables.md) | DECLARE / SET |
-| `joinStatements` | [configurations/joinStatements.md](configurations/joinStatements.md) | JOIN keyword and ON clause alignment |
-| `insertStatements` | — | INSERT column and values lists |
-| `functionCalls` | [configurations/functionCall.md](configurations/functionCall.md) | Function argument formatting |
-| `caseExpressions` | — | CASE / WHEN / THEN / END |
-| `operators` | [configurations/operators.md](configurations/operators.md) | AND/OR, BETWEEN, IN |
+| — | `language` | Always `tsql` |
+| `whitespace.numberOfSpacesInTabs` | `tabWidth` | Default `4` |
+| `whitespace.spacesOrTabs` | `useTabs` | `true` only for `onlyTabs` |
+| `whitespace.newLines.emptyLinesBetweenStatements` | `linesBetweenQueries` | Default `1` |
+| `casing.reservedKeywords` | `keywordCase` | `uppercase` → `upper`, `lowercase` → `lower`, anything else → `preserve` |
+| `casing.builtInFunctions` | `functionCase` | Same mapping |
+| `casing.builtInDataTypes` | `dataTypeCase` | Same mapping |
+| `whitespace.wrapLongLines` / `wrapLinesLongerThan` | `expressionWidth` | `wrapLongLines: false` → `9999` (no wrapping); otherwise `wrapLinesLongerThan` when set |
+| `joinStatements.join.keywordAlignment` + `lists.placeCommasBeforeItems` | `indentStyle` | `tabularLeft` when `keywordAlignment` is `toTable` **and** commas are placed before items |
+| `operators.andOr.alignment` | `logicalOperatorNewline` | `afterOperator` → `after`, anything else → `before` |
+
+The casing options are only set when the style has a `casing` section; otherwise `sql-formatter` keeps its defaults.
+
+### 2. SQL Prompt post-processing
+
+`sql-formatter` does not know most SQL Prompt options, so `sqlFormattingProvider.ts` runs a sequence of post-processing passes on its output. The order matters: several passes rely on the layout produced by the previous ones. In order:
+
+| Pass | Module | What it does |
+|---|---|---|
+| SET line joining | `keywordPaddingFormatter.ts` | Rejoins `SET <option>` / `SET @var = …` that `sql-formatter` splits on two lines |
+| Keyword re-padding | `keywordPaddingFormatter.ts` | Replaces the fixed keyword column of `tabularLeft` with the minimum width needed by each query block |
+| Spaces inside parentheses | provider | `IN`, `TOP`, `EXISTS`, `ANY`, `ALL`, `SOME`, `IF`/`WHILE` conditions (single-line groups only) |
+| Single-statement `IF` / `WHILE` | provider | Puts a one-statement body on its own line |
+| `DECLARE` | `declareFormatter.ts` | Variable lists, data type and value alignment |
+| Procedures and functions | `ddlFormatter.ts` | Parameter list layout, `AS` placement, parameterless procedures |
+| Views and tables | `ddlFormatter.ts` | `CREATE VIEW … AS` layout; `CREATE TABLE` column and constraint layout |
+| `STUFF(… FOR XML PATH …)` | `stuffFormatter.ts` | Layout of the string-aggregation idiom |
+| Comma lists | `listFormatter.ts` | Leading or trailing commas, item breaking, alias and comment alignment, `INSERT` column lists |
+| `CASE` | `caseFormatter.ts` | Collapses `CASE … END` before the list pass, then re-expands it with `WHEN` / `ELSE` / `END` placement |
+| `JOIN … ON` | `joinFormatter.ts` | `JOIN` indentation, `ON` placement and condition alignment, inline `OUTER APPLY` |
+| DDL data types | `ddlFormatter.ts` | Vertical alignment of column data types |
+| Control flow | `controlFlowFormatter.ts` | `BEGIN` / `END` indentation and content indentation of `IF`, `WHILE`, `ELSE` |
+| Semicolons | `semicolonFormatter.ts` | Space or line break before `;` |
+| Procedure body | `ddlFormatter.ts` | Indents the body of procedures and functions |
+| `EXEC` | `execFormatter.ts` | Parameter list layout of `EXEC` calls |
+| Clean-up | provider | `GO` separators, blank lines, `ALTER TABLE … ADD CONSTRAINT`, `FOREIGN KEY` expansion and wrapping, short `EXISTS` subqueries, spacing around `(` |
+
+### 3. Safety guard
+
+Formatting is cosmetic, so it must never change what the query does. `formatGuard.ts` compares the significant characters of the original and of the result, **ignoring whitespace, letter case and `;`**. If any other character was added or removed (in practice, almost always a comma), the edit is discarded and a warning names the difference, for example `removed 1 ","`.
+
+The guard catches characters that appear or disappear; it cannot catch characters that only **move**. For example, a list item moved after a `--` comment on the same line keeps every character but ends up commented out.
+
+---
+
+## Supported options
+
+The tables list the style keys the formatter reads today. **Any other key is accepted and ignored**, including keys that `styleLoader.ts` already declares in its type: declaring a key is not the same as implementing it.
+
+### Casing and whitespace
+
+| Key | Values | Effect |
+|---|---|---|
+| `casing.reservedKeywords` | `uppercase`, `lowercase`, `preserveCase` | Keyword case (engine, plus `BEGIN` / `END` / `ELSE` in the control flow pass) |
+| `casing.builtInFunctions` | same | Built-in function case |
+| `casing.builtInDataTypes` | same | Data type case |
+| `whitespace.numberOfSpacesInTabs` | number (default `4`) | Indent width, used by every pass |
+| `whitespace.spacesOrTabs` | `onlySpaces`, `onlyTabs`, `spacesAndTabs` | Tabs only with `onlyTabs` |
+| `whitespace.wrapLongLines` | boolean | `false` disables wrapping |
+| `whitespace.wrapLinesLongerThan` | number | Maximum line length for the engine and for the list, `DECLARE`, `EXEC`, `SET` and `FOREIGN KEY` wrapping |
+| `whitespace.whiteSpaceBeforeSemiColon` | `none`, `spaceBefore`, `newLineBefore` | Placement of `;` |
+| `whitespace.newLines.emptyLinesBetweenStatements` | number (default `1`) | Blank lines between statements |
+
+### Lists, parentheses and `INSERT`
+
+The comma-list, `DECLARE` and `EXEC` passes only run when `lists.placeCommasBeforeItems` is `true`: with trailing commas, `alignAliases`, `alignComments` and the `INSERT` column options have no effect and the lists stay as `sql-formatter` produces them.
+
+| Key | Values | Effect |
+|---|---|---|
+| `lists.placeCommasBeforeItems` | boolean | Leading commas (`SELECT`, `GROUP BY`, `ORDER BY`, `DECLARE`, `EXEC`, procedure parameters, `STUFF`) |
+| `lists.placeSubsequentItemsOnNewLines` | `never`, `always`, `ifLongerThanMaxLineLength`, … | One item per line, or packed items |
+| `lists.alignAliases` | boolean | Aligns `AS alias` in `SELECT` lists |
+| `lists.alignComments` | boolean | Aligns trailing `--` comments in lists |
+| `parentheses.addSpacesInsideParentheses` | boolean | `( a, b )` instead of `(a, b)` in the supported constructs |
+| `insertStatements.columns.parenthesisStyle` | any value | When set, enables the `INSERT` column-list layout |
+| `insertStatements.columns.placeSubsequentColumnsOnNewLines` | `never`, `always`, `whenLong`, `ifLongerThanMaxLineLength` | Breaking of `INSERT` column lists |
+
+### DDL, control flow and variables
+
+| Key | Values | Effect |
+|---|---|---|
+| `ddl.parenthesisStyle` | any value | When absent and `ddl.collapseShortStatements` is `true`, `CREATE TABLE` uses the compact scripting layout |
+| `ddl.collapseShortStatements` | boolean | See above |
+| `ddl.indentClauses` | boolean | Indents the `AS` of views and the body of procedures and functions |
+| `ddl.indentParenthesesContents` | boolean | Extra indent for procedure parameters and table definitions |
+| `ddl.placeFirstProcedureParameterOnNewLine` | `always`, `never`, `ifMultiple` | First procedure parameter on its own line |
+| `ddl.placeConstraintColumnsOnNewLines` | `ifLongerOrMultipleColumns` | Expands multi-column `FOREIGN KEY` constraints vertically |
+| `ddl.verticallyAlignDataTypes` | boolean | Aligns column data types in `CREATE` / `ALTER TABLE` |
+| `controlFlow.indentBeginAndEndKeywords` | boolean | Indents `BEGIN` / `END` one level under `IF`, `WHILE`, `ELSE`; also enables view and procedure body indentation |
+| `controlFlow.indentContentsOfStatements` | boolean (default `true`) | Indents the content of `BEGIN … END` |
+| `variables.alignDataTypesAndValues` | boolean (default `true`) | Aligns data types and values in `DECLARE` lists |
+
+### Joins, operators and `CASE`
+
+| Key | Values | Effect |
+|---|---|---|
+| `joinStatements.join.keywordAlignment` | `toTable`, … (default `toFrom`) | `toTable` enables the tabular layout (see the engine mapping) and `JOIN` re-indentation |
+| `joinStatements.on.placeOnNewLine` | boolean | `ON` on its own line; implied when `on.keywordAlignment` is set |
+| `joinStatements.on.keywordAlignment` | `indented`, `toJoin`, `toTable` | Column of the `ON` keyword |
+| `joinStatements.on.conditionAlignment` | `toInner`, … | `toInner` aligns `AND` / `OR` conditions of the `ON` clause |
+| `operators.andOr.alignment` | `toFirstListItem`, `beforeOperator`, `afterOperator` | Line break before or after `AND` / `OR` (engine only) |
+| `caseExpressions` | section present | Enables the `CASE` pass; without the section `CASE` is left as the engine formats it |
+| `caseExpressions.placeFirstWhenOnNewLine` | `always`, `never`, `ifInputExpression` (default `always`) | First `WHEN` on a new line |
+| `caseExpressions.whenAlignment` | `toCase`, `indented`, `toFirstItem` (default `toCase`) | Column of `WHEN` |
+| `caseExpressions.alignElseToWhen` | boolean (default `true`) | `ELSE` aligned with `WHEN` |
+| `caseExpressions.placeElseOnNewLine` | boolean (default `true`) | `ELSE` on its own line |
+| `caseExpressions.placeEndOnNewLine` | boolean (default `true`) | `END` on its own line |
+| `caseExpressions.endAlignment` | `toCase`, `indented`, `toFirstItem` (default `toCase`) | Column of `END` |
+
+### Accepted but not applied yet
+
+These keys are declared in `SqlPromptStyleJson` but no pass reads them. Setting them has no effect:
+
+- `casing.useObjectDefinitionCase`
+- `lists.addSpaceBeforeComma`, `addSpaceAfterComma`, `placeFirstItemOnNewLines`, `alignSubsequentItemsWithFirstItem`, `alignClauseItems`, `alignItemsAcrossClauses`, `alignItemsToTabStops`, `commaAlignment`
+- `parentheses.collapseParenthesesShorterThan`
+- `whitespace.newLines.emptyLinesAfterBatchSeparator`, `preserveExistingEmptyLinesBetweenStatements`, `preserveExistingEmptyLinesAfterBatchSeparator`
+- `operators.between.*`, `operators.in.*`
+- the whole `dml`, `cte` and `functionCalls` sections
+- `ddl.overrideParenthesesForCreateAlter`, `indentContents`, `placeClosingParenthesisOnNewLine`, `firstDefinitionBreakType`, `placeFirstDefinitionOnNewLine`, `collapseStatementsShorterThan`, `breakOnConstraints`, `constraintColumnsBreakType`, `verticallyAlignColumnDefinitions`, `openingParenthesisAlignment`, `openingParenthesisBreakType`, `closingParenthesisAlignment`, `contentsBreakType`
+- `controlFlow.collapseStatementsShorterThan`, `collapseShortStatements`
+- `joinStatements.join.indentJoinTable`
+- `insertStatements.columns.indentContents`, `insertStatements.values.*`
+- `caseExpressions.placeExpressionOnNewLine`, `expressionAlignment`, `placeThenOnNewLine`, `collapseCaseExpressionsShorterThan`, `collapseShortCaseExpressions`
+
+---
+
+## Tests
+
+```bash
+cd client && npm test
+```
+
+- Unit tests for each pass are in `client/src/formatter/__tests__/`.
+- `examples.test.ts` checks that every fixture in `client/src/formatter/__tests__/examples/<profile>/` is a fixed point: formatting the expected output must return it unchanged. Each profile folder holds one `config.json` (the style) and the `.sql` fixtures.
+- Fixtures that do not pass yet are kept in [example-not-passing/](example-not-passing/), with their analysis.
+
+---
+
+## Known limitations
+
+- **The fixture suite does not run the shipped pipeline.** `examples.test.ts` contains its own copy of the provider pipeline, and the two have diverged. Some fixtures that pass in the suite are formatted differently by the extension, notably the `4_Scripting` profile. Unifying them is tracked in issue #16.
+- **Text-level passes.** The post-processing passes are regular expressions on the formatted text. They do not distinguish code from string literals and comments, so a keyword inside a string or a comment can be reformatted, and list passes can misplace items next to a `--` comment.
+- **`STUFF()`, nested parentheses and nested `AND` / `OR`** are not formatted correctly in every profile; see [example-not-passing/example7-formatting-issues.md](example-not-passing/example7-formatting-issues.md).
+- **Whole document only**: there is no range formatting and no format-on-type.
 
 ---
 
 ## Architecture
 
-```
+```text
 client/src/formatter/
-├── styleLoader.ts            Reads .json files from the configured folder
-├── formatOptionsMapper.ts    Maps SqlPromptStyleJson → formatter engine options
-└── sqlFormattingProvider.ts  DocumentFormattingEditProvider implementation
+├── styleLoader.ts               Reads the style files; declares SqlPromptStyleJson
+├── formatOptionsMapper.ts       Maps a style to sql-formatter options
+├── sqlFormattingProvider.ts     DocumentFormattingEditProvider: runs the pipeline
+├── formatGuard.ts               Rejects results that alter the query
+├── keywordPaddingFormatter.ts   SET joining, keyword column width
+├── listFormatter.ts             Comma lists, INSERT column lists
+├── declareFormatter.ts          DECLARE lists
+├── ddlFormatter.ts              Procedures, functions, views, tables
+├── stuffFormatter.ts            STUFF(… FOR XML PATH …)
+├── caseFormatter.ts             CASE expressions
+├── joinFormatter.ts             JOIN / ON / APPLY
+├── controlFlowFormatter.ts      BEGIN / END, IF / WHILE / ELSE
+├── semicolonFormatter.ts        Semicolon placement
+└── execFormatter.ts             EXEC parameter lists
 ```
 
-The formatter lives entirely in the extension client; the language server is not involved.
+The status bar item, the style picker and the configuration listeners are in `client/src/extension.ts`.
 
-## Future Work
+## Future work
 
-- Support file-watcher on `stylesFolder` for live-reload when new style files are added
-- Map additional SQL Prompt options: `indentStyle`, CTE alignment, DDL parenthesis layout
-- Support `.sqlpromptstylev2` XML format (legacy Redgate export)
+- Run the shipped pipeline in the fixture suite (issue #16).
+- Protect string literals and comments from the text-level passes.
+- Implement the options listed under [Accepted but not applied yet](#accepted-but-not-applied-yet).
+- Watch `stylesFolder` so that new style files appear without reopening the picker.
+- Support the legacy `.sqlpromptstylev2` XML format.
