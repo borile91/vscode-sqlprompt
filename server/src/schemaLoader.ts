@@ -195,7 +195,8 @@ export class SchemaLoader {
                 c.is_identity,
                 c.is_computed,
                 CASE WHEN c.default_object_id <> 0 THEN 1 ELSE 0 END AS has_default,
-                CASE WHEN so.type = 'U' AND pk.column_id IS NOT NULL THEN 1 ELSE 0 END AS is_primary_key
+                CASE WHEN so.type = 'U' AND pk.column_id IS NOT NULL THEN 1 ELSE 0 END AS is_primary_key,
+                CASE WHEN so.type = 'V' THEN 1 ELSE 0 END AS is_view
             FROM schema_objects so
             INNER JOIN sys.schemas s ON so.schema_id = s.schema_id
             INNER JOIN sys.columns c ON so.object_id = c.object_id
@@ -220,6 +221,8 @@ export class SchemaLoader {
                     name: row.table_name,
                     columns: [],
                     foreignKeys: [],
+                    // Serve all'elenco delle viste per l'ALTER scaffolding.
+                    isView: row.is_view === 1 || row.is_view === true,
                 });
             }
 
