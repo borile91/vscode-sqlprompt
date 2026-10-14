@@ -165,6 +165,32 @@ async function query(
     return toResultSet(result);
 }
 
+/** Errore SQL Server 195: "'X' is not a recognized built-in function name". */
+const ERROR_UNKNOWN_BUILT_IN_FUNCTION = 195;
+
+/**
+ * True quando l'errore indica che il server non supporta la query aggregante
+ * (`STRING_AGG` / `WITHIN GROUP` assenti o livello di compatibilità).
+ *
+ * Timeout, connessione persa, permessi e simili non rientrano: lì la query
+ * per-riga fallirebbe allo stesso modo, solo dopo molto più lavoro.
+ */
+export function isAggregationUnsupportedError(err: unknown): boolean {
+    const e = err as any;
+    const numbers = [e?.number, e?.errorNumber, e?.code, e?.data?.number];
+    if (numbers.some((n) => Number(n) === ERROR_UNKNOWN_BUILT_IN_FUNCTION)) {
+        return true;
+    }
+
+    const message = String(e?.message ?? e ?? '').toLowerCase();
+    return (
+        message.includes('string_agg') ||
+        message.includes('is not a recognized built-in function name') ||
+        message.includes("near 'within'") ||
+        message.includes('compatibility level')
+    );
+}
+
 /**
  * Runs the aggregating form of a query, falling back to the legacy one-row-per-
  * record form when the server rejects it.
@@ -173,6 +199,8 @@ async function query(
  * to detect that up front — Azure SQL still reports a 12.x product version — so
  * the aggregating query is simply attempted. It fails at compile time on an
  * older server, before any data is touched, which makes the probe cheap.
+ *
+ * Solo quel rifiuto attiva il fallback: ogni altro errore viene rilanciato.
  */
 async function queryWithFallback(
     runner: QueryRunner,
@@ -184,6 +212,9 @@ async function queryWithFallback(
     try {
         return { result: await query(runner, ownerUri, aggregating), usedLegacy: false };
     } catch (err: any) {
+        if (!isAggregationUnsupportedError(err)) {
+            throw err;
+        }
         console.log(
             `[SQL Prompt] ${label}: aggregated query rejected (${err?.message ?? err}), ` +
             `falling back to the per-row query.`,
