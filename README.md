@@ -58,10 +58,7 @@ SQL Prompt includes a document formatter that integrates with VS Code's **Format
 
 ### Style selection
 
-The active formatting style is shown in the status bar. Click it to open the style picker, or use:
-
-- Command Palette > `SQL Prompt: Select Formatting Style`
-- `SQL Prompt: Format with <Style Name>` — one command per loaded style file, bindable to keyboard shortcuts
+The active formatting style is shown in the status bar. Click it to open the style picker, or use Command Palette > `SQL Prompt: Select Formatting Style`. **Format Document** always uses the active style.
 
 To make SQL Prompt the default formatter for SQL files, add this to your `settings.json`:
 
@@ -103,7 +100,7 @@ The folder is scanned immediately — no reload required. Every `.json` file in 
 }
 ```
 
-See [docs/formatting/Defaults.json](docs/formatting/Defaults.json) for the full set of supported keys, and [docs/formatting/FORMATTING.md](docs/formatting/FORMATTING.md) for the complete option reference.
+See [docs/formatting/FORMATTING.md](docs/formatting/FORMATTING.md) for the options the formatter applies today, and [docs/formatting/Defaults.json](docs/formatting/Defaults.json) for the full set of SQL Prompt keys (not all of them are implemented yet).
 
 ## Commands
 
@@ -113,7 +110,6 @@ See [docs/formatting/Defaults.json](docs/formatting/Defaults.json) for the full 
 | `SQL Prompt: Disconnect` | Disconnects the SQL Prompt language server |
 | `SQL Prompt: Reload Schema` | Forces a schema reload |
 | `SQL Prompt: Select Formatting Style` | Opens the style picker |
-| `SQL Prompt: Format with <Style Name>` | Formats the document using a specific style |
 
 ## Settings reference
 
