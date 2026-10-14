@@ -78,10 +78,15 @@ npm run compile
 
 ## Release process
 
-1. Run the `Release Extension` workflow manually from GitHub Actions.
-2. Select the release type. The default `patch` option increments the revision automatically, for example `0.1.0` to `0.1.1`.
-3. The workflow updates `package.json` and `package-lock.json`, builds the extension, packages `vscode-sqlprompt.vsix`, commits the version bump, creates the matching Git tag, and pushes both commit and tag.
-4. The workflow uploads the VSIX file to the workflow artifacts and publishes it as a downloadable asset on the GitHub release.
+Releases are automatic: the `Release Extension` workflow (`.github/workflows/release.yaml`) runs on every push to `main` that changes `client/**` or `server/**`, and can also be started manually.
+
+1. Installs dependencies and runs the client and server unit tests; a failing test stops the release.
+2. Sets the version to `0.1.<run number>` in `package.json` and `package-lock.json`.
+3. Builds and packages `vscode-sqlprompt.vsix`, publishes it to the Visual Studio Marketplace and uploads it as a workflow artifact.
+4. Commits the version bump (`chore(release): bump version to …`), creates the matching `v0.1.<n>` tag and pushes both, so pull `main` after a release.
+5. Creates the GitHub release with generated notes and the VSIX attached.
+
+Changes to docs only do not trigger a release.
 
 ## Contribution language and commits
 
