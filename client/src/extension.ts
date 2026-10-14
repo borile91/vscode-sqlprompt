@@ -156,14 +156,18 @@ let usageFlushDebounce: ReturnType<typeof setTimeout> | undefined;
  *
  * Called after a schema sync — so a fresh server process is ranking with the
  * history from the start — and after an accepted completion has been recorded.
+ *
+ * Senza un database d'uso (token non disponibile) pubblica uno storico vuoto:
+ * altrimenti il server continuerebbe a ordinare con quello del DB precedente,
+ * le cui chiavi `schema.nome` coincidono con oggetti omonimi di questo.
  */
 async function publishUsageScores(): Promise<void> {
-    if (!client || !usageStore || !usageDatabase) {
+    if (!client) {
         return;
     }
     try {
         await client.sendRequest('sqlPrompt/updateUsageScores', {
-            entries: usageStore.scores(usageDatabase),
+            entries: usageStore && usageDatabase ? usageStore.scores(usageDatabase) : [],
         });
     } catch (err: any) {
         console.error(`[SQL Prompt] updateUsageScores failed: ${err?.message ?? err}`);
