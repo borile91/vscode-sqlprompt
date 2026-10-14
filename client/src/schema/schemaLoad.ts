@@ -311,28 +311,16 @@ export async function loadObjects(
 /**
  * The databases on the server, for cross-database completion.
  *
- * `listDatabases` is cheaper than a query, but it belongs to the mssql API that
- * is marked for retirement, so a missing or failing one falls back to
- * `sys.databases` rather than silently disabling cross-database completion.
+ * Solo i database ONLINE: uno offline / in ripristino comparirebbe tra i
+ * suggerimenti e il suo caricamento on-demand fallirebbe. Per questo la fonte
+ * primaria è `sys.databases` con il filtro su `state_desc`; `listDatabases`
+ * (API mssql in dismissione, senza filtro di stato) resta solo come ripiego
+ * quando la query non è eseguibile, per non spegnere il cross-database.
  */
 export async function loadDatabases(
     runner: QueryRunner,
     ownerUri: string,
 ): Promise<string[]> {
-    try {
-        if (runner.listDatabases) {
-            const names = await runner.listDatabases(ownerUri);
-            const usable = Array.isArray(names)
-                ? names.filter((n): n is string => typeof n === 'string' && n.length > 0)
-                : [];
-            if (usable.length > 0) {
-                return usable;
-            }
-        }
-    } catch (err: any) {
-        console.log(`[SQL Prompt] listDatabases failed: ${err?.message ?? err}`);
-    }
-
     try {
         const { rows, index } = await query(runner, ownerUri, DATABASES_QUERY);
         const iName = index('name');
@@ -340,9 +328,20 @@ export async function loadDatabases(
             .map((row) => cellText(row[iName]).trim())
             .filter((name) => name.length > 0);
     } catch (err: any) {
-        console.error(`[SQL Prompt] database list unavailable: ${err?.message ?? err}`);
-        return [];
+        console.log(`[SQL Prompt] database list query failed: ${err?.message ?? err}`);
     }
+
+    try {
+        if (runner.listDatabases) {
+            const names = await runner.listDatabases(ownerUri);
+            return Array.isArray(names)
+                ? names.filter((n): n is string => typeof n === 'string' && n.length > 0)
+                : [];
+        }
+    } catch (err: any) {
+        console.error(`[SQL Prompt] database list unavailable: ${err?.message ?? err}`);
+    }
+    return [];
 }
 
 // ── Stage 1: columns ──────────────────────────────────────────────────────────

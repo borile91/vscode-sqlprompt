@@ -183,11 +183,9 @@ export const ROUTINES_QUERY = `
 `;
 
 /**
- * Fallback for `listDatabases`.
- *
- * The mssql API is the preferred source, but it is part of the interface
- * Microsoft has marked for retirement, and cross-database completion is dead
- * without a database list — so there is a query behind it.
+ * Elenco dei database per il cross-database: solo quelli ONLINE, perché uno
+ * offline non è interrogabile. `listDatabases` dell'API mssql non filtra lo
+ * stato, quindi è solo il ripiego quando questa query fallisce.
  */
 export const DATABASES_QUERY = `
     SELECT name
