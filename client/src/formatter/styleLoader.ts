@@ -146,7 +146,9 @@ export async function loadStylesFromFolder(folderPath: string): Promise<LoadedSt
     let entries: fs.Dirent[];
     try {
         entries = await fs.promises.readdir(folderPath, { withFileTypes: true });
-    } catch {
+    } catch (err: any) {
+        // Il chiamante segnala già "nessuno stile": qui si registra il motivo.
+        console.error(`[SQL Prompt] cannot read styles folder ${folderPath}: ${err?.message ?? err}`);
         return [];
     }
 
@@ -162,8 +164,9 @@ export async function loadStylesFromFolder(folderPath: string): Promise<LoadedSt
             const parsed = JSON.parse(raw) as SqlPromptStyleJson;
             const name = parsed.metadata?.name ?? path.basename(entry.name, '.json');
             results.push({ name, filePath, options: parsed });
-        } catch {
-            // Skip unreadable or unparseable files
+        } catch (err: any) {
+            // File illeggibile o JSON non valido: lo stile viene saltato, ma registrato.
+            console.error(`[SQL Prompt] style file skipped ${filePath}: ${err?.message ?? err}`);
         }
     }
 
