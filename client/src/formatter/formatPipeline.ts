@@ -18,6 +18,13 @@ import {
 import { applyDeclareFormatting } from './declareFormatter';
 import { applyExecParamFormatting } from './execFormatter';
 import { applyStuffForXmlFormatting } from './stuffFormatter';
+import {
+    applyCompactStatementCollapses,
+    collapseShortControlFlow,
+    inlineClauseItems,
+    isCompactListStyle,
+    packExecParameters,
+} from './scriptingFormatter';
 
 /**
  * Pipeline di formattazione usata dall'estensione, senza dipendenze da vscode
@@ -28,6 +35,7 @@ export function formatSqlText(text: string, options: SqlPromptStyleJson): string
     let formatted: string;
     const tabWidth = options.whitespace?.numberOfSpacesInTabs ?? 4;
     const spacesInside = options.parentheses?.addSpacesInsideParentheses ?? false;
+    const commaFirst = options.lists?.placeCommasBeforeItems === true;
     formatted = format(text, mapToFormatterOptions(options));
     formatted = applySetLineJoining(formatted);
     // Split GO batch-separator from any statement sql-formatter merged onto the same line
@@ -61,11 +69,15 @@ export function formatSqlText(text: string, options: SqlPromptStyleJson): string
     // always places the body on its own indented line.
     // This must run BEFORE applyControlFlowIndentation so the IF is processed
     // correctly as a single-body statement.
-    formatted = formatted.replace(
-        /^([ \t]*)(IF|WHILE)\b(.*?)[ \t]+((?:COMMIT|ROLLBACK|RETURN|BREAK|CONTINUE|RAISERROR|EXEC|INSERT|UPDATE|DELETE|SELECT|SET\s+@)[^;\n]*;)$/gim,
-        (_, indent, kw, condition, body) =>
-            `${indent}${kw}${condition}\n${indent}${body}`,
-    );
+    // Con controlFlow.collapseShortStatements la riga unica è voluta: la
+    // ricompone collapseShortControlFlow più avanti.
+    if (!options.controlFlow?.collapseShortStatements) {
+        formatted = formatted.replace(
+            /^([ \t]*)(IF|WHILE)\b(.*?)[ \t]+((?:COMMIT|ROLLBACK|RETURN|BREAK|CONTINUE|RAISERROR|EXEC|INSERT|UPDATE|DELETE|SELECT|SET\s+@)[^;\n]*;)$/gim,
+            (_, indent, kw, condition, body) =>
+                `${indent}${kw}${condition}\n${indent}${body}`,
+        );
+    }
     formatted = applyDeclareFormatting(formatted, options);
     formatted = applyDdlProcFormatting(formatted, options, tabWidth);
     formatted = applyDdlParameterlessProcAsFormatting(formatted, options);
@@ -74,17 +86,17 @@ export function formatSqlText(text: string, options: SqlPromptStyleJson): string
     formatted = applyStuffForXmlFormatting(formatted, options);
     formatted = applyLeadingCommaFormat(formatted, options);
     formatted = collapseCaseToSingleLine(formatted, options);
+    formatted = inlineClauseItems(formatted, options, tabWidth);
     formatted = applyJoinOnFormatting(formatted, options, tabWidth);
     formatted = applyCaseFormatting(formatted, options, tabWidth);
     formatted = applyDdlFormatting(formatted, options);
     formatted = applyControlFlowIndentation(formatted, options, tabWidth);
     formatted = applySemicolonFormatting(formatted, options);
     formatted = applyProcBodyIndentation(formatted, options, tabWidth);
-    formatted = applyOuterApplyInlineFormat(
-        formatted,
-        spacesInside,
-
-    );
+    formatted = collapseShortControlFlow(formatted, options, tabWidth);
+    formatted = applyOuterApplyInlineFormat(formatted, spacesInside, commaFirst);
+    formatted = packExecParameters(formatted, options, tabWidth);
+    formatted = applyCompactStatementCollapses(formatted, options, tabWidth);
     formatted = applyExecParamFormatting(formatted, options);
     formatted = removeBlankLinesBeforeEnd(formatted);
     // Move the blank line that sql-formatter places *before* GO to *after* GO.
@@ -98,6 +110,10 @@ export function formatSqlText(text: string, options: SqlPromptStyleJson): string
     formatted = formatted.replace(/\n\n+([ \t]*GO\b[ \t]*)$/gi, '\n$1');
     // Normalize multiple blank lines after GO to exactly one blank line.
     formatted = formatted.replace(/(^[ \t]*GO\b[ \t]*)\n{3,}/gim, '$1\n\n');
+    // Con emptyLinesAfterBatchSeparator: 0 nessuna riga vuota dopo GO.
+    if ((options.whitespace?.newLines?.emptyLinesAfterBatchSeparator ?? 1) === 0) {
+        formatted = formatted.replace(/^([ \t]*GO\b[ \t]*)\n\n/gim, '$1\n');
+    }
     // Remove blank lines between consecutive SET @variable assignment statements.
     // sql-formatter adds linesBetweenQueries blank lines between all statements,
     // but consecutive variable assignments should be grouped without blank lines.
@@ -118,8 +134,18 @@ export function formatSqlText(text: string, options: SqlPromptStyleJson): string
     // Normalize ALTER TABLE and ADD CONSTRAINT keyword padding from tabularLeft mode.
     formatted = formatted.replace(/\bALTER\s{2,}TABLE\b/g, 'ALTER TABLE');
     formatted = formatted.replace(/\bADD\s{2,}CONSTRAINT\b/g, 'ADD CONSTRAINT');
+    // sql-formatter a volte spezza WITH\n    CHECK su tre righe dopo ALTER TABLE: prima si uniscono.
+    formatted = formatted.replace(/^(ALTER\s+TABLE[^\n]+\n)(WITH)\n[ \t]*(CHECK)\b/gim, '$1$2 $3');
     // Join ALTER TABLE ... WITH CHECK that sql-formatter splits onto a separate line.
     formatted = formatted.replace(/^(ALTER TABLE[^\n]+)\n(WITH CHECK)/gim, '$1 $2');
+    // Con ddl.collapseShortStatements, ALTER TABLE … ADD CONSTRAINT brevi su una riga.
+    // Soglia fissa: riga unita strettamente più corta di 97 caratteri.
+    if (options.ddl?.collapseShortStatements) {
+        formatted = formatted.replace(/^(ALTER\s+TABLE\s+\S+)\n(ADD\s+CONSTRAINT\s+.+)$/gim, (m, p1, p2) => {
+            const joined = `${p1} ${p2}`;
+            return joined.length < 97 ? joined : m;
+        });
+    }
     // Add spaces inside double-parenthesised DEFAULT values (e.g. DEFAULT ((0)) → DEFAULT (( 0 ))).
     if (spacesInside) {
         formatted = formatted.replace(/\bDEFAULT\s*\(\(([^)]+)\)\)/g, 'DEFAULT (( $1 ))');
@@ -179,8 +205,19 @@ export function formatSqlText(text: string, options: SqlPromptStyleJson): string
     }
     // Reduce 2+ consecutive blank lines to 1 within proc/function bodies (4+ space indent).
     formatted = formatted.replace(/\n\n\n([ \t]{4,})/gm, '\n\n$1');
+    // Stili compatti: una riga vuota tra istruzioni adiacenti (con la virgola
+    // iniziale solo tra quelle al primo livello del corpo, 8 spazi).
+    if (isCompactListStyle(options) && !commaFirst) {
+        formatted = formatted.replace(/^(.+;)\n(?=[ \t]*(?!ELSE\b|END\b|CATCH\b|GO\b)\S)/gm, '$1\n\n');
+    } else if (isCompactListStyle(options)) {
+        formatted = formatted.replace(/^(.+;)\n(?=        (?!ELSE\b|END\b|CATCH\b)\S)/gm, '$1\n\n');
+    }
     // Remove single blank lines between consecutive standalone DECLARE statements.
-    formatted = formatted.replace(/([ \t]+DECLARE[ \t]+@[^\n]+;[ \t]*\n)\n([ \t]+DECLARE[ \t]+@)/gm, '$1$2');
+    formatted = formatted.replace(/([ \t]*DECLARE[ \t]+@[^\n]+;[ \t]*\n)\n([ \t]*DECLARE[ \t]+@)/gm, '$1$2');
+    // Stili compatti senza virgola iniziale: SET @var consecutive senza righe vuote.
+    if (isCompactListStyle(options) && !commaFirst) {
+        formatted = formatted.replace(/([ \t]*SET[ \t]+@\w[^\n]+;[ \t]*\n)\n([ \t]*SET[ \t]+@\w)/gm, '$1$2');
+    }
     // Wrap long SET @var = ... concatenation lines that exceed wrapLinesLongerThan
     // after re-indentation (proc body adds extra indent, pushing the line over the limit).
     const wrapMaxLen = options.whitespace?.wrapLinesLongerThan;
@@ -223,6 +260,11 @@ export function formatSqlText(text: string, options: SqlPromptStyleJson): string
     // Only match horizontal whitespace (not newlines) so that a procedure
     // parameter list  `proc_name\n    (`  is not collapsed to `proc_name(`.
     formatted = formatted.replace(/(\.\w+)[ \t]+\(/g, '$1(');
+    // La regola precedente toglie anche lo spazio voluto in CREATE TABLE,
+    // CREATE/ALTER PROCEDURE/FUNCTION e REFERENCES: lo si rimette.
+    formatted = formatted.replace(/^(CREATE\s+TABLE\s+\S+)\(/gim, '$1 (');
+    formatted = formatted.replace(/^((?:CREATE|ALTER)\s+(?:OR\s+REPLACE\s+)?(?:PROCEDURE|FUNCTION|PROC)\s+\S+)\(/gim, '$1 (');
+    formatted = formatted.replace(/\bREFERENCES\s+([^\s(]+)\(/g, 'REFERENCES $1 (');
     // Restore space before trailing ( on REFERENCES lines created by FK expansion
     // (the dot-strip above removes the space before the trailing opening paren).
     if (expandConstraint) {
