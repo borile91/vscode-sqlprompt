@@ -31,7 +31,14 @@ export class SqlFormattingProvider implements DocumentFormattingEditProvider {
         let formatted: string;
         try {
             formatted = formatSqlText(text, style.options);
-        } catch {
+        } catch (err: any) {
+            // Il documento resta invariato, ma l'errore va reso visibile:
+            // altrimenti il comando sembrerebbe semplicemente non fare nulla.
+            const message = err?.message ?? String(err);
+            console.error(`[SQL Prompt] formatting failed: ${err?.stack ?? message}`);
+            window.showErrorMessage(
+                `SQL Prompt: formatting failed (${message}). The document was left unchanged.`,
+            );
             return [];
         }
 
