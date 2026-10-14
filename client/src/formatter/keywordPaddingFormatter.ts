@@ -30,8 +30,15 @@ export function applySetLineJoining(sql: string): string {
     // a newline, then optional leading whitespace on the next line.
     // Replace with the leading indent + "SET " (the next-line indent is dropped
     // because sql-formatter adds an extra tabWidth indent for the "clause content").
+    // Non unisce la SET di un UPDATE con più assegnazioni (lista a virgole):
+    // la riga successiva termina con la virgola separatrice, o la virgola sta
+    // da sola sulla riga dopo (elemento con commento). Resta una lista con la
+    // keyword su riga propria, gestita da applyLeadingCommaFormat.
     return sql
-        .replace(/^([ \t]*SET)[ \t]*\n[ \t]*/gm, '$1 ')
+        .replace(
+            /^([ \t]*SET)[ \t]*\n[ \t]*(?![^\n]*,[ \t]*(?:--[^\n]*)?(?:\n|$))(?![^\n]*\n[ \t]*,[ \t]*(?:\n|$))/gm,
+            '$1 ',
+        )
         // sql-formatter tabularLeft pads sub-keywords inside SET statements to 10
         // chars (e.g. "NOCOUNT   ON" → 7 chars padded to 10).  After the join
         // above this becomes "SET NOCOUNT   ON;" — collapse excess spaces.
