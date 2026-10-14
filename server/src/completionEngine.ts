@@ -304,6 +304,19 @@ export function buildCompletions(
     }
     // CAST(x AS / TRY_CAST(x AS / CONVERT( / TRY_CONVERT(: un tipo di dato.
     const fnName = (context.functionName ?? '').toUpperCase();
+
+    // OVER (: PARTITION BY / ORDER BY, le colonne, ASC/DESC e la clausola di finestra.
+    if (fnName === 'OVER') {
+      const over = suggestKeywords(
+        statementRange.text.slice(0, context.cursorOffset - statementRange.start),
+      );
+      const overItems = buildContextKeywordCompletions(over.keywords, wordRange);
+      if (!over.keywordRequired) {
+        overItems.push(...buildColumnCompletionsForRefs(refs, true, false));
+        overItems.push(...buildColumnCompletionsForSources(context.visibleSources));
+      }
+      return overItems;
+    }
     const wantsType =
       ((fnName === 'CAST' || fnName === 'TRY_CAST') && /\bAS\s+\w*$/i.test(lineText)) ||
       ((fnName === 'CONVERT' || fnName === 'TRY_CONVERT') && (context.parameterIndex ?? 0) === 0);
@@ -1906,20 +1919,28 @@ function buildSqlKeywordCompletions(replaceRange: Range): CompletionItem[] {
 /** Parole chiave dopo cui non segue un nome o un'espressione da suggerire. */
 const NO_RETRIGGER = new Set(['ASC', 'DESC', 'NULL', 'NOT NULL', 'IS NULL', 'IS NOT NULL', 'TOP']);
 
+/** Parole chiave inserite come snippet: `OVER ()` con il cursore tra le parentesi. */
+const KEYWORD_SNIPPETS: Record<string, string> = { OVER: 'OVER ($0)' };
+
 /**
  * Parole chiave di contesto (vedi `suggestKeywords`): in cima alla lista, nell'ordine
  * dato, e sostituiscono la parola digitata.
  */
 function buildContextKeywordCompletions(keywords: string[], replaceRange: Range): CompletionItem[] {
-  return keywords.map((kw, idx) => ({
-    label: kw,
-    kind: CompletionItemKind.Keyword,
-    insertText: `${kw} `,
-    insertTextFormat: InsertTextFormat.PlainText,
-    textEdit: TextEdit.replace(replaceRange, `${kw} `),
-    sortText: `00_kw_${idx.toString().padStart(2, '0')}`,
-    command: NO_RETRIGGER.has(kw) ? undefined : RETRIGGER_SUGGEST,
-  }));
+  return keywords.map((kw, idx) => {
+    const snippet = KEYWORD_SNIPPETS[kw];
+    // Una clausola di finestra completa (ROWS BETWEEN …) chiude l'OVER: niente da riproporre.
+    const retrigger = !NO_RETRIGGER.has(kw) && !/^(ROWS|RANGE) BETWEEN /.test(kw);
+    return {
+      label: kw,
+      kind: CompletionItemKind.Keyword,
+      insertText: snippet ?? `${kw} `,
+      insertTextFormat: snippet ? InsertTextFormat.Snippet : InsertTextFormat.PlainText,
+      textEdit: TextEdit.replace(replaceRange, snippet ?? `${kw} `),
+      sortText: `00_kw_${idx.toString().padStart(2, '0')}`,
+      command: retrigger ? RETRIGGER_SUGGEST : undefined,
+    };
+  });
 }
 
 // ── Helper: resolve VisibleSource[] → ResolvedRef[] ──────────────────────────

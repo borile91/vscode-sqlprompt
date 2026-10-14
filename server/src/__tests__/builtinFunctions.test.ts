@@ -139,3 +139,41 @@ describe('builtinFunctions — signature help', () => {
     assert.equal(signature('SELECT o.OrderId FROM dbo.Orders o'), null);
   });
 });
+
+describe('builtinFunctions — clausola OVER', () => {
+  /** Etichette con il cursore su `|` dentro una query completa. */
+  function labelsAt(sqlWithCursor: string) {
+    const cursor = sqlWithCursor.indexOf('|');
+    const sql = sqlWithCursor.replace('|', '');
+    const document = TextDocument.create('file:///t.sql', 'sql', 1, sql);
+    const context = resolveContext(sql, 0, cursor, tables);
+    return buildCompletions(context, tables, routines, document, document.positionAt(cursor), {
+      text: sql, start: 0, end: sql.length, cursorOffset: cursor,
+    });
+  }
+  const names = (sql: string) => labelsAt(sql).map((i) => String(i.label));
+
+  it('dopo SUM(x) o ROW_NUMBER() propone OVER per primo, con il cursore tra le parentesi', () => {
+    const items = labelsAt('SELECT SUM(o.OrderId) | FROM dbo.Orders o');
+    assert.equal(items[0].label, 'OVER');
+    assert.equal((items[0].textEdit as any).newText, 'OVER ($0)');
+    assert.equal(names('SELECT ROW_NUMBER() | FROM dbo.Orders o')[0], 'OVER');
+    assert.ok(!names('SELECT LEN(o.OrderId) | FROM dbo.Orders o').includes('OVER'));
+  });
+
+  it('dentro OVER ( solo PARTITION BY e ORDER BY', () => {
+    assert.deepEqual(names('SELECT ROW_NUMBER() OVER (|) FROM dbo.Orders o'), ['PARTITION BY', 'ORDER BY']);
+  });
+
+  it('dopo PARTITION BY le colonne, poi ORDER BY', () => {
+    assert.ok(names('SELECT ROW_NUMBER() OVER (PARTITION BY |) FROM dbo.Orders o').includes('o.OrderDate'));
+    assert.equal(names('SELECT ROW_NUMBER() OVER (PARTITION BY o.OrderId |) FROM dbo.Orders o')[0], 'ORDER BY');
+  });
+
+  it('dopo le colonne di ORDER BY: ASC, DESC e la clausola di finestra', () => {
+    const out = names('SELECT SUM(o.OrderId) OVER (ORDER BY o.OrderDate |) FROM dbo.Orders o');
+    assert.deepEqual(out.slice(0, 2), ['ASC', 'DESC']);
+    assert.ok(out.includes('ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW'));
+    assert.ok(!names('SELECT SUM(o.OrderId) OVER (ORDER BY o.OrderDate DESC |) FROM dbo.Orders o').includes('ASC'));
+  });
+});
