@@ -962,3 +962,156 @@ describe('completionEngine — ordine rispetto alla parola digitata', () => {
     assert.equal(labels[0], 'ARTICOLI');
   });
 });
+
+// ── Predicati FK dopo ON / JOIN / WHERE ───────────────────────────────────────
+
+describe('completionEngine — predicati FK', () => {
+  const col = (name: string) => ({ name, dataType: 'int', maxLength: null, isNullable: false, isPrimaryKey: false });
+  const parent: TableInfo = { schema: 'dbo', name: 'Parent', columns: [col('A'), col('B'), col('Id')], foreignKeys: [] };
+  // Child(ParentA, ParentB) -> Parent(A, B): FK composita.
+  const child: TableInfo = {
+    schema: 'dbo',
+    name: 'Child',
+    columns: [col('ParentA'), col('ParentB'), col('OtherA'), col('OtherB'), col('Flag')],
+    foreignKeys: [
+      {
+        name: 'FK_Child_Parent',
+        parentSchema: 'dbo',
+        parentTable: 'Child',
+        referencedSchema: 'dbo',
+        referencedTable: 'Parent',
+        mappings: [
+          { column: 'ParentA', referencedColumn: 'A' },
+          { column: 'ParentB', referencedColumn: 'B' },
+        ],
+      },
+    ],
+  };
+  // Seconda FK composita tra le stesse tabelle.
+  const childTwoFks: TableInfo = {
+    ...child,
+    foreignKeys: [
+      ...child.foreignKeys,
+      {
+        name: 'FK_Child_Parent_Other',
+        parentSchema: 'dbo',
+        parentTable: 'Child',
+        referencedSchema: 'dbo',
+        referencedTable: 'Parent',
+        mappings: [
+          { column: 'OtherA', referencedColumn: 'A' },
+          { column: 'OtherB', referencedColumn: 'B' },
+        ],
+      },
+    ],
+  };
+  // Zebra(ParentId) -> Parent(Id): FK a colonna singola.
+  const zebra: TableInfo = {
+    schema: 'dbo',
+    name: 'Zebra',
+    columns: [col('ParentId')],
+    foreignKeys: [
+      {
+        name: 'FK_Zebra_Parent',
+        parentSchema: 'dbo',
+        parentTable: 'Zebra',
+        referencedSchema: 'dbo',
+        referencedTable: 'Parent',
+        mappings: [{ column: 'ParentId', referencedColumn: 'Id' }],
+      },
+    ],
+  };
+  const schema = [parent, child, zebra];
+  const COMPOSITE = 'c.ParentA = p.A AND c.ParentB = p.B';
+  const JOIN_ALL = 'ON c → p (ALL: FK_Child_Parent)';
+
+  /** Suggerimenti con il cursore su `|`. */
+  function itemsAt(sqlWithCursor: string, tablesForSql: TableInfo[] = schema) {
+    const cursor = sqlWithCursor.indexOf('|');
+    const sql = sqlWithCursor.replace('|', '');
+    const document = TextDocument.create('file:///fk.sql', 'sql', 1, sql);
+    const context = resolveContext(sql, 0, cursor, tablesForSql);
+    return buildCompletions(context, tablesForSql, emptyRoutines, document, document.positionAt(cursor), {
+      text: sql, start: 0, end: sql.length, cursorOffset: cursor,
+    });
+  }
+  const labelsAt = (sqlWithCursor: string, tablesForSql?: TableInfo[]) =>
+    itemsAt(sqlWithCursor, tablesForSql).map((i) => String(i.label));
+
+  it('FK a colonna singola: un solo predicato, senza voce combinata', () => {
+    const items = itemsAt('SELECT * FROM dbo.Parent p JOIN dbo.Zebra z ON |');
+    const fk = items.filter((i) => String(i.detail).includes('z.ParentId'));
+    assert.deepEqual(fk.map((i) => i.label), ['z.ParentId = p.Id']);
+    const join = labelsAt('SELECT * FROM dbo.Parent p JOIN dbo.Zebra z |');
+    assert.ok(join.includes('ON z.ParentId → p.Id'), join.join(' | '));
+    assert.ok(!join.some((l) => l.includes('(ALL')), join.join(' | '));
+  });
+
+  it('due FK composite tra le stesse tabelle: due voci combinate distinte', () => {
+    const tablesForSql = [parent, childTwoFks];
+    const labels = labelsAt('SELECT * FROM dbo.Parent p JOIN dbo.Child c ON |', tablesForSql);
+    assert.ok(labels.includes(COMPOSITE), labels.join(' | '));
+    assert.ok(labels.includes('c.OtherA = p.A AND c.OtherB = p.B'), labels.join(' | '));
+    const join = labelsAt('SELECT * FROM dbo.Parent p JOIN dbo.Child c |', tablesForSql);
+    const all = join.filter((l) => l.includes('(ALL'));
+    assert.equal(all.length, 2);
+    assert.notEqual(all[0], all[1]);
+  });
+
+  it('ON c: voce combinata presente e la scelta sostituisce c', () => {
+    assert.ok(labelsAt('SELECT * FROM dbo.Parent p JOIN dbo.Child c ON c|').includes(COMPOSITE));
+    const out = accept('SELECT * FROM dbo.Parent p JOIN dbo.Child c ON c|', COMPOSITE, schema, []);
+    assert.equal(out, `SELECT * FROM dbo.Parent p JOIN dbo.Child c ON ${COMPOSITE} `);
+  });
+
+  it('ON attaccato al cursore: la keyword resta e il predicato si accoda', () => {
+    const out = accept('SELECT * FROM dbo.Parent p JOIN dbo.Child c ON|', COMPOSITE, schema, []);
+    assert.equal(out, `SELECT * FROM dbo.Parent p JOIN dbo.Child c ON ${COMPOSITE} `);
+  });
+
+  it('un commento dopo ON non sopprime la voce combinata', () => {
+    assert.ok(labelsAt('SELECT * FROM dbo.Parent p JOIN dbo.Child c ON /* x */ |').includes(COMPOSITE));
+    assert.ok(labelsAt('SELECT * FROM dbo.Parent p JOIN dbo.Child c ON -- x\n|').includes(COMPOSITE));
+  });
+
+  it('tabelle senza alias: predicati qualificati con il nome tabella', () => {
+    const labels = labelsAt('SELECT * FROM dbo.Parent JOIN dbo.Child ON |');
+    assert.ok(labels.includes('Child.ParentA = Parent.A AND Child.ParentB = Parent.B'), labels.join(' | '));
+    assert.ok(labels.includes('Child.ParentB = Parent.B'), labels.join(' | '));
+    assert.ok(!labels.some((l) => /^c\.|\bp\.A\b/.test(l)), labels.join(' | '));
+    const join = labelsAt('SELECT * FROM dbo.Parent JOIN dbo.Child |');
+    assert.ok(join.includes('ON Child → Parent (ALL: FK_Child_Parent)'), join.join(' | '));
+  });
+
+  it('ON c.ParentA = p.A AND c: combinata soppressa, colonna mancante offerta', () => {
+    for (const sql of [
+      'SELECT * FROM dbo.Parent p JOIN dbo.Child c ON c.ParentA = p.A AND |',
+      'SELECT * FROM dbo.Parent p JOIN dbo.Child c ON c.ParentA = p.A AND c|',
+      'SELECT * FROM dbo.Parent p JOIN dbo.Child c ON p.A=c.ParentA AND |',
+    ]) {
+      const labels = labelsAt(sql);
+      assert.ok(!labels.includes(COMPOSITE), `${sql}: ${labels.join(' | ')}`);
+      assert.ok(!labels.includes('c.ParentA = p.A'), `${sql}: ${labels.join(' | ')}`);
+      assert.ok(labels.includes('c.ParentB = p.B'), `${sql}: ${labels.join(' | ')}`);
+    }
+    const out = accept('SELECT * FROM dbo.Parent p JOIN dbo.Child c ON c.ParentA = p.A AND c|', 'c.ParentB = p.B', schema, []);
+    assert.equal(out, 'SELECT * FROM dbo.Parent p JOIN dbo.Child c ON c.ParentA = p.A AND c.ParentB = p.B ');
+  });
+
+  it('un predicato estraneo alla FK non sopprime la voce combinata', () => {
+    const labels = labelsAt('SELECT * FROM dbo.Parent p JOIN dbo.Child c ON c.Flag = 1 AND |');
+    assert.ok(labels.includes(COMPOSITE), labels.join(' | '));
+  });
+
+  it('dopo JOIN: la voce ON si accoda all\'alias e sostituisce una O digitata', () => {
+    const base = 'SELECT * FROM dbo.Parent p JOIN dbo.Child c';
+    assert.equal(accept(`${base}|`, JOIN_ALL, schema, []), `${base} ON ${COMPOSITE} `);
+    assert.equal(accept(`${base} O|`, JOIN_ALL, schema, []), `${base} ON ${COMPOSITE} `);
+  });
+
+  it('WHERE: il predicato sostituisce la parola digitata', () => {
+    const sql = 'SELECT * FROM dbo.Parent p JOIN dbo.Child c ON 1 = 1 WHERE c|';
+    const out = accept(sql, COMPOSITE, schema, []);
+    assert.equal(out, `SELECT * FROM dbo.Parent p JOIN dbo.Child c ON 1 = 1 WHERE ${COMPOSITE} `);
+  });
+});
