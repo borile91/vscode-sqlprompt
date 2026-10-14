@@ -146,13 +146,15 @@ The casing options are only set when the style has a `casing` section; otherwise
 
 The passes that join lines never append code after a `--` comment: when a line to join ends with a comment, the lines are left as they are.
 
+Before the post-processing passes run, string literals and block comments that span several lines are replaced by a one-line placeholder and restored at the end (`withProtectedLiterals` in `sqlLiterals.ts`), so no pass can join, split or re-indent their content. Single-line literals stay visible, so line lengths and thresholds are unchanged. If a pass loses or duplicates a placeholder, the post-processing result is discarded.
+
 If `formatSqlText` throws, the provider logs the error to the console, shows it to the user and leaves the document unchanged.
 
 ### 3. Safety guard
 
 Formatting is cosmetic, so it must never change what the query does. `formatGuard.ts` compares the significant characters of the original and of the result, **ignoring whitespace, letter case and `;`**. If any other character was added or removed (in practice, almost always a comma), the edit is discarded and a warning names the difference, for example `removed 1 ","`.
 
-The same count is repeated on the code alone, with comments stripped, so a pass that moves code into or out of a `--` comment is rejected too. Other characters that only **move** (for example a parenthesis moved to the wrong place) are not detected.
+The same count is repeated on the code alone, with comments stripped, so a pass that moves code into or out of a `--` comment is rejected too. String literals (`'…'`, `N'…'`) are also compared one by one, in order and byte for byte, whitespace and line breaks included: a change inside a string is rejected. Other characters that only **move** (for example a parenthesis moved to the wrong place) are not detected.
 
 ---
 
@@ -258,7 +260,7 @@ cd client && npm test
 
 ## Known limitations
 
-- **Text-level passes.** The post-processing passes are regular expressions on the formatted text. They do not distinguish code from string literals and comments, so a keyword inside a string or a comment can be reformatted, and list passes can misplace items next to a `--` comment.
+- **Text-level passes.** The post-processing passes are regular expressions on the formatted text. Multi-line strings and block comments are masked, but single-line ones are still visible to the regular expressions: a keyword inside a single-line string or comment can match a pattern (the guard rejects any change to a string). `sql-formatter` itself removes the indentation of the inner lines of block comments.
 - **`STUFF()`, nested parentheses and nested `AND` / `OR`** are not formatted correctly in every profile; see [example-not-passing/example7-formatting-issues.md](example-not-passing/example7-formatting-issues.md).
 - **Whole document only**: there is no range formatting and no format-on-type.
 
@@ -273,6 +275,7 @@ client/src/formatter/
 ├── formatPipeline.ts            formatSqlText: the pipeline, no vscode dependency
 ├── sqlFormattingProvider.ts     DocumentFormattingEditProvider: calls formatSqlText, guard
 ├── formatGuard.ts               Rejects results that alter the query
+├── sqlLiterals.ts               Strings and comments: guard extraction, masking for the passes
 ├── keywordPaddingFormatter.ts   SET joining, keyword column width
 ├── listFormatter.ts             Comma lists, INSERT column lists
 ├── declareFormatter.ts          DECLARE lists

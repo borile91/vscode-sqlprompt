@@ -21,11 +21,18 @@
  * that pushes code into a `--` comment is refused too: Lo stesso conteggio
  * sul solo codice rileva codice finito dentro un commento.
  *
+ * String literals are compared one by one, byte for byte: whitespace and line
+ * breaks inside a string are data, so a pass that re-indents or joins the
+ * lines of a multi-line string is refused even though the character counts
+ * match. I letterali devono restare identici, nello stesso ordine.
+ *
  * Deliberately ignored:
  *   - whitespace, which is the whole point of formatting;
  *   - letter case, since keyword casing is a formatting option;
  *   - `;`, which semicolon options may legitimately add or remove.
  */
+
+import { extractStringLiterals } from './sqlLiterals';
 
 /** Characters the formatter is allowed to add or drop. */
 const NEUTRAL_CHARACTERS = new Set([';']);
@@ -102,6 +109,22 @@ function describeChanges(before: Map<string, number>, after: Map<string, number>
     return changes;
 }
 
+/** Primo letterale stringa che differisce tra prima e dopo, come testo. */
+function describeLiteralChange(original: string, formatted: string): string | null {
+    const before = extractStringLiterals(original);
+    const after = extractStringLiterals(formatted);
+    if (before.length !== after.length) {
+        return `string literals changed (${before.length} before, ${after.length} after)`;
+    }
+    const index = before.findIndex((literal, i) => literal !== after[i]);
+    if (index === -1) {
+        return null;
+    }
+    const preview = before[index].replace(/\s+/g, ' ');
+    const shown = preview.length > 40 ? `${preview.slice(0, 40)}…` : preview;
+    return `string literal ${index + 1} changed: ${shown}`;
+}
+
 /** Riassume le differenze: le prime bastano a identificare il problema. */
 function summarise(changes: string[]): string {
     const shown = changes.slice(0, 3).join(', ');
@@ -132,6 +155,12 @@ export function describeFormattingRisk(original: string, formatted: string): str
     );
     if (codeChanges.length > 0) {
         return `code moved into or out of a comment (${summarise(codeChanges)})`;
+    }
+
+    // Stessi caratteri ma contenuto di una stringa cambiato (spazi, a capo).
+    const literalChange = describeLiteralChange(original, formatted);
+    if (literalChange) {
+        return literalChange;
     }
     return null;
 }

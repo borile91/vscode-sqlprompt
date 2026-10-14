@@ -25,6 +25,7 @@ import {
     isCompactListStyle,
     packExecParameters,
 } from './scriptingFormatter';
+import { withProtectedLiterals } from './sqlLiterals';
 
 /**
  * Pipeline di formattazione usata dall'estensione, senza dipendenze da vscode
@@ -32,11 +33,21 @@ import {
  * Può lanciare eccezioni: il chiamante decide come gestirle.
  */
 export function formatSqlText(text: string, options: SqlPromptStyleJson): string {
-    let formatted: string;
+    // sql-formatter tokenizza e rispetta stringhe e commenti; i passaggi
+    // successivi lavorano per righe e regex, quindi stringhe e commenti a
+    // blocco su più righe vengono mascherati e ripristinati alla fine.
+    return withProtectedLiterals(
+        format(text, mapToFormatterOptions(options)),
+        engineOutput => postProcess(engineOutput, options),
+    );
+}
+
+/** Passaggi successivi a sql-formatter, nell'ordine in cui vanno eseguiti. */
+function postProcess(engineOutput: string, options: SqlPromptStyleJson): string {
+    let formatted = engineOutput;
     const tabWidth = options.whitespace?.numberOfSpacesInTabs ?? 4;
     const spacesInside = options.parentheses?.addSpacesInsideParentheses ?? false;
     const commaFirst = options.lists?.placeCommasBeforeItems === true;
-    formatted = format(text, mapToFormatterOptions(options));
     formatted = applySetLineJoining(formatted);
     // Split GO batch-separator from any statement sql-formatter merged onto the same line
     // (e.g. "GO        EXEC proc" → "GO\n\nEXEC proc").
