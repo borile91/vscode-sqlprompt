@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import {
     parseAlterHeader,
     buildObjectListQuery,
-    buildDefinitionQuery,
     toAlterScript,
     bracketQualifiedName,
 } from '../alterScaffold.js';
@@ -47,12 +46,6 @@ describe('queries', () => {
         assert.match(q, /is_ms_shipped = 0/);
         assert.match(buildObjectListQuery('procedure'), /'P', 'PC'/);
         assert.match(buildObjectListQuery('function'), /'FN', 'IF', 'TF', 'FS', 'FT'/);
-    });
-
-    it('escapes quotes in the definition query', () => {
-        const q = buildDefinitionQuery("d'bo", "sp'x");
-        assert.match(q, /N'd''bo'/);
-        assert.match(q, /N'sp''x'/);
     });
 });
 

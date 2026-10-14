@@ -46,6 +46,7 @@ import {
     ROUTINES_QUERY,
     ROUTINES_QUERY_LEGACY,
     buildTableColumnsQuery,
+    buildModuleDefinitionQuery,
 } from './queries';
 
 /** The slice of the mssql connection sharing API this module needs. */
@@ -225,24 +226,6 @@ async function queryWithFallback(
 }
 
 /**
- * Runs `sql` and returns the first cell of the first row as text.
- *
- * For the one-value lookups that are not part of the staged load — currently
- * the `sys.sql_modules` definition behind Go to Definition.
- */
-export async function queryFirstCellText(
-    runner: QueryRunner,
-    ownerUri: string,
-    sql: string,
-): Promise<string | undefined> {
-    const { rows } = await query(runner, ownerUri, sql);
-    const row = rows[0];
-    if (!row) return undefined;
-    const text = cellText(row[0]);
-    return text || undefined;
-}
-
-/**
  * Esegue `sql` e restituisce, per ogni riga, le colonne richieste come testo.
  *
  * Per le piccole letture fuori dal caricamento a stadi: oggi l'elenco dei
@@ -300,6 +283,41 @@ export async function loadTableColumns(
         });
     }
     return columns;
+}
+
+/** La definizione letta non è completa: modificarla e rieseguirla taglierebbe il modulo. */
+export class DefinitionTruncatedError extends Error {
+    constructor(readonly received: number, readonly expected: number) {
+        super(`definition truncated: ${received} of ${expected} characters received`);
+    }
+}
+
+/**
+ * Legge la definizione completa di un modulo (procedura, vista, funzione),
+ * ricomponendo i pezzi di `buildModuleDefinitionQuery`. `undefined` se non c'è;
+ * `DefinitionTruncatedError` se la lunghezza non torna.
+ */
+export async function loadModuleDefinition(
+    runner: QueryRunner,
+    ownerUri: string,
+    schema: string,
+    name: string,
+): Promise<string | undefined> {
+    const { rows, index } = await query(runner, ownerUri, buildModuleDefinitionQuery(schema, name));
+    if (rows.length === 0) return undefined;
+    const iIndex = index('chunk_index');
+    const iChunk = index('chunk');
+    const iTotal = index('total_chars');
+
+    const ordered = [...rows].sort(
+        (a, b) => (cellNumber(a[iIndex]) ?? 0) - (cellNumber(b[iIndex]) ?? 0),
+    );
+    const definition = ordered.map((row) => cellText(row[iChunk])).join('');
+    const expected = cellNumber(ordered[0][iTotal]);
+    if (expected !== null && definition.length !== expected) {
+        throw new DefinitionTruncatedError(definition.length, expected);
+    }
+    return definition || undefined;
 }
 
 // ── Identity and change detection ─────────────────────────────────────────────

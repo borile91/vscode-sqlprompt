@@ -7,6 +7,8 @@ import {
     loadCrossDatabaseSchema,
     loadDatabases,
     loadTableColumns,
+    loadModuleDefinition,
+    DefinitionTruncatedError,
 } from '../schemaLoad.js';
 
 /** Result set nel formato di SQL Tools Service: celle `{ displayValue, isNull }`. */
@@ -214,5 +216,35 @@ describe('loadCrossDatabaseSchema: tipo degli oggetti', () => {
             { s: 'dbo', n: 'Ordini', t: 'U' },
             { s: 'dbo', n: 'vOrdini', t: 'V' },
         ]);
+    });
+});
+
+describe('loadModuleDefinition', () => {
+    const COLUMNS = ['chunk_index', 'chunk', 'total_chars'];
+
+    it('ricompone i pezzi in ordine, anche se arrivano mescolati', async () => {
+        const runner = fakeRunner(() => resultSet(COLUMNS, [[1, 'DEF', 6], [0, 'ABC', 6]]));
+        assert.equal(await loadModuleDefinition(runner, 'uri', 'dbo', 'spX'), 'ABCDEF');
+    });
+
+    it('legge a pezzi più corti del limite di SQL Tools Service e quota i nomi', async () => {
+        const runner = fakeRunner(() => resultSet(COLUMNS, []));
+        await loadModuleDefinition(runner, 'uri', "d'bo", "sp'x");
+        assert.match(runner.queries[0], /SUBSTRING\(sm\.definition/);
+        assert.match(runner.queries[0], /N'd''bo'/);
+        assert.match(runner.queries[0], /N'sp''x'/);
+    });
+
+    it('senza righe (oggetto cifrato o inesistente) restituisce undefined', async () => {
+        const runner = fakeRunner(() => resultSet(COLUMNS, []));
+        assert.equal(await loadModuleDefinition(runner, 'uri', 'dbo', 'spX'), undefined);
+    });
+
+    it('una definizione più corta del previsto è un errore, non un testo tagliato', async () => {
+        const runner = fakeRunner(() => resultSet(COLUMNS, [[0, 'ABC', 70000]]));
+        await assert.rejects(
+            loadModuleDefinition(runner, 'uri', 'dbo', 'spX'),
+            (err: unknown) => err instanceof DefinitionTruncatedError && err.expected === 70000,
+        );
     });
 });
