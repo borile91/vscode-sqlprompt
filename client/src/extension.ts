@@ -66,11 +66,13 @@ import {
     bracketIdentifier,
     bracketQualifiedName,
 } from './alterScaffold';
+import { ConsentMode, SchemaAccessProvider } from './mssql/connectionProvider';
+import { createSchemaAccess } from './mssql/vscodeSchemaAccess';
 
 let client: LanguageClient | undefined;
 let connectionSyncDebounce: ReturnType<typeof setTimeout> | undefined;
 let databaseCheckDebounce: ReturnType<typeof setTimeout> | undefined;
-let mssqlApiPromise: Promise<any | undefined> | undefined;
+let schemaAccessPromise: Promise<SchemaAccessProvider | undefined> | undefined;
 let mssqlIntellisenseSuppressed = false;
 const SCHEMA_CACHE_TTL_MS = 5 * 60 * 1000;
 
@@ -78,7 +80,10 @@ const SCHEMA_CACHE_TTL_MS = 5 * 60 * 1000;
 const lastSyncedDatabasePerUri = new Map<string, string>();
 
 // ── Go to Definition state ────────────────────────────────────────────────────
+/** Editor dell'ultima sincronizzazione riuscita. */
 let lastOwnerUri: string | undefined;
+/** Connessione (`EditorConnection.target`) dell'ultima sincronizzazione riuscita. */
+let lastQueryTarget: string | undefined;
 const definitionScriptCache = new Map<string, string>();
 const onDefinitionContentChange = new EventEmitter<Uri>();
 const inFlightSchemaSyncs = new Map<string, Promise<boolean>>();
@@ -253,57 +258,53 @@ function setCachedSchemaSnapshot(
     });
 }
 
-// Our extension's identifier as published — used by the mssql connectionSharing
-// API so the permission dialog shows "SQL Prompt" and the approval is persisted.
-// Must match `publisher`.`name` from package.json: mssql resolves the caller by
-// this id, and a wrong one makes getActiveDatabase / getActiveEditorConnectionId
-// return undefined, which silently disables the schema cache and the detection
-// of a database change.
+// Our extension's identifier as published — used by the legacy mssql
+// connectionSharing API so the permission dialog shows "SQL Prompt" and the
+// approval is persisted. Must match `publisher`.`name` from package.json: mssql
+// resolves the caller by this id, and a wrong one makes getActiveDatabase /
+// getActiveEditorConnectionId return undefined, which silently disables the
+// schema cache and the detection of a database change. La nuova API
+// (getSharedConnectionsApi) identifica il chiamante da sé, tramite VS Code.
 const EXTENSION_ID = "borile91.vscode-sqlprompt";
 
-async function getMssqlApi(): Promise<any | undefined> {
-    if (mssqlApiPromise) {
-        return mssqlApiPromise;
-    }
-
-    const mssqlExt = extensions.getExtension<any>("ms-mssql.mssql");
-    if (!mssqlExt) {
-        return undefined;
-    }
-
-    mssqlApiPromise = (async () => {
-        try {
-            const api = await mssqlExt.activate();
-            if (!api?.connectionSharing) {
-                return undefined;
-            }
-            return api;
-        } catch {
+/**
+ * Accesso al database tramite mssql: nuova API, `connectionSharing` o nessuno
+ * (in quel caso l'utente è già stato avvisato). Vedi `mssql/connectionProvider.ts`.
+ */
+function getSchemaAccess(): Promise<SchemaAccessProvider | undefined> {
+    if (!schemaAccessPromise) {
+        schemaAccessPromise = createSchemaAccess(EXTENSION_ID).catch((err: any) => {
+            console.error(`[SQL Prompt] mssql connection API setup failed: ${err?.message ?? err}`);
             return undefined;
-        }
-    })();
+        });
+    }
+    return schemaAccessPromise;
+}
 
-    return mssqlApiPromise;
+/** L'editor del documento è quello attivo. */
+function isActiveDocument(document: TextDocument): boolean {
+    return window.activeTextEditor?.document === document;
 }
 
 /**
  * Fetches the stored definition of a module (procedure, view, function).
- * Primary path is the mssql connectionSharing API; the language server is the
- * fallback for direct-connection mode. Returns undefined when unavailable.
+ * Primary path is the mssql connection API (`target` from the schema access
+ * provider); the language server is the fallback for direct-connection mode.
+ * Returns undefined when unavailable.
  * Una definizione arrivata troncata lancia `DefinitionTruncatedError`: meglio
  * nessuno script che uno tagliato.
  */
 async function fetchModuleDefinition(
-    ownerUri: string,
+    target: string,
     schema: string,
     name: string,
 ): Promise<string | undefined> {
-    const api = await getMssqlApi();
-    if (api?.connectionSharing) {
+    const access = await getSchemaAccess();
+    if (access) {
         try {
             const definition = await loadModuleDefinition(
-                api.connectionSharing as QueryRunner,
-                ownerUri,
+                access.runner,
+                target,
                 schema,
                 name,
             );
@@ -347,16 +348,16 @@ async function withDelayedProgress<T>(title: string, task: Promise<T>, delayMs =
 }
 
 /**
- * Lists the user objects of a kind through the mssql connectionSharing API.
- * In direct-connection mode (no connectionSharing) the list comes from the
+ * Lists the user objects of a kind through the mssql connection API.
+ * In direct-connection mode (no mssql API) the list comes from the
  * language server's schema snapshot.
  */
 async function listModules(
-    ownerUri: string,
+    target: string,
     kind: AlterObjectKind,
 ): Promise<Array<{ schema: string; name: string }>> {
-    const api = await getMssqlApi();
-    if (!api?.connectionSharing) {
+    const access = await getSchemaAccess();
+    if (!access) {
         if (!client) {
             throw new Error('language server not ready');
         }
@@ -366,8 +367,8 @@ async function listModules(
         );
     }
     const rows = await queryRowsText(
-        api.connectionSharing as QueryRunner,
-        ownerUri,
+        access.runner,
+        target,
         buildObjectListQuery(kind),
         ['schema_name', 'object_name'],
     );
@@ -610,28 +611,28 @@ async function checkForDatabaseChange(): Promise<void> {
         return;
     }
 
-    const api = await getMssqlApi();
-    if (!api?.connectionSharing) {
+    const access = await getSchemaAccess();
+    // Con l'evento di cambio connessione (nuova API) il polling non serve.
+    if (!access || access.onDidChangeActiveEditorConnection) {
         return;
     }
 
     const ownerUri = editor.document.uri.toString();
 
-    try {
-        const isConnected = await api.connectionSharing.isConnected?.(ownerUri);
-        if (!isConnected) {
-            return;
-        }
+    const connection = await access.getEditorConnection(ownerUri, {
+        isActiveEditor: true,
+        consent: 'silent',
+    });
+    const activeDatabase = connection?.database;
+    const lastDatabase = lastSyncedDatabasePerUri.get(ownerUri);
 
-        const activeDatabase = await api.connectionSharing.getActiveDatabase?.(EXTENSION_ID);
-        const lastDatabase = lastSyncedDatabasePerUri.get(ownerUri);
-
-        if (activeDatabase && lastDatabase !== undefined && activeDatabase !== lastDatabase) {
-            console.log(`[SQL Prompt] Database changed: ${lastDatabase} → ${activeDatabase}, re-syncing schema.`);
+    if (activeDatabase && lastDatabase !== undefined && activeDatabase !== lastDatabase) {
+        console.log(`[SQL Prompt] Database changed: ${lastDatabase} → ${activeDatabase}, re-syncing schema.`);
+        try {
             await syncMssqlConnection();
+        } catch {
+            // Riprova al prossimo controllo.
         }
-    } catch {
-        // API may be unavailable — ignore
     }
 }
 
@@ -652,11 +653,13 @@ async function checkForDatabaseChange(): Promise<void> {
  *
  * `force` skips both caches; that is what `SQL Prompt: Reload Schema` needs in
  * order to pick up a change the token cannot see, such as a renamed column.
+ * `consent` dice se (con la nuova API mssql) si può mostrare il prompt di
+ * consenso all'accesso alle connessioni: vedi `ConsentMode`.
  */
 async function syncMssqlConnection(
-    options: { showNotification?: boolean; force?: boolean } = {},
+    options: { showNotification?: boolean; force?: boolean; consent?: ConsentMode } = {},
 ): Promise<boolean> {
-    const { showNotification = false, force = false } = options;
+    const { showNotification = false, force = false, consent = 'auto' } = options;
 
     if (!client) {
         console.log("SQL Prompt: syncMssqlConnection — client not ready");
@@ -669,8 +672,8 @@ async function syncMssqlConnection(
         return false;
     }
 
-    const api = await getMssqlApi();
-    if (!api?.connectionSharing) {
+    const access = await getSchemaAccess();
+    if (!access) {
         return false;
     }
 
@@ -691,41 +694,24 @@ async function syncMssqlConnection(
     let syncPromise!: Promise<boolean>;
     syncPromise = (async (): Promise<boolean> => {
         try {
-            const runner = api.connectionSharing as QueryRunner;
-
-            try {
-                const isConnected = await api.connectionSharing.isConnected?.(ownerUri);
-                if (!isConnected) {
-                    console.log(
-                        "SQL Prompt: syncMssqlConnection — active SQL file is not connected in mssql",
-                    );
-                    return false;
-                }
-            } catch {
-                return false;
-            }
+            const runner = access.runner;
 
             // The connection id and database name key the in-memory cache, and
             // the database name lets checkForDatabaseChange() notice a later USE.
-            let activeConnectionId: string | undefined;
-            let activeDatabase: string | undefined;
-            try {
-                activeConnectionId = await api.connectionSharing.getActiveEditorConnectionId?.(
-                    EXTENSION_ID,
+            // `target` è dove vanno le query: l'URI dell'editor o una connessione propria.
+            const connection = await access.getEditorConnection(ownerUri, {
+                isActiveEditor: true,
+                consent,
+            });
+            if (!connection) {
+                console.log(
+                    "SQL Prompt: syncMssqlConnection — active SQL file is not connected in mssql",
                 );
-                if (activeConnectionId) {
-                    activeDatabase = await api.connectionSharing.getActiveDatabase?.(EXTENSION_ID);
-                    if (!activeDatabase) {
-                        activeDatabase = await api.connectionSharing.getDatabaseForConnectionId?.(
-                            EXTENSION_ID,
-                            activeConnectionId,
-                        );
-                    }
-                }
-            } catch {
-                activeConnectionId = undefined;
-                activeDatabase = undefined;
+                return false;
             }
+            const target = connection.target;
+            const activeConnectionId = connection.connectionId;
+            const activeDatabase = connection.connectionId ? connection.database : undefined;
 
             const cacheKey = activeConnectionId
                 ? buildSchemaCacheKey(activeConnectionId, activeDatabase)
@@ -734,6 +720,7 @@ async function syncMssqlConnection(
             /** Bookkeeping and user feedback for a snapshot that went through. */
             const announce = (snapshot: WireSnapshot, fromCache: boolean): boolean => {
                 lastOwnerUri = ownerUri;
+                lastQueryTarget = target;
                 if (activeDatabase !== undefined) {
                     lastSyncedDatabasePerUri.set(ownerUri, activeDatabase);
                 }
@@ -778,7 +765,7 @@ async function syncMssqlConnection(
             // still valid. A failure here is not fatal: it only costs the cache.
             let token: SchemaToken | undefined;
             try {
-                token = await loadSchemaToken(runner, ownerUri);
+                token = await loadSchemaToken(runner, target);
             } catch (err: any) {
                 console.error(`[SQL Prompt] schema token query failed: ${err?.message ?? err}`);
             }
@@ -807,7 +794,7 @@ async function syncMssqlConnection(
                 (progress) =>
                     loadSchemaStaged(
                         runner,
-                        ownerUri,
+                        target,
                         token?.databaseName ?? activeDatabase,
                         (message) => progress.report({ message }),
                     ),
@@ -849,43 +836,77 @@ async function syncMssqlConnection(
     return syncPromise;
 }
 
+/** Una notifica è stata chiesta da almeno uno degli eventi assorbiti dal debounce. */
+let pendingSyncNotification = false;
+
 /**
- * Subscribes to mssql's URI-ownership change event so that whenever the user
- * connects / disconnects / switches connection in the mssql extension, we
- * automatically re-sync the schema and show a notification.
+ * Debounce condiviso dagli eventi di connessione: un solo sync per raffica, con
+ * la notifica se almeno un evento la voleva (altrimenti il sync senza notifica
+ * potrebbe assorbire quello con, tramite `inFlightSchemaSyncs`).
+ */
+function scheduleConnectionSync(showNotification: boolean): void {
+    pendingSyncNotification ||= showNotification;
+    if (connectionSyncDebounce) {
+        clearTimeout(connectionSyncDebounce);
+    }
+    connectionSyncDebounce = setTimeout(async () => {
+        connectionSyncDebounce = undefined;
+        const notify = pendingSyncNotification;
+        pendingSyncNotification = false;
+        try {
+            await syncMssqlConnection({ showNotification: notify });
+        } catch (err: any) {
+            console.error(`[SQL Prompt] schema sync failed: ${err?.message ?? err}`);
+        }
+    }, 600);
+}
+
+/**
+ * Subscribes to the mssql connection events through the schema access provider:
  *
- * The event is exposed via api.uriOwnershipApi.onDidChangeUriOwnership and
- * is backed internally by connectionManager.onConnectionsChanged.
+ *  - connections opened / closed / switched (URI ownership): re-sync the
+ *    schema and show a notification;
+ *  - active editor connection or database changed (new mssql API only, also
+ *    after `USE`, or when access is granted / revoked): re-sync quietly. It
+ *    replaces the polling in `checkForDatabaseChange`.
  */
 async function setupMssqlConnectionListener(
     context: ExtensionContext,
 ): Promise<void> {
-    const api = await getMssqlApi();
-    if (!api?.uriOwnershipApi?.onDidChangeUriOwnership) {
+    const access = await getSchemaAccess();
+    if (!access) {
         return;
     }
 
-    const ownershipEvent = api.uriOwnershipApi.onDidChangeUriOwnership;
-    context.subscriptions.push(
-        ownershipEvent(() => {
-            // Debounce to absorb mssql connection transition bursts.
-            if (connectionSyncDebounce) {
-                clearTimeout(connectionSyncDebounce);
-            }
-            connectionSyncDebounce = setTimeout(async () => {
-                connectionSyncDebounce = undefined;
-                await syncMssqlConnection({ showNotification: true });
-            }, 600);
-        }),
-    );
+    if (access.onDidChangeConnections) {
+        // Debounce to absorb mssql connection transition bursts.
+        context.subscriptions.push(access.onDidChangeConnections(() => scheduleConnectionSync(true)));
+    }
+    if (access.onDidChangeActiveEditorConnection) {
+        context.subscriptions.push(
+            access.onDidChangeActiveEditorConnection(() => scheduleConnectionSync(false)),
+        );
+    }
 }
 
 function setupMssqlApiLifetime(context: ExtensionContext): void {
     context.subscriptions.push({
         dispose: () => {
-            mssqlApiPromise = undefined;
+            void releaseSchemaAccess();
         },
     });
+}
+
+/** Chiude le connessioni aperte dal provider e lo dimentica. */
+async function releaseSchemaAccess(): Promise<void> {
+    const pending = schemaAccessPromise;
+    schemaAccessPromise = undefined;
+    const access = await pending;
+    try {
+        await access?.dispose();
+    } catch (err: any) {
+        console.error(`[SQL Prompt] closing the mssql connections failed: ${err?.message ?? err}`);
+    }
 }
 
 // ── Go to Definition helpers ──────────────────────────────────────────────────
@@ -1016,7 +1037,8 @@ export async function activate(context: ExtensionContext) {
             await commands.executeCommand("mssql.connect");
 
             // Give the mssql extension a moment to complete the connection, then sync
-            setTimeout(() => syncMssqlConnection(), 2000);
+            // Comando esplicito: se serve, il consenso si chiede anche dopo un rifiuto.
+            setTimeout(() => syncMssqlConnection({ consent: 'explicit' }), 2000);
         }),
 
         // Fired by an accepted completion item, never from the palette — which
@@ -1046,7 +1068,11 @@ export async function activate(context: ExtensionContext) {
                 return;
             }
 
-            const reloaded = await syncMssqlConnection({ showNotification: true, force: true });
+            const reloaded = await syncMssqlConnection({
+                showNotification: true,
+                force: true,
+                consent: 'explicit',
+            });
             if (!reloaded) {
                 window.showWarningMessage(
                     "SQL Prompt: no active mssql connection found. " +
@@ -1163,14 +1189,21 @@ export async function activate(context: ExtensionContext) {
 
     client.onRequest("sqlPrompt/loadCrossDatabaseSchema", async (params: { database: string }) => {
         const ownerUri = window.activeTextEditor?.document.uri.toString();
-        const api = await getMssqlApi();
-        if (!ownerUri || !api?.connectionSharing) {
+        const access = await getSchemaAccess();
+        if (!ownerUri || !access) {
+            return { objects: [], columns: [] };
+        }
+        const connection = await access.getEditorConnection(ownerUri, {
+            isActiveEditor: true,
+            consent: 'silent',
+        });
+        if (!connection) {
             return { objects: [], columns: [] };
         }
         try {
             return await loadCrossDatabaseSchema(
-                api.connectionSharing as QueryRunner,
-                ownerUri,
+                access.runner,
+                connection.target,
                 params.database,
             );
         } catch (e: any) {
@@ -1227,14 +1260,21 @@ export async function activate(context: ExtensionContext) {
 
                 let script: string | null = null;
 
-                // Primary path: fetch script via mssql connectionSharing
-                const ownerUri = lastOwnerUri ?? document.uri.toString();
-                const api = await getMssqlApi();
-                if (api?.connectionSharing) {
+                // Primary path: fetch script via the mssql connection API, on the
+                // connection of the last sync (or, failing that, of this document).
+                const access = await getSchemaAccess();
+                const target = access
+                    ? lastQueryTarget ??
+                      (await access.getEditorConnection(document.uri.toString(), {
+                          isActiveEditor: isActiveDocument(document),
+                          consent: 'silent',
+                      }))?.target
+                    : undefined;
+                if (access && target) {
                     try {
                         script = await loadModuleDefinition(
-                            api.connectionSharing as QueryRunner,
-                            ownerUri,
+                            access.runner,
+                            target,
                             resolved.schema,
                             resolved.name,
                         ) ?? null;
@@ -1268,11 +1308,11 @@ export async function activate(context: ExtensionContext) {
                     let columns: ResolvedColumn[] = resolved.columns ?? [];
                     // Prima dello stadio 1 (o se è fallito) il server non ha le
                     // colonne: lette al volo, mai uno script `CREATE TABLE` vuoto.
-                    if (columns.length === 0 && api?.connectionSharing) {
+                    if (columns.length === 0 && access && target) {
                         try {
                             columns = await loadTableColumns(
-                                api.connectionSharing as QueryRunner,
-                                ownerUri,
+                                access.runner,
+                                target,
                                 resolved.schema,
                                 resolved.name,
                             );
@@ -1341,28 +1381,22 @@ export async function activate(context: ExtensionContext) {
         document: TextDocument,
     ): Promise<{ ownerUri: string; database: string }> {
         const documentUri = document.uri.toString();
-        const api = await getMssqlApi();
-        if (!api?.connectionSharing) {
+        const access = await getSchemaAccess();
+        if (!access) {
             // Connessione diretta: l'elenco viene dallo snapshot del server.
-            return { ownerUri: lastOwnerUri ?? documentUri, database: '' };
+            return { ownerUri: lastQueryTarget ?? documentUri, database: '' };
         }
-        let connected = false;
-        try {
-            connected = !!(await api.connectionSharing.isConnected?.(documentUri));
-        } catch {
-            connected = false;
-        }
-        const ownerUri = connected ? documentUri : lastOwnerUri ?? documentUri;
-        let database: string | undefined;
-        // getActiveDatabase descrive l'editor attivo: vale solo se è questo documento.
-        if (connected && window.activeTextEditor?.document === document) {
-            try {
-                database = await api.connectionSharing.getActiveDatabase?.(EXTENSION_ID);
-            } catch {
-                database = undefined;
-            }
-        }
-        return { ownerUri, database: database ?? lastSyncedDatabasePerUri.get(ownerUri) ?? '' };
+        // Il database descrive l'editor attivo: vale solo se è questo documento.
+        // Durante la digitazione mai un prompt di consenso.
+        const isActive = isActiveDocument(document);
+        const connection = await access.getEditorConnection(documentUri, {
+            isActiveEditor: isActive,
+            consent: 'silent',
+        });
+        const ownerUri = connection ? connection.target : lastQueryTarget ?? documentUri;
+        const database = connection && isActive ? connection.database : undefined;
+        const syncedEditor = connection ? documentUri : lastOwnerUri ?? documentUri;
+        return { ownerUri, database: database ?? lastSyncedDatabasePerUri.get(syncedEditor) ?? '' };
     }
 
     context.subscriptions.push(
@@ -1587,7 +1621,7 @@ export async function activate(context: ExtensionContext) {
 }
 
 export async function deactivate() {
-    mssqlApiPromise = undefined;
+    await releaseSchemaAccess();
 
     // A completion accepted in the last second and a half is still only in
     // memory; flush it before the debounce would have.
