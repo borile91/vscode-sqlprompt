@@ -332,7 +332,7 @@ export function buildCompletions(
 
       // After a JOIN + table ref, suggest "ON fk.predicate"
       if (context.clause === 'join' && refs.length >= 2) {
-        items.push(...buildJoinOnClauseCompletions(refs, position, new Set()));
+        items.push(...buildJoinOnClauseCompletions(refs, document, position));
       }
       break;
     }
@@ -363,14 +363,14 @@ export function buildCompletions(
         statementRange.text,
         context.cursorOffset - statementRange.start,
       );
-      items.push(...buildOnPredicateCompletions(refs, position, usedPredicates));
+      items.push(...buildOnPredicateCompletions(refs, document, position, usedPredicates));
       items.push(...buildColumnCompletionsForRefs(refs, true, false));
       items.push(...buildColumnCompletionsForSources(context.visibleSources));
       break;
     }
 
     case 'where': {
-      items.push(...buildWherePredicateCompletions(refs, position));
+      items.push(...buildWherePredicateCompletions(refs, document, position));
       items.push(...buildColumnCompletionsForRefs(refs, true, false));
       items.push(...buildColumnCompletionsForSources(context.visibleSources));
       items.push(...buildScalarFunctionCompletions(routines.scalarFunctions));
@@ -1505,13 +1505,22 @@ type PredicateSuggestion = {
   sortKey: string;
 };
 
+/** Qualificatore da scrivere nei predicati: l'alias solo se esiste davvero nella query. */
+function predicateQualifier(ref: ResolvedRef): string {
+  return ref.isAutoAlias ? ref.table.name : ref.alias;
+}
+
+/** Forma canonica di un predicato per i confronti: senza spazi, minuscola. */
+function normalisePredicate(predicate: string): string {
+  return predicate.replace(/\s+/g, '').toLowerCase();
+}
+
 function buildFkPredicateSuggestions(
   refs: ResolvedRef[],
-  options?: { includeCombined?: boolean; excludePredicates?: Set<string> },
+  options?: { excludePredicates?: Set<string> },
 ): PredicateSuggestion[] {
   if (refs.length < 2) return [];
 
-  const includeCombined = options?.includeCombined ?? true;
   const excludePredicates = options?.excludePredicates ?? new Set<string>();
   const joinRef = refs[refs.length - 1];
   const previousRefs = refs.slice(0, -1);
@@ -1524,37 +1533,35 @@ function buildFkPredicateSuggestions(
     fkMappings: Array<{ column: string; referencedColumn: string }>,
     fkName: string,
   ) {
-    const singles = fkMappings.map(
-      (m) => `${fromRef.alias}.${m.column} = ${toRef.alias}.${m.referencedColumn}`,
-    );
-    const previews = fkMappings.map(
-      (m) => `${fromRef.alias}.${m.column} → ${toRef.alias}.${m.referencedColumn}`,
-    );
+    const from = predicateQualifier(fromRef);
+    const to = predicateQualifier(toRef);
+    const singles = fkMappings.map((m) => `${from}.${m.column} = ${to}.${m.referencedColumn}`);
+    const previews = fkMappings.map((m) => `${from}.${m.column} → ${to}.${m.referencedColumn}`);
     const combined = singles.join(' AND ');
-    const combinedPreview = previews.join(' AND ');
-    const normalised = (s: string) => s.replace(/\s+/g, ' ').toLowerCase();
 
-    if (includeCombined && !seen.has(combined) && !excludePredicates.has(normalised(combined))) {
+    // Voce unica per l'intera FK composita: solo con più colonne (altrimenti
+    // coincide con il singolo) e solo se nessuna sua colonna è già scritta.
+    const anyWritten = singles.some((s) => excludePredicates.has(normalisePredicate(s)));
+    if (singles.length > 1 && !anyWritten && !seen.has(combined)) {
       seen.add(combined);
       suggestions.push({
-        label: `${fromRef.alias} → ${toRef.alias} (ALL)`,
+        label: `${from} → ${to} (ALL: ${fkName})`,
         insertText: combined,
-        preview: combinedPreview,
+        preview: previews.join(' AND '),
         detail: `FK ${fkName}`,
-        sortKey: `00_${fromRef.alias}_${toRef.alias}`,
+        sortKey: `00_${from}_${to}`,
       });
     }
 
     for (let i = 0; i < singles.length; i++) {
-      const norm = normalised(singles[i]);
-      if (seen.has(singles[i]) || excludePredicates.has(norm)) continue;
+      if (seen.has(singles[i]) || excludePredicates.has(normalisePredicate(singles[i]))) continue;
       seen.add(singles[i]);
       suggestions.push({
         label: previews[i],
         insertText: singles[i],
         preview: previews[i],
         detail: `FK ${fkName}`,
-        sortKey: `01_${fromRef.alias}_${toRef.alias}`,
+        sortKey: `01_${from}_${to}`,
       });
     }
   }
@@ -1585,25 +1592,45 @@ function buildFkPredicateSuggestions(
   return suggestions;
 }
 
+/** Keyword che, attaccate al cursore (`ON|`, `AND|`), restano e il predicato si accoda. */
+const PREDICATE_LEAD_KEYWORDS = new Set(['on', 'and', 'or', 'not', 'where', 'having']);
+
+/**
+ * Dove inserire un predicato: sostituisce la parola digitata (`ON c|` → via `c`),
+ * ma se quella parola è una keyword la conserva e accoda il predicato dopo uno spazio.
+ */
+function predicateInsertion(
+  document: TextDocument,
+  position: Position,
+): { range: Range; prefix: string } {
+  const range = wordRangeAt(document, position);
+  if (PREDICATE_LEAD_KEYWORDS.has(document.getText(range).toLowerCase())) {
+    return { range: Range.create(position, position), prefix: ' ' };
+  }
+  return { range, prefix: '' };
+}
+
 function buildJoinOnClauseCompletions(
   refs: ResolvedRef[],
+  document: TextDocument,
   position: Position,
-  excludePredicates: Set<string>,
 ): CompletionItem[] {
-  return buildFkPredicateSuggestions(refs, {
-    includeCombined: true,
-    excludePredicates,
-  }).map((s) => {
+  // `O|`/`ON|` si sostituiscono con `ON ...`; un'altra parola sotto il cursore
+  // (alias o nome tabella appena scritti) resta e `ON ...` si accoda dopo uno spazio.
+  const wordRange = wordRangeAt(document, position);
+  const word = document.getText(wordRange).toLowerCase();
+  const replaceWord = word === '' || 'on'.startsWith(word);
+  const range = replaceWord ? wordRange : Range.create(position, position);
+  const prefix = replaceWord ? '' : ' ';
+
+  return buildFkPredicateSuggestions(refs).map((s) => {
     const insertValue = `ON ${s.insertText} `;
     return {
       label: `ON ${s.label}`,
       kind: CompletionItemKind.Keyword,
       detail: s.preview,
       documentation: { kind: 'markdown', value: `Inserts: \`${insertValue.trim()}\`` },
-      textEdit: TextEdit.replace(
-        Range.create(position.line, position.character, position.line, position.character),
-        insertValue,
-      ),
+      textEdit: TextEdit.replace(range, `${prefix}${insertValue}`),
       sortText: s.sortKey,
     };
   });
@@ -1611,38 +1638,33 @@ function buildJoinOnClauseCompletions(
 
 function buildOnPredicateCompletions(
   refs: ResolvedRef[],
+  document: TextDocument,
   position: Position,
   excludePredicates: Set<string>,
 ): CompletionItem[] {
-  // Right after ON (no predicate written yet) the combined entry — all columns of
-  // a composite FK joined with AND — lets a multi-column FK be inserted in one go.
-  // Once a predicate exists it would repeat columns already written, so it is skipped.
-  return buildFkPredicateSuggestions(refs, {
-    includeCombined: excludePredicates.size === 0,
-    excludePredicates,
-  }).map((s) => ({
+  const { range, prefix } = predicateInsertion(document, position);
+  return buildFkPredicateSuggestions(refs, { excludePredicates }).map((s) => ({
     label: s.insertText,
     kind: CompletionItemKind.Operator,
     detail: s.preview,
     documentation: { kind: 'markdown', value: `Inserts: \`${s.insertText}\`` },
-    textEdit: TextEdit.replace(
-      Range.create(position.line, position.character, position.line, position.character),
-      `${s.insertText} `,
-    ),
+    textEdit: TextEdit.replace(range, `${prefix}${s.insertText} `),
     sortText: s.sortKey,
   }));
 }
 
-function buildWherePredicateCompletions(refs: ResolvedRef[], position: Position): CompletionItem[] {
-  return buildFkPredicateSuggestions(refs, { includeCombined: true }).map((s) => ({
+function buildWherePredicateCompletions(
+  refs: ResolvedRef[],
+  document: TextDocument,
+  position: Position,
+): CompletionItem[] {
+  const { range, prefix } = predicateInsertion(document, position);
+  return buildFkPredicateSuggestions(refs).map((s) => ({
     label: s.insertText,
     kind: CompletionItemKind.Operator,
     detail: `WHERE: ${s.preview}`,
     documentation: { kind: 'markdown', value: `Inserts: \`${s.insertText}\`` },
-    textEdit: TextEdit.replace(
-      Range.create(position.line, position.character, position.line, position.character),
-      `${s.insertText} `,
-    ),
+    textEdit: TextEdit.replace(range, `${prefix}${s.insertText} `),
     sortText: `03_${s.sortKey}`,
   }));
 }
@@ -1713,40 +1735,37 @@ function resolveRefs(sources: VisibleSource[], tables: TableInfo[]): ResolvedRef
 
 // ── Helper: extract already-used ON predicates ────────────────────────────────
 
+/** Un predicato vero contiene un confronto; la parola in digitazione (`ON c`) no. */
+const COMPARISON = /<>|!=|<=|>=|=|<|>|\b(?:LIKE|IN|IS|BETWEEN)\b/i;
+
 /**
  * Collects the predicates already written in the ON clause so they can be
- * excluded from the suggestions (avoids duplicates).
+ * excluded from the suggestions (avoids duplicates). Returned in the form of
+ * `normalisePredicate`; `a = b` is also recorded as `b = a`.
  */
 function extractUsedOnPredicates(statementText: string, cursorOffset: number): Set<string> {
-  const beforeCursor = statementText.slice(0, cursorOffset);
-  const lower = beforeCursor.toLowerCase();
+  // Commenti esclusi: non sono predicati e non devono far trovare un falso ON.
+  const beforeCursor = statementText
+    .slice(0, cursorOffset)
+    .replace(/\/\*[\s\S]*?(?:\*\/|$)/g, ' ')
+    .replace(/--[^\n]*/g, ' ');
 
-  // Find the last ON keyword before cursor at approx top level
-  let lastOnPos = -1;
-  let pos = 0;
-  while (pos < lower.length) {
-    const idx = lower.indexOf('\bon\b'.replace(/\\b/g, ''), pos);
-    // Simpler: just find ' on ' occurrences
-    const m = /\bon\b/g;
-    m.lastIndex = pos;
-    const match = m.exec(lower);
-    if (!match) break;
-    lastOnPos = match.index;
-    pos = match.index + 2;
-  }
+  let onEnd = -1;
+  for (const m of beforeCursor.matchAll(/\bON\b/gi)) onEnd = m.index! + m[0].length;
+  if (onEnd === -1) return new Set();
 
-  if (lastOnPos === -1) return new Set();
-
-  const onTail = beforeCursor.slice(lastOnPos + 2);
+  const onTail = beforeCursor.slice(onEnd);
   const stopMatch = /\b(where|group\s+by|order\s+by|having|union)\b/i.exec(onTail);
   const predicateText = stopMatch ? onTail.slice(0, stopMatch.index) : onTail;
 
-  const chunks = predicateText
-    .split(/\bAND\b|\bOR\b/gi)
-    .map((x) => x.trim().replace(/\s+/g, ' ').toLowerCase())
-    .filter(Boolean);
-
-  return new Set(chunks);
+  const used = new Set<string>();
+  for (const chunk of predicateText.split(/\bAND\b|\bOR\b/i)) {
+    if (!COMPARISON.test(chunk)) continue;
+    used.add(normalisePredicate(chunk));
+    const equality = /^([^=<>!]+)=([^=<>]+)$/.exec(chunk.trim());
+    if (equality) used.add(normalisePredicate(`${equality[2]}=${equality[1]}`));
+  }
+  return used;
 }
 
 // ── Helpers: replace range computation ───────────────────────────────────────
