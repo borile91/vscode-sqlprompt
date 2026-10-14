@@ -12,7 +12,9 @@ vscode-sqlprompt/
 │   ├── package.json
 │   ├── tsconfig.json
 │   └── src/
-│       └── extension.ts
+│       ├── extension.ts
+│       ├── alterScaffold.ts
+│       └── __tests__/
 ├── server/
 │   ├── package.json
 │   ├── tsconfig.json
@@ -34,6 +36,7 @@ vscode-sqlprompt/
 ## Architecture overview
 
 - `client/src/extension.ts`: VS Code extension entry point and Language Client lifecycle.
+- `client/src/alterScaffold.ts`: pure helpers behind the `ALTER PROCEDURE|VIEW|FUNCTION` scaffolding (header detection, queries, CREATE → ALTER rewrite).
 - `server/src/server.ts`: Language Server Protocol endpoint and request handling.
 - `server/src/schemaLoader.ts`: SQL Server schema loading and refresh logic.
 - `server/src/completionEngine.ts`: completion generation based on context and schema.

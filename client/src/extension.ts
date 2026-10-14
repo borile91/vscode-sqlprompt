@@ -11,6 +11,10 @@ import {
     languages,
     Location,
     Range,
+    Position,
+    CompletionItem,
+    CompletionItemKind,
+    CompletionList,
     EventEmitter,
     TextDocumentContentProvider,
     StatusBarAlignment,
@@ -40,6 +44,7 @@ import {
     loadRoutines,
     loadSchemaToken,
     queryFirstCellText,
+    queryRowsText,
 } from './schema/schemaLoad';
 import {
     WireColumns,
@@ -47,6 +52,13 @@ import {
     WireRoutine,
     WireSnapshot,
 } from './schema/wireFormat';
+import {
+    AlterObjectKind,
+    parseAlterHeader,
+    buildObjectListQuery,
+    buildDefinitionQuery,
+    toAlterScript,
+} from './alterScaffold';
 
 let client: LanguageClient | undefined;
 let connectionSyncDebounce: ReturnType<typeof setTimeout> | undefined;
@@ -239,6 +251,66 @@ async function getMssqlApi(): Promise<any | undefined> {
     })();
 
     return mssqlApiPromise;
+}
+
+/**
+ * Fetches the stored definition of a module (procedure, view, function).
+ * Primary path is the mssql connectionSharing API; the language server is the
+ * fallback for direct-connection mode. Returns undefined when unavailable.
+ */
+async function fetchModuleDefinition(
+    ownerUri: string,
+    schema: string,
+    name: string,
+): Promise<string | undefined> {
+    const api = await getMssqlApi();
+    if (api?.connectionSharing) {
+        try {
+            const definition = await queryFirstCellText(
+                api.connectionSharing as QueryRunner,
+                ownerUri,
+                buildDefinitionQuery(schema, name),
+            );
+            if (definition) {
+                return definition;
+            }
+        } catch {
+            // fall through to the server
+        }
+    }
+    try {
+        const res = await client?.sendRequest<{ script: string | null }>(
+            'sqlPrompt/getObjectScript',
+            { schema, name },
+        );
+        return res?.script ?? undefined;
+    } catch {
+        return undefined;
+    }
+}
+
+/** Lists the user objects of a kind through the mssql connectionSharing API. */
+async function listModules(
+    ownerUri: string,
+    kind: AlterObjectKind,
+): Promise<Array<{ schema: string; name: string }>> {
+    const api = await getMssqlApi();
+    if (!api?.connectionSharing) {
+        return [];
+    }
+    const rows = await queryRowsText(
+        api.connectionSharing as QueryRunner,
+        ownerUri,
+        buildObjectListQuery(kind),
+        ['schema_name', 'object_name'],
+    );
+    const modules: Array<{ schema: string; name: string }> = [];
+    for (const [schema, name] of rows) {
+        if (schema && name) {
+            modules.push({ schema, name });
+        }
+    }
+    return modules;
 }
 
 // ── Publishing the schema to the language server ──────────────────────────────
@@ -1101,6 +1173,89 @@ export async function activate(context: ExtensionContext) {
                 return new Location(virtualUri, new Range(0, 0, 0, 0));
             },
         }),
+    );
+
+    // ── ALTER scaffolding ─────────────────────────────────────────────────────
+    // `ALTER PROCEDURE|VIEW|FUNCTION <name>` → pick an existing object and its
+    // current definition replaces the header, ready to be edited.
+
+    const ALTER_LIST_TTL_MS = 60 * 1000;
+    const alterListCache = new Map<
+        string,
+        { cachedAt: number; modules: Array<{ schema: string; name: string }> }
+    >();
+
+    context.subscriptions.push(
+        languages.registerCompletionItemProvider(
+            sqlDocumentSelector,
+            {
+                async provideCompletionItems(document, position) {
+                    const before = document
+                        .lineAt(position.line)
+                        .text.slice(0, position.character);
+                    const header = parseAlterHeader(before);
+                    if (!header) { return undefined; }
+
+                    const ownerUri = lastOwnerUri ?? document.uri.toString();
+                    const cacheKey = `${ownerUri}|${header.kind}`;
+                    let cached = alterListCache.get(cacheKey);
+                    if (!cached || Date.now() - cached.cachedAt > ALTER_LIST_TTL_MS) {
+                        try {
+                            cached = { cachedAt: Date.now(), modules: await listModules(ownerUri, header.kind) };
+                        } catch {
+                            return undefined;
+                        }
+                        alterListCache.set(cacheKey, cached);
+                    }
+
+                    const nameRange = new Range(position.line, header.nameStart, position.line, position.character);
+                    const alterStart = new Position(position.line, header.alterStart);
+                    const items = cached.modules.map((module, index) => {
+                        const fullName = `${module.schema}.${module.name}`;
+                        const item = new CompletionItem(fullName, CompletionItemKind.Function);
+                        item.filterText = `${module.name} ${fullName}`;
+                        item.sortText = `00_${String(index).padStart(6, '0')}`;
+                        item.detail = 'Fill in the current definition';
+                        item.range = nameRange;
+                        item.insertText = fullName;
+                        item.command = {
+                            command: 'sqlPrompt.scaffoldAlter',
+                            title: 'Fill in the current definition',
+                            arguments: [document.uri, ownerUri, module, alterStart],
+                        };
+                        return item;
+                    });
+                    return new CompletionList(items, false);
+                },
+            },
+            ' ',
+            '.',
+        ),
+        commands.registerCommand(
+            'sqlPrompt.scaffoldAlter',
+            async (
+                documentUri: Uri,
+                ownerUri: string,
+                module: { schema: string; name: string },
+                alterStart: Position,
+            ) => {
+                const editor = window.activeTextEditor;
+                if (!editor || editor.document.uri.toString() !== documentUri.toString()) { return; }
+
+                const definition = await fetchModuleDefinition(ownerUri, module.schema, module.name);
+                const script = definition ? toAlterScript(definition) : undefined;
+                if (!script) {
+                    window.showWarningMessage(
+                        `SQL Prompt: definition not available for [${module.schema}].[${module.name}] (encrypted object?).`,
+                    );
+                    return;
+                }
+
+                // The accepted name has just been inserted: replace from ALTER to the cursor.
+                const end = editor.selection.active;
+                await editor.edit((edit) => edit.replace(new Range(alterStart, end), script));
+            },
+        ),
     );
 
     // ─────────────────────────────────────────────────────────────────────────
