@@ -135,10 +135,14 @@ describe('inside VALUES (...)', () => {
   });
 
   it('offers the literals and functions that belong in a value', () => {
-    const labels = valueItems().map((i) => i.label);
-    for (const expected of ['NULL', 'DEFAULT', 'GETDATE()', 'NEWID()']) {
+    const items = valueItems();
+    const labels = items.map((i) => i.label);
+    for (const expected of ['NULL', 'DEFAULT', 'GETDATE', 'NEWID']) {
       assert.ok(labels.includes(expected), `missing ${expected} in: ${labels.join(', ')}`);
     }
+    // Le funzioni arrivano dal catalogo di sistema e si inseriscono con le parentesi.
+    const getdate = items.find((i) => i.label === 'GETDATE');
+    assert.equal((getdate?.textEdit as any)?.newText, 'GETDATE()');
   });
 
   it('proposes no duplicate label', () => {

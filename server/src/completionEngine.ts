@@ -21,6 +21,9 @@ import {
   CompletionItemKind,
   CompletionList,
   InsertTextFormat,
+  ParameterInformation,
+  SignatureHelp,
+  SignatureInformation,
   TextEdit,
   Range,
   Position,
@@ -40,6 +43,15 @@ import { StatementRange } from './documentTextService';
 import { generateAlias } from './utils';
 import { isReservedWord } from './sqlLexer';
 import { suggestKeywords } from './keywordSuggestions';
+import {
+  BuiltinFunction,
+  DATA_TYPES,
+  DATEPARTS,
+  builtinSignature,
+  builtinSnippet,
+  builtinsForClause,
+  findBuiltin,
+} from './builtinFunctions';
 import {
   isTypingTopN,
   resolveShortcuts,
@@ -280,7 +292,40 @@ export function buildCompletions(
   const wordRange = wordRangeAt(document, position);
 
   if (context.isInFunctionCall) {
+    // DATEADD( / DATEDIFF( …: il primo argomento è una datepart, nient'altro.
+    if (findBuiltin(context.functionName)?.datepartFirst && (context.parameterIndex ?? 0) === 0) {
+      return DATEPARTS.map((part, idx) => ({
+        label: part,
+        kind: CompletionItemKind.EnumMember,
+        detail: 'datepart',
+        textEdit: TextEdit.replace(wordRange, part),
+        sortText: `00_datepart_${String(idx).padStart(2, '0')}`,
+      }));
+    }
+    // CAST(x AS / TRY_CAST(x AS / CONVERT( / TRY_CONVERT(: un tipo di dato.
+    const fnName = (context.functionName ?? '').toUpperCase();
+    const wantsType =
+      ((fnName === 'CAST' || fnName === 'TRY_CAST') && /\bAS\s+\w*$/i.test(lineText)) ||
+      ((fnName === 'CONVERT' || fnName === 'TRY_CONVERT') && (context.parameterIndex ?? 0) === 0);
+    if (wantsType) {
+      return DATA_TYPES.map((type, idx) => ({
+        label: type,
+        kind: CompletionItemKind.TypeParameter,
+        detail: 'data type',
+        textEdit: TextEdit.replace(wordRange, type),
+        sortText: `00_type_${String(idx).padStart(2, '0')}`,
+      }));
+    }
     items.push(...buildFunctionParameterCompletions(context, routines));
+
+    // Argomenti di una funzione: un'espressione (colonne, funzioni), non uno statement.
+    if (context.clause === 'unknown') {
+      items.push(...buildColumnCompletionsForRefs(refs, true, false));
+      items.push(...buildColumnCompletionsForSources(context.visibleSources));
+      items.push(...buildScalarFunctionCompletions(routines.scalarFunctions));
+      items.push(...buildBuiltinFunctionCompletions('functionArgs', wordRange));
+      return items;
+    }
   }
 
   // ── 2. Star expansion (highest priority in SELECT) ───────────────────────
@@ -318,6 +363,7 @@ export function buildCompletions(
       items.push(...buildColumnCompletionsForRefs(refs, true, false));
       items.push(...buildColumnCompletionsForSources(context.visibleSources));
       items.push(...buildScalarFunctionCompletions(routines.scalarFunctions));
+      items.push(...buildBuiltinFunctionCompletions(context.clause, wordRange));
       // Always offer an "expand all columns" item when there are visible sources
       items.push(...buildExpandAllColumnsItem(context, refs, document, statementRange, position));
       break;
@@ -373,6 +419,7 @@ export function buildCompletions(
         context.cursorOffset - statementRange.start,
       );
       items.push(...buildOnPredicateCompletions(refs, document, position, usedPredicates));
+      items.push(...buildBuiltinFunctionCompletions(context.clause, wordRange));
       items.push(...buildColumnCompletionsForRefs(refs, true, false));
       items.push(...buildColumnCompletionsForSources(context.visibleSources));
       break;
@@ -383,6 +430,7 @@ export function buildCompletions(
       items.push(...buildColumnCompletionsForRefs(refs, true, false));
       items.push(...buildColumnCompletionsForSources(context.visibleSources));
       items.push(...buildScalarFunctionCompletions(routines.scalarFunctions));
+      items.push(...buildBuiltinFunctionCompletions(context.clause, wordRange));
       break;
     }
 
@@ -392,6 +440,7 @@ export function buildCompletions(
       items.push(...buildColumnCompletionsForRefs(refs, true, false));
       items.push(...buildColumnCompletionsForSources(context.visibleSources));
       items.push(...buildScalarFunctionCompletions(routines.scalarFunctions));
+      items.push(...buildBuiltinFunctionCompletions(context.clause, wordRange));
       break;
 
     case 'updateSet': {
@@ -401,6 +450,7 @@ export function buildCompletions(
       const bare = refs.length === 1 && refs[0].isAutoAlias;
       items.push(...buildColumnCompletionsForRefs(refs, !bare, bare));
       items.push(...buildColumnCompletionsForSources(context.visibleSources));
+      items.push(...buildBuiltinFunctionCompletions(context.clause, wordRange));
       break;
     }
 
@@ -409,6 +459,7 @@ export function buildCompletions(
     // so accepting one wrote `VALUES (2, SELECT COUNT(*) FROM )`.
     case 'values':
       items.push(...buildScalarFunctionCompletions(routines.scalarFunctions));
+      items.push(...buildBuiltinFunctionCompletions(context.clause, wordRange));
       items.push(...buildValueKeywordCompletions(position));
       break;
 
@@ -742,16 +793,12 @@ function isSubsequence(word: string, text: string): boolean {
   return i === word.length;
 }
 
-/** Literals and functions that make sense as a value inside `VALUES (...)`. */
+/** Literals that make sense as a value inside `VALUES (...)`; the functions come from the built-in catalogue. */
 function buildValueKeywordCompletions(position: Position): CompletionItem[] {
   const range = Range.create(position, position);
   const values: Array<[string, string]> = [
     ['NULL', 'NULL'],
     ['DEFAULT', 'DEFAULT'],
-    ['GETDATE()', 'current date and time'],
-    ['SYSDATETIME()', 'current date and time, higher precision'],
-    ['NEWID()', 'new uniqueidentifier'],
-    ['SUSER_SNAME()', 'current login name'],
   ];
   return values.map(([text, detail]) => ({
     label: text,
@@ -1496,6 +1543,95 @@ function buildScalarFunctionCompletions(functions: ScalarFunctionInfo[]): Comple
       sortText: `03_scalar_${fn.schema}_${fn.name}`,
     };
   });
+}
+
+/** Funzioni di sistema (MIN, ISNULL, DATEADD…) sensate nella clausola, con i segnaposto degli argomenti. */
+function buildBuiltinFunctionCompletions(clause: string, replaceRange: Range): CompletionItem[] {
+  return builtinsForClause(clause).map((fn) => ({
+    label: fn.name,
+    kind: CompletionItemKind.Function,
+    detail: builtinSignature(fn),
+    documentation: {
+      kind: 'markdown',
+      value: '```sql\n' + builtinSignature(fn) + '\n```\n' + fn.description,
+    },
+    filterText: fn.name,
+    textEdit: TextEdit.replace(replaceRange, builtinSnippet(fn)),
+    insertTextFormat: InsertTextFormat.Snippet,
+    sortText: `03_builtin_${fn.name}`,
+  }));
+}
+
+// ── Signature help ────────────────────────────────────────────────────────────
+
+/** Firma con gli intervalli dei parametri nell'etichetta, come vuole il signature help. */
+function signatureFromLabel(
+  label: string,
+  paramLabels: string[],
+  documentation?: string,
+): SignatureInformation {
+  const parameters: ParameterInformation[] = [];
+  let from = label.indexOf('(') + 1;
+  for (const name of paramLabels) {
+    const start = label.indexOf(name, from);
+    if (start < 0) break;
+    parameters.push({ label: [start, start + name.length] });
+    from = start + name.length;
+  }
+  return { label, documentation, parameters };
+}
+
+function builtinSignatureInformation(fn: BuiltinFunction): SignatureInformation {
+  return signatureFromLabel(
+    builtinSignature(fn),
+    fn.params.map((param) => param.name),
+    fn.description,
+  );
+}
+
+/**
+ * Parametri della funzione in cui si trova il cursore: di sistema (DATEADD…)
+ * o dello schema (funzioni scalari e tabellari, procedure). `null` fuori da una chiamata.
+ */
+export function buildSignatureHelp(
+  context: QueryContext,
+  routines: RoutineSnapshot,
+  textBeforeCursor?: string,
+): SignatureHelp | null {
+  if (!context.isInFunctionCall || !context.functionName) return null;
+  const index = context.parameterIndex ?? 0;
+
+  const builtin = findBuiltin(context.functionName);
+  if (builtin) {
+    const signature = builtinSignatureInformation(builtin);
+    const count = signature.parameters?.length ?? 0;
+    // CAST(x AS tipo) non ha virgole: dopo AS il parametro attivo è il tipo.
+    const castType = builtin.signature?.includes(' AS ') && /\bAS\b[^(]*$/i.test(textBeforeCursor ?? '');
+    return {
+      signatures: [signature],
+      activeSignature: 0,
+      activeParameter: castType ? 1 : count ? Math.min(index, count - 1) : 0,
+    };
+  }
+
+  const name = context.functionName.toLowerCase();
+  const matches = [
+    ...routines.scalarFunctions,
+    ...routines.tableValuedFunctions,
+    ...routines.storedProcedures,
+  ].filter((routine) => routine.name.toLowerCase() === name);
+  if (!matches.length) return null;
+
+  return {
+    signatures: matches.map((routine) => {
+      const params = routine.parameters.map(
+        (param) => `${normalizeParameterName(param.name)} ${param.dataType}${param.isOutput ? ' OUTPUT' : ''}`,
+      );
+      return signatureFromLabel(`${routine.schema}.${routine.name}(${params.join(', ')})`, params);
+    }),
+    activeSignature: 0,
+    activeParameter: index,
+  };
 }
 
 function buildStoredProcedureCompletions(procedures: StoredProcedureInfo[]): CompletionItem[] {

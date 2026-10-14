@@ -96,10 +96,14 @@ const COMPARISON_WORDS = new Set(['IS', 'IN', 'LIKE', 'BETWEEN']);
 export function suggestKeywords(textBeforeCursor: string): KeywordContext {
   // La parola in digitazione non conta: è quella che la scelta sostituirà.
   const text = textBeforeCursor.replace(/[\w@#$]+$/, '');
-  const level = currentLevel(tokenize(text));
+  const { level, opener } = currentLevel(tokenize(text));
 
   if (level.length === 0) {
-    return { keywords: STATEMENT_START, afterCompleteSource: false };
+    if (opener === undefined) return { keywords: STATEMENT_START, afterCompleteSource: false };
+    // Dentro `IN (`, `EXISTS (` o `FROM (` può iniziare una sottoquery; dentro
+    // `ISNULL(` o `VALUES (` no.
+    const subqueryOpener = opener === null || ['IN', 'EXISTS', 'FROM', 'JOIN', 'APPLY', 'AS', '('].includes(opener);
+    return subqueryOpener ? { keywords: ['SELECT'], afterCompleteSource: false } : NONE;
   }
 
   const words = level.map((t) => t.text);
@@ -193,29 +197,36 @@ function afterPredicate(owner: string | undefined): string[] {
 /**
  * Token significativi del livello di parentesi in cui si trova il cursore,
  * dall'ultima `(` non chiusa in poi. I gruppi già chiusi diventano `()`.
+ * `opener` è il token prima di quella `(` (`null` se non c'è nulla prima),
+ * `undefined` se il cursore non è tra parentesi.
  */
-function currentLevel(tokens: Token[]): LevelToken[] {
-  const stack: LevelToken[][] = [[]];
+function currentLevel(tokens: Token[]): { level: LevelToken[]; opener: string | null | undefined } {
+  const stack: Array<{ tokens: LevelToken[]; opener: string | null | undefined }> = [
+    { tokens: [], opener: undefined },
+  ];
   for (const token of tokens) {
     if (token.kind === 'whitespace' || token.kind === 'comment') continue;
+    const top = stack[stack.length - 1];
     if (token.kind === 'lparen') {
-      stack.push([]);
+      const before = top.tokens[top.tokens.length - 1];
+      stack.push({ tokens: [], opener: before ? before.text : null });
       continue;
     }
     if (token.kind === 'rparen') {
       if (stack.length > 1) stack.pop();
-      stack[stack.length - 1].push({ kind: 'group', text: '()' });
+      stack[stack.length - 1].tokens.push({ kind: 'group', text: '()' });
       continue;
     }
     // `;` chiude lo statement: si riparte da capo.
     if (token.text === ';') {
-      stack.splice(0, stack.length, []);
+      stack.splice(0, stack.length, { tokens: [], opener: undefined });
       continue;
     }
     const upper = token.kind === 'keyword' || token.kind === 'identifier' ? token.text.toUpperCase() : token.text;
-    stack[stack.length - 1].push({ kind: token.kind, text: upper });
+    top.tokens.push({ kind: token.kind, text: upper });
   }
-  return stack[stack.length - 1];
+  const top = stack[stack.length - 1];
+  return { level: top.tokens, opener: top.opener };
 }
 
 // ── Riconoscimento dei pezzi ──────────────────────────────────────────────────
