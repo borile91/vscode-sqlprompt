@@ -20,6 +20,7 @@ import {
     StatusBarAlignment,
     StatusBarItem,
     ProgressLocation,
+    WorkspaceEdit,
 } from "vscode";
 
 import {
@@ -1242,6 +1243,12 @@ export async function activate(context: ExtensionContext) {
                 const editor = window.activeTextEditor;
                 if (!editor || editor.document.uri.toString() !== documentUri.toString()) { return; }
 
+                // Il nome accettato è appena stato inserito: l'intervallo da sostituire
+                // (da ALTER al cursore) va fissato prima della query, che può durare secondi.
+                const document = editor.document;
+                const end = editor.selection.active;
+                const version = document.version;
+
                 const definition = await fetchModuleDefinition(ownerUri, module.schema, module.name);
                 const script = definition ? toAlterScript(definition) : undefined;
                 if (!script) {
@@ -1251,9 +1258,18 @@ export async function activate(context: ExtensionContext) {
                     return;
                 }
 
-                // The accepted name has just been inserted: replace from ALTER to the cursor.
-                const end = editor.selection.active;
-                await editor.edit((edit) => edit.replace(new Range(alterStart, end), script));
+                // Se nel frattempo l'utente ha scritto, l'intervallo non è più affidabile:
+                // meglio non toccare il documento che sovrascrivere il suo testo.
+                if (document.isClosed || document.version !== version) {
+                    window.showInformationMessage(
+                        `SQL Prompt: the document changed while loading [${module.schema}].[${module.name}]; definition not inserted.`,
+                    );
+                    return;
+                }
+
+                const edit = new WorkspaceEdit();
+                edit.replace(documentUri, new Range(alterStart, end), script);
+                await workspace.applyEdit(edit);
             },
         ),
     );
