@@ -4,6 +4,7 @@ import {
     QueryRunner,
     isAggregationUnsupportedError,
     loadColumns,
+    loadCrossDatabaseSchema,
     loadDatabases,
 } from '../schemaLoad.js';
 
@@ -141,5 +142,49 @@ describe('loadDatabases', () => {
         };
 
         assert.deepEqual(await loadDatabases(runner, 'uri'), []);
+    });
+});
+
+describe('loadCrossDatabaseSchema: tipo degli oggetti', () => {
+    it('mantiene le viste come V (query aggregante)', async () => {
+        const runner = fakeRunner(() =>
+            resultSet(
+                ['schema_name', 'object_name', 'object_type', 'columns_packed'],
+                [
+                    ['dbo', 'Ordini', 'U', 'Id\u001fint\u001f4\u001f2'],
+                    ['dbo', 'vOrdini', 'V', 'Id\u001fint\u001f4\u001f0'],
+                ],
+            ),
+        );
+
+        const { objects, columns } = await loadCrossDatabaseSchema(runner, 'uri', 'Altro');
+        assert.deepEqual(objects, [
+            { s: 'dbo', n: 'Ordini', t: 'U' },
+            { s: 'dbo', n: 'vOrdini', t: 'V' },
+        ]);
+        assert.equal(columns.length, 2);
+        assert.match(runner.queries[0], /\[Altro\]\.sys\.objects/);
+    });
+
+    it('mantiene le viste come V (query per-riga)', async () => {
+        const runner = fakeRunner((sql) => {
+            if (isAggregating(sql)) {
+                throw new Error("'STRING_AGG' is not a recognized built-in function name.");
+            }
+            return resultSet(
+                ['schema_name', 'object_name', 'object_type', ...LEGACY_COLUMN_NAMES.slice(2)],
+                [
+                    ['dbo', 'Ordini', 'U', 'Id', 'int', 4, 0, 1, 0, 0, 1],
+                    ['dbo', 'vOrdini', 'V', 'Id', 'int', 4, 0, 0, 0, 0, 0],
+                    ['dbo', 'vOrdini', 'V', 'Nome', 'nvarchar', 40, 1, 0, 0, 0, 0],
+                ],
+            );
+        });
+
+        const { objects } = await loadCrossDatabaseSchema(runner, 'uri', 'Altro');
+        assert.deepEqual(objects, [
+            { s: 'dbo', n: 'Ordini', t: 'U' },
+            { s: 'dbo', n: 'vOrdini', t: 'V' },
+        ]);
     });
 });

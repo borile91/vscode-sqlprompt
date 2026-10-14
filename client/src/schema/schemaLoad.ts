@@ -615,6 +615,7 @@ export async function loadCrossDatabaseSchema(
         SELECT
             s.name AS schema_name,
             o.name AS object_name,
+            RTRIM(o.type) AS object_type,
             STRING_AGG(
                 CAST(
                     CONCAT(
@@ -641,7 +642,7 @@ export async function loadCrossDatabaseSchema(
             WHERE i.is_primary_key = 1
         ) pk ON o.object_id = pk.object_id AND c.column_id = pk.column_id
         WHERE o.is_ms_shipped = 0 AND o.type IN ('U', 'V')
-        GROUP BY s.name, o.name
+        GROUP BY s.name, o.name, o.type
         ORDER BY s.name, o.name
     `;
 
@@ -649,6 +650,7 @@ export async function loadCrossDatabaseSchema(
         SELECT
             s.name AS schema_name,
             o.name AS object_name,
+            RTRIM(o.type) AS object_type,
             c.name AS column_name,
             ISNULL(TYPE_NAME(c.user_type_id), 'unknown') AS data_type,
             c.max_length,
@@ -682,7 +684,30 @@ export async function loadCrossDatabaseSchema(
     const columns = usedLegacy ? packLegacyColumns(result) : await mapAggregatedColumns(result);
     // Cross-database objects are only ever tables and views, so the object list
     // can be derived from the column result instead of costing another query.
-    const objects: WireObject[] = columns.map(({ s, n }) => ({ s, n, t: 'U' }));
+    // Il tipo arriva da `object_type`: le viste devono restare `V`.
+    const types = objectTypesByName(result);
+    const objects: WireObject[] = columns.map(({ s, n }) => ({
+        s,
+        n,
+        t: types.get(`${s}.${n}`) === 'V' ? 'V' : 'U',
+    }));
 
     return { objects, columns };
+}
+
+/** `schema.nome` → tipo dell'oggetto (`U` / `V`), dalla colonna `object_type`. */
+function objectTypesByName(result: ResultSet): Map<string, string> {
+    const iSchema = result.index('schema_name');
+    const iName = result.index('object_name');
+    const iType = result.index('object_type');
+    const types = new Map<string, string>();
+    if (iType < 0) return types;
+
+    for (const row of result.rows) {
+        const key = `${cellText(row[iSchema]).trim()}.${cellText(row[iName]).trim()}`;
+        if (!types.has(key)) {
+            types.set(key, cellText(row[iType]).trim().toUpperCase());
+        }
+    }
+    return types;
 }
