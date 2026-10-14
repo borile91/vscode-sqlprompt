@@ -133,8 +133,7 @@ function collectUsedAliases(context: QueryContext): Set<string> {
 /**
  * Snippets that open a whole statement (`ssf` → `SELECT * FROM `).
  */
-function buildStatementSnippets(lineText: string, position: Position): CompletionItem[] {
-  const replaceRange = replaceRangeWordOnly(lineText, position);
+function buildStatementSnippets(replaceRange: Range): CompletionItem[] {
   return [
     {
       label: 'ssf',
@@ -260,7 +259,15 @@ export function buildCompletions(
 
   // ── 1. Dot-qualified completions ─────────────────────────────────────────
   if (context.isAfterDot && context.qualifierChain?.length) {
-    return buildDotCompletions(context, tables, routines, position, databases, loadingDatabases);
+    return buildDotCompletions(
+      context,
+      tables,
+      routines,
+      position,
+      wordRangeAt(document, position),
+      databases,
+      loadingDatabases,
+    );
   }
 
   const items: CompletionItem[] = [];
@@ -269,6 +276,7 @@ export function buildCompletions(
     start: { line: position.line, character: 0 },
     end: position,
   });
+  const wordRange = wordRangeAt(document, position);
 
   if (context.isInFunctionCall) {
     items.push(...buildFunctionParameterCompletions(context, routines));
@@ -290,7 +298,7 @@ export function buildCompletions(
   // own clause, so offer the statement snippets whenever the cursor is alone on
   // a line with a non-SQL word — that is the user starting a new statement.
   if (context.clause !== 'unknown' && isStartingANewLine(lineText, position, context.currentWord)) {
-    items.push(...buildStatementSnippets(lineText, position));
+    items.push(...buildStatementSnippets(wordRange));
   }
 
   switch (context.clause) {
@@ -307,7 +315,7 @@ export function buildCompletions(
     case 'join': {
       items.push(...buildSnippetCompletions(context.clause, position));
       items.push(
-        ...buildTableSourceCompletions(context, tables, routines, position, lineText, databases, {
+        ...buildTableSourceCompletions(context, tables, routines, position, lineText, wordRange, databases, {
           withAlias: true,
           includeFunctions: true,
           refs,
@@ -331,7 +339,7 @@ export function buildCompletions(
         items.push(...buildInsertStatementItems(refs, position));
       }
       items.push(
-        ...buildTableSourceCompletions(context, tables, routines, position, lineText, databases, {
+        ...buildTableSourceCompletions(context, tables, routines, position, lineText, wordRange, databases, {
           withAlias: false,
           includeFunctions: false,
         }),
@@ -395,7 +403,7 @@ export function buildCompletions(
 
     default: {
       // Always offer snippet completions at statement-level context.
-      items.push(...buildStatementSnippets(lineText, position));
+      items.push(...buildStatementSnippets(wordRange));
       // General SQL context: keywords + tables when in a recognisable DML statement.
       if (context.statementKind !== 'unknown') {
         items.push(...buildSqlKeywordCompletions(position));
@@ -496,6 +504,7 @@ function buildTableSourceCompletions(
   routines: RoutineSnapshot,
   position: Position,
   lineText: string,
+  replaceRange: Range,
   databases: string[],
   options: TableSourceOptions,
 ): CompletionItem[] {
@@ -505,7 +514,6 @@ function buildTableSourceCompletions(
   // deduplicated alias (e.g. o2) only when o is really taken. `generateAlias`
   // only reads the set, so every candidate can share this one.
   const usedAliases = collectUsedAliases(context);
-  const replaceRange = replaceRangeWordOnly(lineText, position);
 
   const ranker = buildObjectRanker({
     inScope: (options.refs ?? []).map((ref) => ref.table),
@@ -819,12 +827,12 @@ function buildDotCompletions(
   tables: TableInfo[],
   routines: RoutineSnapshot,
   position: Position,
+  replaceRange: Range,
   databases: string[] = [],
   loadingDatabases: ReadonlySet<string> = new Set(),
 ): CompletionItem[] {
   const chain = context.qualifierChain!;
   const qualifier = chain[chain.length - 1]; // last part before the dot
-  const replaceRange = Range.create(position, position);
   const qualifierLower = qualifier.toLowerCase();
 
   // ── [db.]schema. chain: when chain length ≥ 2, restrict to the database
@@ -1703,13 +1711,21 @@ function extractUsedOnPredicates(statementText: string, cursorOffset: number): S
 // ── Helpers: replace range computation ───────────────────────────────────────
 
 /**
- * Computes the Range to replace when a table/column completion is accepted.
- * Goes backwards over word characters (\w) from the cursor.
+ * Intervallo della parola sotto il cursore (caratteri \w prima e dopo).
+ *
+ * Accettare un suggerimento sostituisce sempre l'intera parola, ovunque sia il
+ * cursore: con `dbo.ordinite|` o `dbo.ordi|nite` la scelta prende il posto di
+ * `ordinite` invece di accodarsi.
  */
-function replaceRangeWordOnly(lineText: string, position: Position): Range {
-  const end = position.character;
-  let start = end;
-  while (start > 0 && /\w/.test(lineText[start - 1])) start--;
+function wordRangeAt(document: TextDocument, position: Position): Range {
+  const line = document.getText({
+    start: { line: position.line, character: 0 },
+    end: { line: position.line + 1, character: 0 },
+  });
+  let start = position.character;
+  while (start > 0 && /\w/.test(line[start - 1])) start--;
+  let end = position.character;
+  while (end < line.length && /\w/.test(line[end])) end++;
   return Range.create(position.line, start, position.line, end);
 }
 
@@ -1727,11 +1743,7 @@ function buildDatabaseCompletions(
   document: TextDocument,
   position: Position,
 ): CompletionItem[] {
-  const lineText = document.getText({
-    start: { line: position.line, character: 0 },
-    end: position,
-  });
-  const replaceRange = replaceRangeWordOnly(lineText, position);
+  const replaceRange = wordRangeAt(document, position);
 
   return databases.map((dbName) => ({
     label: dbName,
