@@ -20,6 +20,18 @@ import * as crypto from 'crypto';
 import { Uri, workspace } from 'vscode';
 
 import { WireSnapshot } from './wireFormat';
+import { AtomicWriteFs, TEMP_FILE_SUFFIX, tempFileName, writeFileAtomic } from './atomicWrite';
+
+/** `workspace.fs` nella forma richiesta dalla scrittura atomica. */
+const workspaceFs: AtomicWriteFs<Uri> = {
+    writeFile: (file, data) => Promise.resolve(workspace.fs.writeFile(file, data)),
+    rename: (source, target) =>
+        Promise.resolve(workspace.fs.rename(source, target, { overwrite: true })),
+    delete: (file) => Promise.resolve(workspace.fs.delete(file)),
+};
+
+/** Un temporaneo più vecchio di così è orfano (scrittura interrotta) e va rimosso. */
+const ORPHAN_TEMP_MAX_AGE_MS = 10 * 60 * 1000;
 
 /**
  * Bumped whenever the shape of `WireSnapshot` or the packed record format
@@ -131,10 +143,15 @@ export class SchemaDiskCache {
             snapshot,
         };
 
+        // Scrittura atomica (temporaneo + rename): due sync concorrenti sullo
+        // stesso database non possono lasciare un JSON troncato.
+        const fileName = entryFileName(token);
         try {
             await workspace.fs.createDirectory(this.directory);
-            await workspace.fs.writeFile(
-                Uri.joinPath(this.directory, entryFileName(token)),
+            await writeFileAtomic(
+                workspaceFs,
+                Uri.joinPath(this.directory, fileName),
+                Uri.joinPath(this.directory, tempFileName(fileName)),
                 Buffer.from(JSON.stringify(entry), 'utf8'),
             );
         } catch (err: any) {
@@ -165,6 +182,10 @@ export class SchemaDiskCache {
         } catch {
             return;
         }
+
+        await this.removeOrphanTempFiles(
+            names.map(([name]) => name).filter((name) => name.endsWith(TEMP_FILE_SUFFIX)),
+        );
 
         const files = names
             .map(([name]) => name)
@@ -198,6 +219,25 @@ export class SchemaDiskCache {
                 await workspace.fs.delete(target.uri);
             } catch {
                 // Best effort.
+            }
+        }
+    }
+
+    /**
+     * Rimuove i temporanei lasciati da scritture interrotte (es. finestra chiusa
+     * a metà). Quelli recenti possono appartenere a una scrittura in corso.
+     */
+    private async removeOrphanTempFiles(tempNames: string[]): Promise<void> {
+        const now = Date.now();
+        for (const name of tempNames) {
+            const uri = Uri.joinPath(this.directory, name);
+            try {
+                const stat = await workspace.fs.stat(uri);
+                if (now - stat.mtime > ORPHAN_TEMP_MAX_AGE_MS) {
+                    await workspace.fs.delete(uri);
+                }
+            } catch {
+                // Già rimosso o rinominato: nulla da fare.
             }
         }
     }
