@@ -10,7 +10,7 @@ SQL Prompt is a SQL Server IntelliSense and formatting extension for VS Code. It
 - Accepting a suggestion replaces the whole word being typed, wherever the cursor is in it (`EasyStock.dbo.ordinite` → `EasyStock.dbo.ORDINI_TESTATA AS ot`)
 - Renames a table alias with `F2`, updating every reference in the statement
 - Suggests the keyword that comes next: `ON` after a joined table, `BY` after `ORDER`, the object type after `ALTER`/`CREATE`/`DROP`, `SET` after `UPDATE <table>`…
-- Statement shortcuts: `ssf` (`SELECT * FROM`), `scf` (`SELECT COUNT(*) FROM`), `st10`/`st100` (`SELECT TOP n * FROM`), `ap`/`av`/`af` (`ALTER PROCEDURE/VIEW/FUNCTION`, then pick the object)
+- Statement shortcuts: `ssf` (`SELECT * FROM`), `scf`/`sct` (`SELECT COUNT(*) FROM`), `st<N>` such as `st10`, `st25`, `st100` (`SELECT TOP N * FROM`), `ap`/`av`/`af` (`ALTER PROCEDURE/VIEW/FUNCTION`, then pick the object). Add your own, or change or remove the built-in ones, with `sqlPrompt.snippets.shortcuts` (`$CURSOR$` marks where the cursor ends up)
 - Fills in the current definition after `ALTER PROCEDURE|VIEW|FUNCTION`: pick an existing object and its definition replaces the header, ready to edit
 - Reloads schema context when you switch to another `.sql` file with a different active connection
 - Formats SQL documents using configurable style files (JSON exports from Redgate SQL Prompt)
