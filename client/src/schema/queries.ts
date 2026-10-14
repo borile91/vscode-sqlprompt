@@ -183,11 +183,9 @@ export const ROUTINES_QUERY = `
 `;
 
 /**
- * Fallback for `listDatabases`.
- *
- * The mssql API is the preferred source, but it is part of the interface
- * Microsoft has marked for retirement, and cross-database completion is dead
- * without a database list — so there is a query behind it.
+ * Elenco dei database per il cross-database: solo quelli ONLINE, perché uno
+ * offline non è interrogabile. `listDatabases` dell'API mssql non filtra lo
+ * stato, quindi è solo il ripiego quando questa query fallisce.
  */
 export const DATABASES_QUERY = `
     SELECT name
@@ -272,3 +270,41 @@ export const ROUTINES_QUERY_LEGACY = `
       AND o.type IN ('FN', 'FS', 'FT', 'IF', 'TF', 'P', 'PC')
     ORDER BY s.name, o.name, p.parameter_id
 `;
+
+// ── Letture puntuali ──────────────────────────────────────────────────────────
+
+/** Letterale `N'...'` T-SQL con gli apici raddoppiati. */
+function nLiteral(value: string): string {
+    return `N'${value.replace(/'/g, "''")}'`;
+}
+
+/**
+ * Colonne di una sola tabella o vista, una riga per colonna.
+ *
+ * Per Go to Definition quando lo stadio 1 non ha ancora caricato (o non è
+ * riuscito a caricare) le colonne: è una lettura di poche righe.
+ */
+export function buildTableColumnsQuery(schema: string, name: string): string {
+    return `
+    SELECT
+        c.name AS column_name,
+        ISNULL(TYPE_NAME(c.user_type_id), 'unknown') AS data_type,
+        c.max_length,
+        c.is_nullable,
+        CASE WHEN pk.column_id IS NOT NULL THEN 1 ELSE 0 END AS is_primary_key
+    FROM sys.objects o
+    INNER JOIN sys.schemas s ON o.schema_id = s.schema_id
+    INNER JOIN sys.columns c ON o.object_id = c.object_id
+    LEFT JOIN (
+        SELECT ic.object_id, ic.column_id
+        FROM sys.index_columns ic
+        INNER JOIN sys.indexes i
+            ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+        WHERE i.is_primary_key = 1
+    ) pk ON o.object_id = pk.object_id AND c.column_id = pk.column_id
+    WHERE s.name = ${nLiteral(schema)}
+      AND o.name = ${nLiteral(name)}
+      AND o.type IN ('U', 'V')
+    ORDER BY c.column_id
+`;
+}
