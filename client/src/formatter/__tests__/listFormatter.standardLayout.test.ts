@@ -171,8 +171,10 @@ describe('virgola iniziale con keyword su riga propria (#28)', () => {
         assert.equal(fmt('SET @x = 1;'), 'SET @x = 1;');
     });
 
-    it('stringa su più righe: la lista resta invariata (nessun rischio)', () => {
+    it('stringa su più righe: stringa intatta, virgola iniziale applicata', () => {
+        // La pipeline maschera le stringhe su più righe: la lista le vede come
+        // un solo elemento e può applicare la virgola iniziale senza toccarle.
         const sql = "SELECT 'riga\nmultipla, con virgola' AS a, b FROM t";
-        assert.ok(fmt(sql).includes("multipla, con virgola' AS a,\n    b"));
+        assert.ok(fmt(sql).includes("'riga\nmultipla, con virgola' AS a\n  , b"));
     });
 });
