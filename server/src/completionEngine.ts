@@ -72,14 +72,21 @@ function recordUseCommand(schema: string, name: string): CompletionItem['command
  * and it costs nothing the user can see: nobody scrolls past 300 candidates,
  * they type another character and the list is rebuilt.
  *
- * Il ricalcolo è garantito da `buildCompletionList`: quando il taglio scarta
- * candidati la lista è marcata `isIncomplete` e i candidati sono già filtrati
- * per la parola digitata, così una tabella oltre la soglia resta raggiungibile.
+ * Il ricalcolo è garantito da `buildCompletionList`: una lista con tabelle è
+ * sempre marcata `isIncomplete` e i candidati sono già filtrati per la parola
+ * digitata, così una tabella oltre la soglia resta raggiungibile.
  */
 const MAX_TABLE_SOURCE_ITEMS = 300;
 
-/** Stato del calcolo in corso: parola digitata e se il taglio ha scartato candidati. */
-let capState: { word: string; truncated: boolean } = { word: '', truncated: false };
+/**
+ * Stato del calcolo in corso: il testo digitato prima del cursore (`typed`, così
+ * com'è), la sua forma minuscola (`word`) e se la lista va ricalcolata a ogni tasto.
+ */
+let capState: { typed: string; word: string; incomplete: boolean } = {
+  typed: '',
+  word: '',
+  incomplete: false,
+};
 
 /** Usage history per lowercase `schema.name`, published by the client. */
 let usageScores: ReadonlyMap<string, number> | undefined;
@@ -219,7 +226,7 @@ export function buildCompletionList(
   ...args: Parameters<typeof buildCompletions>
 ): CompletionList {
   const items = buildCompletions(...args);
-  return { isIncomplete: capState.truncated, items };
+  return { isIncomplete: capState.incomplete, items };
 }
 
 /** `ALTER PROC[EDURE] | VIEW | FUNCTION` followed by a partial (qualified) name. */
@@ -235,10 +242,11 @@ export function buildCompletions(
   databases: string[] = [],
   loadingDatabases: ReadonlySet<string> = new Set(),
 ): CompletionItem[] {
-  capState = {
-    word: (context.currentWord ?? '').replace(/[\[\]"]/g, '').toLowerCase(),
-    truncated: false,
-  };
+  // Stesso testo che VS Code usa per filtrare: dall'inizio della parola al cursore.
+  const typed = /\w*$/.exec(
+    document.getText({ start: { line: position.line, character: 0 }, end: position }),
+  )![0];
+  capState = { typed, word: typed.toLowerCase(), incomplete: false };
 
   // ── 0. USE <database> completions ────────────────────────────────────────
   if (context.clause === 'use') {
@@ -646,32 +654,65 @@ function buildTableSourceCompletions(
 }
 
 /**
- * Trims a table-source list to the best `MAX_TABLE_SOURCE_ITEMS` candidates.
+ * Ordina, filtra e taglia le table source (la fascia `TABLE_SOURCE_BAND`).
  *
- * Only the ranked band is trimmed. Databases and anything else outside it are
- * few and are kept whatever the cut does, so typing `OtherDb.` still works on a
- * server with hundreds of tables in the current database.
+ * VS Code ordina prima per il proprio punteggio fuzzy e solo a parità per
+ * `sortText`; quel punteggio premia anche le maiuscole uguali a quelle digitate,
+ * per cui `libr` metteva `ui.vwLibri` davanti a `dbo.LIBRI`. Qui l'ordine
+ * lo decide il server:
+ * - prima la corrispondenza del nome con la parola digitata (`matchTier`),
+ *   poi il punteggio del ranker già codificato nel `sortText`;
+ * - `filterText` uguale per tutti al testo digitato, così il punteggio di VS Code
+ *   è identico e conta solo `sortText`;
+ * - lista `isIncomplete`, perché a ogni tasto ordine e filtro vanno ricalcolati.
+ *
+ * Databases and anything else outside the band are few and are kept whatever
+ * the cut does, so typing `OtherDb.` still works on a server with hundreds of
+ * tables in the current database.
  */
 function capTableSourceItems(items: CompletionItem[]): CompletionItem[] {
-  const ranked = items.filter((item) => item.sortText?.startsWith(`${TABLE_SOURCE_BAND}_`));
-  if (ranked.length <= MAX_TABLE_SOURCE_ITEMS) {
+  const isRanked = (item: CompletionItem) => item.sortText?.startsWith(`${TABLE_SOURCE_BAND}_`);
+  const ranked = items.filter(isRanked);
+  if (ranked.length === 0) {
     return items;
   }
+  capState.incomplete = true;
 
-  // Lista tagliata: VS Code non può più filtrarla da sé, quindi i candidati che
-  // non corrispondono alla parola digitata si scartano qui, prima del taglio.
-  capState.truncated = true;
-  const word = capState.word;
-  const matching = word
-    ? ranked.filter((item) => isSubsequence(word, String(item.filterText ?? item.label).toLowerCase()))
-    : ranked;
+  const { typed, word } = capState;
+  const matching: CompletionItem[] = [];
+  for (const item of ranked) {
+    const tier = word ? matchTier(word, String(item.label)) : 0;
+    if (tier === undefined) continue;
+    item.sortText = `${TABLE_SOURCE_BAND}_${tier}${String(item.sortText).slice(TABLE_SOURCE_BAND.length)}`;
+    if (typed) item.filterText = typed;
+    matching.push(item);
+  }
 
   matching.sort((a, b) => (String(a.sortText) < String(b.sortText) ? -1 : 1));
   const keep = new Set(matching.slice(0, MAX_TABLE_SOURCE_ITEMS));
 
-  return items.filter(
-    (item) => !item.sortText?.startsWith(`${TABLE_SOURCE_BAND}_`) || keep.has(item),
-  );
+  return items.filter((item) => !isRanked(item) || keep.has(item));
+}
+
+/**
+ * Quanto bene il nome di un oggetto (`label`, `schema.nome` o `nome`) corrisponde
+ * alla parola digitata: 0 nome uguale, 1 nome che inizia così, 2 inizio di una
+ * parte del nome (`vwLibri`, `ORDINI_ARTICOLI`), 3 contenuta nel nome,
+ * 4 lettere in ordine nel nome completo. `undefined` se non corrisponde.
+ */
+function matchTier(word: string, label: string): number | undefined {
+  const name = label.slice(label.lastIndexOf('.') + 1).replace(/[\[\]]/g, '');
+  const lower = name.toLowerCase();
+  if (lower === word) return 0;
+  if (lower.startsWith(word)) return 1;
+  for (let i = 1; i < name.length; i++) {
+    const partStart =
+      name[i - 1] === '_' || (/[a-z0-9]/.test(name[i - 1]) && /[A-Z]/.test(name[i]));
+    if (partStart && lower.startsWith(word, i)) return 2;
+  }
+  if (lower.includes(word)) return 3;
+  if (isSubsequence(word, label.toLowerCase())) return 4;
+  return undefined;
 }
 
 /** Vero se i caratteri di `word` compaiono in ordine in `text` (filtro fuzzy, largo come quello di VS Code). */
