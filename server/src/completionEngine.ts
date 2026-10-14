@@ -229,8 +229,17 @@ export function buildCompletionList(
   return { isIncomplete: capState.incomplete, items };
 }
 
-/** `ALTER PROC[EDURE] | VIEW | FUNCTION` followed by a partial (qualified) name. */
-const ALTER_OBJECT_HEADER = /\bALTER\s+(?:PROC(?:EDURE)?|VIEW|FUNCTION)\s+[\w.\[\]]*$/i;
+/**
+ * `ALTER PROC[EDURE] | VIEW | FUNCTION` followed by a partial (qualified) name.
+ * Stesso nome parziale del client (alterScaffold.ts): parti [..] o ".." anche con
+ * spazi, l'ultima eventualmente non chiusa.
+ */
+const ALTER_OBJECT_HEADER = new RegExp(
+  String.raw`\bALTER\s+(?:PROC(?:EDURE)?|VIEW|FUNCTION)\s+` +
+    String.raw`(?:(?:\[(?:[^\]]|\]\])*\]|"(?:[^"]|"")*"|[\p{L}\p{N}_@#$]+)\.){0,2}` +
+    String.raw`(?:\[(?:[^\]]|\]\])*\]?|"(?:[^"]|"")*"?|[\p{L}\p{N}_@#$]*)$`,
+  'iu',
+);
 
 export function buildCompletions(
   context: QueryContext,
