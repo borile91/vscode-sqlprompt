@@ -46,6 +46,14 @@ Typical suggestions:
 - `dbo.Orders AS o`
 - `dbo.OrderDetails AS od`
 
+## Access to your mssql connections
+
+SQL Prompt reads the schema through the connections you open in the ms-mssql extension; it never asks for credentials itself. Which mssql API it uses depends on the installed version:
+
+- **Newer ms-mssql versions** (shared connections API, after 1.46.0): the first time a connected `.sql` file is synced, **VS Code asks whether SQL Prompt may use your SQL Server (mssql) connections**. Allow it once and later syncs no longer ask. SQL Prompt then opens its own connections from the same connection profiles (one per connection and database, closed when VS Code shuts down). If you decline, SQL Prompt shows one warning and stops asking; run `SQL Prompt: Reload Schema` to be asked again, or allow it from the **Accounts** menu. You can revoke access at any time from **Accounts > Manage Trusted Extensions**, or by signing out of **Shared connections** under **SQL Server (mssql)**.
+- **ms-mssql 1.46.0 and earlier**: SQL Prompt uses the older connection sharing API, which ms-mssql has deprecated. ms-mssql shows its own approval dialog, and may show a notice that the API is being retired.
+- If the installed ms-mssql offers neither API, SQL Prompt shows one warning and schema-aware features (completion of objects and columns, Go to Definition, ALTER scaffolding) are unavailable; formatting keeps working.
+
 ## ALTER scaffolding
 
 Type `ALTER PROCEDURE `, `ALTER VIEW ` or `ALTER FUNCTION ` (also after `CREATE OR`) in a connected `.sql` file and start typing a name. The existing objects of that kind are suggested; accepting one replaces the `ALTER ...` header with the **current definition** of the object, with `CREATE` rewritten to `ALTER`, so you can modify it right away.
@@ -122,7 +130,7 @@ See [docs/formatting/FORMATTING.md](docs/formatting/FORMATTING.md) for the optio
 
 ## IntelliSense behavior and automatic suppression
 
-SQL Prompt can automatically suppress the ms-mssql extension's IntelliSense so that SQL Prompt completions appear first while you are connected. This suppression only affects completion suggestions — other ms-mssql features (Script As, Alter/Modify Procedure, Execute Query, connection sharing, etc.) remain available.
+SQL Prompt can automatically suppress the ms-mssql extension's IntelliSense so that SQL Prompt completions appear first while you are connected. This suppression only affects completion suggestions — other ms-mssql features (Script As, Alter/Modify Procedure, Execute Query, etc.) remain available.
 
 Set `sqlPrompt.suppressMssqlIntellisense` to `false` to let both providers coexist (you may see duplicate suggestions).
 
