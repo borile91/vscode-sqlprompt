@@ -5,7 +5,7 @@ import { CompletionItemKind } from 'vscode-languageserver/node';
 
 import { resolveContext } from '../cursorContextResolver.js';
 import { extractStatementAtOffset } from '../documentTextService.js';
-import { buildCompletions, quoteIdentifier } from '../completionEngine.js';
+import { buildCompletionList, buildCompletions, quoteIdentifier } from '../completionEngine.js';
 import type { TableInfo, RoutineSnapshot } from '../schemaLoader.js';
 
 const tables: TableInfo[] = [
@@ -804,5 +804,53 @@ describe('statement snippets', () => {
 
   it('does not offer ssf after a qualifier dot', () => {
     assert.equal(hasSsf('SELECT * FROM dbo.Orders o\nWHERE o.'), false);
+  });
+});
+
+describe('completionEngine — schemi con molte tabelle', () => {
+  const many: TableInfo[] = [
+    ...Array.from({ length: 1000 }, (_, i) => ({
+      schema: 'dbo',
+      name: `T${String(i).padStart(4, '0')}`,
+      columns: [],
+      foreignKeys: [],
+    })),
+    { schema: 'dbo', name: 'Zona', columns: [], foreignKeys: [] },
+  ];
+
+  function list(sql: string) {
+    const document = TextDocument.create('file:///test.sql', 'sql', 1, sql);
+    const position = document.positionAt(sql.length);
+    const context = resolveContext(sql, 0, sql.length, many);
+    return buildCompletionList(
+      context,
+      many,
+      routines,
+      document,
+      position,
+      { text: sql, start: 0, end: sql.length, cursorOffset: sql.length },
+    );
+  }
+
+  const hasZona = (sql: string) =>
+    list(sql).items.some((i) => String(i.label).includes('Zona'));
+
+  it('marks a cut list as incomplete so VS Code asks again on the next key', () => {
+    const result = list('SELECT * FROM ');
+    assert.equal(result.isIncomplete, true);
+  });
+
+  it('keeps a table beyond the cut reachable by typing its name', () => {
+    assert.equal(hasZona('SELECT * FROM Zon'), true);
+    assert.equal(hasZona('SELECT * FROM dbo.Zon'), true);
+  });
+
+  it('leaves a small schema complete', () => {
+    const document = TextDocument.create('file:///test.sql', 'sql', 1, 'SELECT * FROM ');
+    const context = resolveContext('SELECT * FROM ', 0, 14, tables);
+    const result = buildCompletionList(context, tables, routines, document, document.positionAt(14), {
+      text: 'SELECT * FROM ', start: 0, end: 14, cursorOffset: 14,
+    });
+    assert.equal(result.isIncomplete, false);
   });
 });

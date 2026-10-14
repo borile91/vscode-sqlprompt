@@ -4,6 +4,7 @@ import {
   ProposedFeatures,
   InitializeParams,
   CompletionItem,
+  CompletionList,
   TextDocumentPositionParams,
   TextDocumentSyncKind,
   InitializeResult,
@@ -19,7 +20,7 @@ import { TextDocument } from "vscode-languageserver-textdocument";
 import { SchemaLoader, TableInfo, RoutineSnapshot } from "./schemaLoader";
 import { extractStatementAtOffset } from "./documentTextService";
 import { resolveContext } from "./cursorContextResolver";
-import { buildCompletions, resolveTableCompletionItem, setUsageScores } from "./completionEngine";
+import { buildCompletionList, resolveTableCompletionItem, setUsageScores } from "./completionEngine";
 import { collidesWithExistingAlias, findAliasRenameTarget, formatAliasName } from "./aliasRename";
 import {
   WireColumns,
@@ -477,7 +478,7 @@ connection.onRequest(
 //                  →  buildCompletions (routing by context.clause)
 
 connection.onCompletion(
-  (params: TextDocumentPositionParams): CompletionItem[] => {
+  (params: TextDocumentPositionParams): CompletionItem[] | CompletionList => {
     connection.console.info(
       `SQL Prompt: onCompletion called, tables loaded: ${tables.length}, ` +
       `procedures loaded: ${routines.storedProcedures.length}, ` +
@@ -617,7 +618,7 @@ connection.onCompletion(
       }
     }
 
-    return buildCompletions(context, tables, routines, document, position, statementRange, databases, loadingDatabaseNames);
+    return buildCompletionList(context, tables, routines, document, position, statementRange, databases, loadingDatabaseNames);
   },
 );
 
