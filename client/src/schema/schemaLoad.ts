@@ -45,6 +45,7 @@ import {
     OBJECTS_QUERY,
     ROUTINES_QUERY,
     ROUTINES_QUERY_LEGACY,
+    buildTableColumnsQuery,
 } from './queries';
 
 /** The slice of the mssql connection sharing API this module needs. */
@@ -256,6 +257,49 @@ export async function queryRowsText(
     const { rows, index } = await query(runner, ownerUri, sql);
     const positions = columns.map(index);
     return rows.map((row) => positions.map((i) => (i < 0 ? '' : cellText(row[i]))));
+}
+
+/** Una colonna di tabella o vista, come serve allo script `CREATE TABLE`. */
+export interface TableColumn {
+    name: string;
+    dataType: string;
+    maxLength: number | null;
+    isNullable: boolean;
+    isPrimaryKey: boolean;
+}
+
+/**
+ * Legge al volo le colonne di una tabella o vista.
+ *
+ * Per Go to Definition prima che lo stadio 1 le abbia caricate (o se è
+ * fallito): senza, lo script generato sarebbe un `CREATE TABLE` vuoto.
+ */
+export async function loadTableColumns(
+    runner: QueryRunner,
+    ownerUri: string,
+    schema: string,
+    name: string,
+): Promise<TableColumn[]> {
+    const { rows, index } = await query(runner, ownerUri, buildTableColumnsQuery(schema, name));
+    const iName = index('column_name');
+    const iType = index('data_type');
+    const iMaxLength = index('max_length');
+    const iNullable = index('is_nullable');
+    const iPrimaryKey = index('is_primary_key');
+
+    const columns: TableColumn[] = [];
+    for (const row of rows) {
+        const columnName = cellText(row[iName]).trim();
+        if (!columnName) continue;
+        columns.push({
+            name: columnName,
+            dataType: cellText(row[iType]).trim() || 'unknown',
+            maxLength: cellNumber(row[iMaxLength]),
+            isNullable: cellFlag(row[iNullable]),
+            isPrimaryKey: cellFlag(row[iPrimaryKey]),
+        });
+    }
+    return columns;
 }
 
 // ── Identity and change detection ─────────────────────────────────────────────

@@ -45,6 +45,7 @@ import {
     loadObjects,
     loadRoutines,
     loadSchemaToken,
+    loadTableColumns,
     queryFirstCellText,
     queryRowsText,
 } from './schema/schemaLoad';
@@ -1230,12 +1231,34 @@ export async function activate(context: ExtensionContext) {
 
                 // For tables (no sql_modules entry): generate CREATE TABLE from snapshot
                 if (script === null && resolved.kind === 'tableOrView') {
-                    if (resolved.columns) {
+                    let columns: ResolvedColumn[] = resolved.columns ?? [];
+                    // Prima dello stadio 1 (o se è fallito) il server non ha le
+                    // colonne: lette al volo, mai uno script `CREATE TABLE` vuoto.
+                    if (columns.length === 0 && api?.connectionSharing) {
+                        try {
+                            columns = await loadTableColumns(
+                                api.connectionSharing as QueryRunner,
+                                ownerUri,
+                                resolved.schema,
+                                resolved.name,
+                            );
+                        } catch (err: any) {
+                            console.error(
+                                `[SQL Prompt] column lookup for Go to Definition failed: ${err?.message ?? err}`,
+                            );
+                        }
+                    }
+                    if (columns.length > 0) {
                         script = generateCreateTableScript(
                             resolved.schema,
                             resolved.name,
-                            resolved.columns,
+                            columns,
                         );
+                    } else {
+                        window.showWarningMessage(
+                            `SQL Prompt: the columns of [${resolved.schema}].[${resolved.name}] are not available yet — try again once the schema has loaded.`,
+                        );
+                        return null;
                     }
                 }
 
