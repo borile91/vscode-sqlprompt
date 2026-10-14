@@ -38,6 +38,53 @@ import {
 import { StatementRange } from './documentTextService';
 import { generateAlias } from './utils';
 import { isReservedWord } from './sqlLexer';
+import {
+  ObjectKind,
+  TABLE_SOURCE_BAND,
+  buildObjectRanker,
+  rankingKey,
+} from './completionRanking';
+
+/**
+ * Command fired when the user accepts a schema-object completion.
+ *
+ * The extension host owns the usage history — it is the side that can persist
+ * across sessions — so acceptance has to be reported back to it. A `command` on
+ * the item is the one hook VS Code offers for "this item was inserted".
+ */
+function recordUseCommand(schema: string, name: string): CompletionItem['command'] {
+  return {
+    title: '',
+    command: 'sqlPrompt.recordCompletionUse',
+    arguments: [rankingKey(schema, name)],
+  };
+}
+
+/**
+ * Most table sources to return in one completion list.
+ *
+ * A schema with thousands of tables used to send every one of them on every
+ * keystroke, which made the ranking invisible — VS Code's own fuzzy score
+ * decides the order among items it considers equally good, and with two
+ * thousand of them it always has plenty to choose from. Cutting the list to the
+ * best few hundred is what makes the score above actually show up in the UI,
+ * and it costs nothing the user can see: nobody scrolls past 300 candidates,
+ * they type another character and the list is rebuilt.
+ */
+const MAX_TABLE_SOURCE_ITEMS = 300;
+
+/** Usage history per lowercase `schema.name`, published by the client. */
+let usageScores: ReadonlyMap<string, number> | undefined;
+
+/**
+ * Replaces the usage history used for ranking.
+ *
+ * The client owns the store — it is the side that can persist across sessions —
+ * and pushes a decayed snapshot of it whenever it changes.
+ */
+export function setUsageScores(scores: ReadonlyMap<string, number> | undefined): void {
+  usageScores = scores;
+}
 
 // ── Alias bookkeeping ─────────────────────────────────────────────────────────
 
@@ -317,19 +364,31 @@ export function buildCompletions(
           items.push(...buildStoredProcedureCompletions(routines.storedProcedures));
         }
         if (tables.length > 0) {
+          const ranker = buildObjectRanker({
+            inScope: refs.map((ref) => ref.table),
+            tables,
+            usage: usageScores,
+          });
+          const tableItems: CompletionItem[] = [];
           tables.forEach((table, idx) => {
             const fullName = `${table.schema}.${table.name}`;
-            items.push({
+            tableItems.push({
               label: fullName,
               kind: CompletionItemKind.Class,
-              detail: `Table (${table.columns.length} columns)`,
+              detail: tableDetail(table),
               filterText: fullName,
               insertText: fullName,
               insertTextFormat: InsertTextFormat.PlainText,
-              sortText: `01_table_${table.name}`,
+              sortText: ranker.sortText(
+                table.schema,
+                table.name,
+                table.isView ? 'view' : 'table',
+              ),
+              command: recordUseCommand(table.schema, table.name),
               data: { type: 'table', index: idx },
             });
           });
+          items.push(...capTableSourceItems(tableItems));
         }
       }
       break;
@@ -337,6 +396,19 @@ export function buildCompletions(
   }
 
   return items;
+}
+
+/**
+ * Label for a table's column count.
+ *
+ * The schema loads in stages, so between the object list and the column list a
+ * table genuinely has no columns yet. Reporting "0 columns" would read as a
+ * broken table instead of a pending one, so the count is simply left out.
+ */
+function tableDetail(table: TableInfo): string {
+  return table.columns.length > 0
+    ? `Table (${table.columns.length} columns)`
+    : 'Table';
 }
 
 /**
@@ -349,10 +421,13 @@ export function resolveTableCompletionItem(item: CompletionItem, tables: TableIn
       item.documentation = {
         kind: 'markdown',
         value:
-          `**${table.schema}.${table.name}**\n\nColumns:\n` +
-          table.columns
-            .map((c) => `- \`${c.name}\` (${c.dataType}${c.isNullable ? ', nullable' : ''})`)
-            .join('\n'),
+          `**${table.schema}.${table.name}**\n\n` +
+          (table.columns.length > 0
+            ? 'Columns:\n' +
+              table.columns
+                .map((c) => `- \`${c.name}\` (${c.dataType}${c.isNullable ? ', nullable' : ''})`)
+                .join('\n')
+            : '_Columns are still loading._'),
       };
     }
   }
@@ -368,35 +443,6 @@ interface TableSourceOptions {
   includeFunctions: boolean;
   /** Tables already in scope, used to rank FK-related tables first. */
   refs?: ResolvedRef[];
-}
-
-/**
- * Keys (`schema.table`) of the tables tied by a foreign key to a table already
- * in the query, in either direction.  Those are the ones a JOIN is most likely
- * about, so they are ranked first (issue #9).
- */
-function collectRelatedTableKeys(refs: ResolvedRef[], tables: TableInfo[]): Set<string> {
-  const related = new Set<string>();
-  if (refs.length === 0) return related;
-
-  const key = (schema: string, name: string) => `${schema.toLowerCase()}.${name.toLowerCase()}`;
-  const inScope = new Set(refs.map((r) => key(r.table.schema, r.table.name)));
-
-  for (const ref of refs) {
-    for (const fk of ref.table.foreignKeys ?? []) {
-      related.add(key(fk.referencedSchema, fk.referencedTable));
-    }
-  }
-
-  for (const table of tables) {
-    for (const fk of table.foreignKeys ?? []) {
-      if (inScope.has(key(fk.referencedSchema, fk.referencedTable))) {
-        related.add(key(table.schema, table.name));
-      }
-    }
-  }
-
-  return related;
 }
 
 /**
@@ -417,26 +463,26 @@ function buildTableSourceCompletions(
   const items: CompletionItem[] = [];
 
   // Aliases actually written in the query, so that new suggestions get a
-  // deduplicated alias (e.g. o2) only when o is really taken.
+  // deduplicated alias (e.g. o2) only when o is really taken. `generateAlias`
+  // only reads the set, so every candidate can share this one.
   const usedAliases = collectUsedAliases(context);
   const replaceRange = replaceRangeWordOnly(lineText, position);
-  const relatedKeys = collectRelatedTableKeys(options.refs ?? [], tables);
 
-  /** FK-related tables first, then the rest, alphabetically within each group. */
-  const tableSortText = (table: TableInfo): string => {
-    const group = relatedKeys.has(`${table.schema.toLowerCase()}.${table.name.toLowerCase()}`)
-      ? '0'
-      : '1';
-    return `01_table_${group}_${table.name}`;
-  };
+  const ranker = buildObjectRanker({
+    inScope: (options.refs ?? []).map((ref) => ref.table),
+    tables,
+    usage: usageScores,
+  });
 
   /** ` AS <alias>` suffix plus the matching detail fragment. */
   const aliasFor = (objectName: string): { suffix: string; detail: string } => {
     if (!options.withAlias) return { suffix: '', detail: '' };
-    // Pass a copy so that sibling items don't affect each other.
-    const alias = generateAlias(objectName, new Set(usedAliases));
+    const alias = generateAlias(objectName, usedAliases);
     return { suffix: ` AS ${alias}`, detail: ` — alias: ${alias}` };
   };
+
+  /** A base table is a likelier query target than a view, so they score apart. */
+  const kindOf = (table: TableInfo): ObjectKind => (table.isView ? 'view' : 'table');
 
   const schemaMatch = SCHEMA_DOT_PATTERN.exec(lineText);
 
@@ -444,25 +490,23 @@ function buildTableSourceCompletions(
     const dbName = schemaMatch[1]?.toLowerCase();   // undefined when no db qualifier
     const schemaName = schemaMatch[2];
 
-    tables
-      .filter(
-        (t) =>
-          t.schema.toLowerCase() === schemaName.toLowerCase() &&
-          (dbName === undefined || (t.database ?? '').toLowerCase() === dbName),
-      )
-      .forEach((table) => {
-        const alias = aliasFor(table.name);
-        items.push({
-          label: table.name,
-          kind: CompletionItemKind.Class,
-          detail: `Table${alias.detail}`,
-          filterText: table.name,
-          textEdit: TextEdit.replace(replaceRange, `${table.name}${alias.suffix}`),
-          insertTextFormat: InsertTextFormat.PlainText,
-          sortText: tableSortText(table),
-          data: { type: 'table', index: tables.indexOf(table) },
-        });
+    tables.forEach((table, idx) => {
+      if (table.schema.toLowerCase() !== schemaName.toLowerCase()) return;
+      if (dbName !== undefined && (table.database ?? '').toLowerCase() !== dbName) return;
+
+      const alias = aliasFor(table.name);
+      items.push({
+        label: table.name,
+        kind: CompletionItemKind.Class,
+        detail: `Table${alias.detail}`,
+        filterText: table.name,
+        textEdit: TextEdit.replace(replaceRange, `${table.name}${alias.suffix}`),
+        insertTextFormat: InsertTextFormat.PlainText,
+        sortText: ranker.sortText(table.schema, table.name, kindOf(table)),
+        command: recordUseCommand(table.schema, table.name),
+        data: { type: 'table', index: idx },
       });
+    });
 
     if (options.includeFunctions) {
       routines.tableValuedFunctions
@@ -479,12 +523,13 @@ function buildTableSourceCompletions(
               `${buildFunctionCallText(fn.name, fn.parameters)}${alias.suffix}`,
             ),
             insertTextFormat: InsertTextFormat.Snippet,
-            sortText: `02_tvf_${fn.name}`,
+            sortText: ranker.sortText(fn.schema, fn.name, 'tableValuedFunction'),
+            command: recordUseCommand(fn.schema, fn.name),
           });
         });
     }
 
-    return items;
+    return capTableSourceItems(items);
   }
 
   tables.forEach((table, idx) => {
@@ -497,7 +542,8 @@ function buildTableSourceCompletions(
       filterText: fullName,
       textEdit: TextEdit.replace(replaceRange, `${fullName}${alias.suffix}`),
       insertTextFormat: InsertTextFormat.PlainText,
-      sortText: tableSortText(table),
+      sortText: ranker.sortText(table.schema, table.name, kindOf(table)),
+      command: recordUseCommand(table.schema, table.name),
       data: { type: 'table', index: idx },
     });
   });
@@ -516,12 +562,13 @@ function buildTableSourceCompletions(
           `${buildFunctionCallText(fullName, fn.parameters)}${alias.suffix}`,
         ),
         insertTextFormat: InsertTextFormat.Snippet,
-        sortText: `02_tvf_${fn.name}`,
+        sortText: ranker.sortText(fn.schema, fn.name, 'tableValuedFunction'),
+        command: recordUseCommand(fn.schema, fn.name),
       });
     });
 
     // Add all defined CTEs to FROM/JOIN suggestions
-    context.visibleCtes.forEach((cteName, cteIdx) => {
+    context.visibleCtes.forEach((cteName) => {
       const alias = aliasFor(cteName);
       items.push({
         label: cteName,
@@ -530,7 +577,7 @@ function buildTableSourceCompletions(
         filterText: cteName,
         textEdit: TextEdit.replace(replaceRange, `${cteName}${alias.suffix}`),
         insertTextFormat: InsertTextFormat.PlainText,
-        sortText: `01_cte_${cteIdx.toString().padStart(3, '0')}`,
+        sortText: ranker.sortText('', cteName, 'cte'),
       });
     });
   }
@@ -548,7 +595,28 @@ function buildTableSourceCompletions(
     });
   });
 
-  return items;
+  return capTableSourceItems(items);
+}
+
+/**
+ * Trims a table-source list to the best `MAX_TABLE_SOURCE_ITEMS` candidates.
+ *
+ * Only the ranked band is trimmed. Databases and anything else outside it are
+ * few and are kept whatever the cut does, so typing `OtherDb.` still works on a
+ * server with hundreds of tables in the current database.
+ */
+function capTableSourceItems(items: CompletionItem[]): CompletionItem[] {
+  const ranked = items.filter((item) => item.sortText?.startsWith(`${TABLE_SOURCE_BAND}_`));
+  if (ranked.length <= MAX_TABLE_SOURCE_ITEMS) {
+    return items;
+  }
+
+  ranked.sort((a, b) => (String(a.sortText) < String(b.sortText) ? -1 : 1));
+  const keep = new Set(ranked.slice(0, MAX_TABLE_SOURCE_ITEMS));
+
+  return items.filter(
+    (item) => !item.sortText?.startsWith(`${TABLE_SOURCE_BAND}_`) || keep.has(item),
+  );
 }
 
 /** Literals and functions that make sense as a value inside `VALUES (...)`. */
@@ -800,8 +868,17 @@ function buildDotCompletions(
     const usedAliases = collectUsedAliases(context);
     // `INSERT INTO dbo.` / `UPDATE dbo.` do not accept an alias on the target.
     const withAlias = context.clause !== 'insertTarget' && context.clause !== 'updateTarget';
+
+    const ranker = buildObjectRanker({
+      inScope: resolveRefs(context.visibleSources, tables).map((ref) => ref.table),
+      tables,
+      usage: usageScores,
+    });
+    // `indexOf` per candidate would be quadratic on a large schema.
+    const indexByTable = new Map(tables.map((table, index) => [table, index]));
+
     const tableItems = schemaMatches.map((table) => {
-      const alias = generateAlias(table.name, new Set(usedAliases));
+      const alias = generateAlias(table.name, usedAliases);
       return {
         label: table.name,
         kind: CompletionItemKind.Class,
@@ -814,13 +891,14 @@ function buildDotCompletions(
             : quoteIdentifier(table.name),
         ),
         insertTextFormat: InsertTextFormat.PlainText,
-        sortText: `01_table_${table.name}`,
-        data: { type: 'table', index: tables.indexOf(table) },
+        sortText: ranker.sortText(table.schema, table.name, table.isView ? 'view' : 'table'),
+        command: recordUseCommand(table.schema, table.name),
+        data: { type: 'table', index: indexByTable.get(table) ?? -1 },
       };
     });
 
     const tvfItems = schemaRoutineMatches.map((fn) => {
-      const alias = generateAlias(fn.name, new Set(usedAliases));
+      const alias = generateAlias(fn.name, usedAliases);
       return {
         label: fn.name,
         kind: CompletionItemKind.Function,
@@ -831,7 +909,8 @@ function buildDotCompletions(
           `${buildFunctionCallText(quoteIdentifier(fn.name), fn.parameters)} AS ${alias}`,
         ),
         insertTextFormat: InsertTextFormat.Snippet,
-        sortText: `02_tvf_${fn.name}`,
+        sortText: ranker.sortText(fn.schema, fn.name, 'tableValuedFunction'),
+        command: recordUseCommand(fn.schema, fn.name),
       };
     });
 
@@ -848,7 +927,7 @@ function buildDotCompletions(
       sortText: `02_proc_${proc.name}`,
     }));
 
-    return [...tableItems, ...tvfItems, ...procedureItems];
+    return capTableSourceItems([...tableItems, ...tvfItems, ...procedureItems]);
   }
 
   // Is it a table name? → offer columns

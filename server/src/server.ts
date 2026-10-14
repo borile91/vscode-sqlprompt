@@ -16,19 +16,21 @@ import {
 } from "vscode-languageserver/node";
 
 import { TextDocument } from "vscode-languageserver-textdocument";
-import {
-  SchemaLoader,
-  TableInfo,
-  RoutineSnapshot,
-  ScalarFunctionInfo,
-  TableValuedFunctionInfo,
-  StoredProcedureInfo,
-  RoutineParameterInfo,
-} from "./schemaLoader";
+import { SchemaLoader, TableInfo, RoutineSnapshot } from "./schemaLoader";
 import { extractStatementAtOffset } from "./documentTextService";
 import { resolveContext } from "./cursorContextResolver";
-import { buildCompletions, resolveTableCompletionItem } from "./completionEngine";
+import { buildCompletions, resolveTableCompletionItem, setUsageScores } from "./completionEngine";
 import { collidesWithExistingAlias, findAliasRenameTarget, formatAliasName } from "./aliasRename";
+import {
+  WireColumns,
+  WireForeignKey,
+  WireObject,
+  WireRoutine,
+  mergeColumns,
+  mergeForeignKeys,
+  mergeRoutineParameters,
+  splitWireObjects,
+} from "./schemaWire";
 
 const connection = createConnection(ProposedFeatures.all);
 const documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument);
@@ -37,6 +39,13 @@ let schemaLoader: SchemaLoader | null = null;
 let tables: TableInfo[] = [];
 let routines: RoutineSnapshot = emptyRoutineSnapshot();
 let databases: string[] = [];
+/**
+ * The database stage 0 described, if the client knew it.
+ *
+ * Stages 1-3 are scoped to it: `tables` also holds demand-loaded schemas from
+ * other databases, and a same-named table there must not be overwritten.
+ */
+let connectedDatabase: string | undefined;
 let hasConfigurationCapability = false;
 
 /** Lowercase database names whose schema has already been loaded (or attempted). */
@@ -201,14 +210,22 @@ connection.onRequest(
   },
 );
 
+// ── Staged schema snapshot (connectionSharing path) ───────────────────────────
+//
+// The client publishes the schema in stages so that table completion becomes
+// available long before the columns have finished loading:
+//
+//   sqlPrompt/setSchemaObjects    stage 0 — replaces everything, names only
+//   sqlPrompt/mergeSchemaDetails  stages 1-3 — fills in columns, FKs, parameters
+//
+// See `schemaWire.ts` for the packed payload format and why it exists.
+
 connection.onRequest(
-  "sqlPrompt/updateSchemaSnapshot",
+  "sqlPrompt/setSchemaObjects",
   async (params: {
-    tables: TableInfo[];
-    scalarFunctions?: ScalarFunctionInfo[];
-    tableValuedFunctions?: TableValuedFunctionInfo[];
-    storedProcedures?: StoredProcedureInfo[];
+    objects?: WireObject[];
     databases?: string[];
+    database?: string;
   }) => {
     try {
       if (schemaLoader) {
@@ -216,27 +233,76 @@ connection.onRequest(
         schemaLoader = null;
       }
 
-      tables = sanitizeTableSnapshot(Array.isArray(params?.tables) ? params.tables : []);
-      routines = sanitizeRoutineSnapshot(params);
-      databases = Array.isArray(params?.databases) ? params.databases.filter((d) => typeof d === 'string' && d.length > 0) : [];
+      connectedDatabase =
+        typeof params?.database === 'string' && params.database ? params.database : undefined;
 
-      // A fresh snapshot replaces everything, so the demand-load bookkeeping has
-      // to start over — and the databases this snapshot already covers must be
-      // marked as loaded. Without this, typing the name of the *connected*
-      // database triggered a demand-load that appended its tables a second time,
-      // and every table appeared twice in the completions.
+      const split = splitWireObjects(
+        Array.isArray(params?.objects) ? params.objects : [],
+        connectedDatabase,
+      );
+
+      tables = split.tables;
+      routines = split.routines;
+      databases = Array.isArray(params?.databases)
+        ? params.databases.filter((d) => typeof d === 'string' && d.length > 0)
+        : [];
+
+      // A fresh stage 0 replaces everything, so the demand-load bookkeeping has
+      // to start over — and the database this snapshot covers must be marked as
+      // loaded. Without this, typing the name of the *connected* database
+      // triggered a demand-load that appended its tables a second time, and
+      // every table appeared twice in the completions.
       loadedDatabaseNames.clear();
       loadingDatabaseNames.clear();
-      for (const table of tables) {
-        if (table.database) loadedDatabaseNames.add(table.database.toLowerCase());
+      if (params?.database) {
+        loadedDatabaseNames.add(params.database.toLowerCase());
       }
+
       connection.console.info(
-        `SQL Prompt: schema updated via connectionSharing snapshot. Loaded ${tables.length} tables, ${routines.scalarFunctions.length} scalar function(s), ${routines.tableValuedFunctions.length} table-valued function(s), ${routines.storedProcedures.length} procedure(s), ${databases.length} database(s).`,
+        `SQL Prompt: stage 0 published — ${tables.length} table(s)/view(s), ` +
+        `${routines.scalarFunctions.length} scalar function(s), ` +
+        `${routines.tableValuedFunctions.length} table-valued function(s), ` +
+        `${routines.storedProcedures.length} procedure(s), ` +
+        `${databases.length} database(s).`,
       );
       return { success: true, tableCount: tables.length };
     } catch (err: any) {
       connection.console.error(
-        `SQL Prompt: updateSchemaSnapshot failed — ${err.message}`,
+        `SQL Prompt: setSchemaObjects failed — ${err.message}`,
+      );
+      return { success: false, message: err.message };
+    }
+  },
+);
+
+connection.onRequest(
+  "sqlPrompt/mergeSchemaDetails",
+  (params: {
+    columns?: WireColumns[];
+    foreignKeys?: WireForeignKey[];
+    routines?: WireRoutine[];
+  }) => {
+    try {
+      const parts: string[] = [];
+
+      if (Array.isArray(params?.columns)) {
+        const count = mergeColumns(tables, params.columns, connectedDatabase);
+        parts.push(`${count} column(s)`);
+      }
+      if (Array.isArray(params?.foreignKeys)) {
+        const count = mergeForeignKeys(tables, params.foreignKeys, connectedDatabase);
+        parts.push(`${count} foreign key(s)`);
+      }
+      if (Array.isArray(params?.routines)) {
+        const count = mergeRoutineParameters(routines, params.routines);
+        parts.push(`${count} routine signature(s)`);
+      }
+
+      connection.console.info(`SQL Prompt: schema details merged — ${parts.join(', ') || 'nothing'}.`);
+      return { success: true };
+    } catch (err: any) {
+      connection.console.error(
+        `SQL Prompt: mergeSchemaDetails failed — ${err.message}`,
       );
       return { success: false, message: err.message };
     }
@@ -254,6 +320,7 @@ connection.onRequest("sqlPrompt/disconnect", async () => {
     routines = emptyRoutineSnapshot();
     databases = [];
   }
+  connectedDatabase = undefined;
   loadedDatabaseNames.clear();
   loadingDatabaseNames.clear();
   return { success: true };
@@ -378,6 +445,30 @@ connection.onRequest(
   },
 );
 
+// ── Completion ranking: usage history ─────────────────────────────────────────
+//
+// The extension host owns the history because it is the side that can persist
+// across sessions, so it pushes a decayed snapshot whenever it changes. Entries
+// arrive as pairs rather than an object: a Map is what the ranker wants, and
+// JSON has no Map.
+
+connection.onRequest(
+  "sqlPrompt/updateUsageScores",
+  (params: { entries?: Array<[string, number]> }) => {
+    const entries = Array.isArray(params?.entries) ? params.entries : [];
+    const usable = entries.filter(
+      (entry): entry is [string, number] =>
+        Array.isArray(entry) &&
+        typeof entry[0] === 'string' &&
+        typeof entry[1] === 'number' &&
+        Number.isFinite(entry[1]),
+    );
+    setUsageScores(new Map(usable));
+    connection.console.info(`SQL Prompt: usage history updated — ${usable.length} object(s).`);
+    return { success: true };
+  },
+);
+
 // ── Completion (new pipeline) ─────────────────────────────────────────────────
 //
 // Pipeline:
@@ -470,9 +561,18 @@ connection.onCompletion(
             });
         } else {
           // Send request to client to use connectionSharing
-          connection.sendRequest<{ tables: TableInfo[] }>('sqlPrompt/loadCrossDatabaseSchema', { database: knownDb })
+          connection.sendRequest<{ objects?: WireObject[]; columns?: WireColumns[] }>(
+            'sqlPrompt/loadCrossDatabaseSchema',
+            { database: knownDb },
+          )
             .then((result) => {
-              const extraTables = result.tables ?? [];
+              const extraTables = splitWireObjects(
+                Array.isArray(result?.objects) ? result.objects : [],
+                knownDb,
+              ).tables;
+              if (Array.isArray(result?.columns)) {
+                mergeColumns(extraTables, result.columns, knownDb);
+              }
               tables = appendTables(tables, extraTables);
               loadingDatabaseNames.delete(topLower);
               // An empty result is not a loaded database: the client answers
@@ -600,143 +700,12 @@ connection.onRenameRequest((params: RenameParams): WorkspaceEdit | ResponseError
   return { changes: { [params.textDocument.uri]: edits } };
 });
 
-// ── Schema sanitization ───────────────────────────────────────────────────────
-
-/**
- * Normalizes a raw value that may be a wrapped mssql cell object
- * (e.g. { displayValue: "foo", ... }) into a plain string.
- */
-function unwrapCellValue(raw: unknown): string | undefined {
-  if (raw == null) return undefined;
-  if (typeof raw === 'string') return raw;
-  if (typeof raw === 'number' || typeof raw === 'boolean') return String(raw);
-  if (typeof raw === 'object') {
-    const obj = raw as Record<string, unknown>;
-    const candidate = obj.displayValue ?? obj.value ?? obj.name ?? obj.column_name;
-    if (typeof candidate === 'string') return candidate;
-    if (typeof candidate === 'number') return String(candidate);
-  }
-  return undefined;
-}
-
-/**
- * Sanitizes the TableInfo[] snapshot received from the client.
- * Ensures all string fields (schema, name, column names, FK fields) are
- * plain strings — handles cases where the mssql API wraps values as objects.
- */
-function sanitizeTableSnapshot(raw: TableInfo[]): TableInfo[] {
-  const result: TableInfo[] = [];
-
-  for (const table of raw) {
-    const schema = unwrapCellValue(table.schema);
-    const name = unwrapCellValue(table.name);
-    if (!schema || !name) continue;
-
-    const columns = (table.columns ?? [])
-      .map((col) => {
-        const colName = unwrapCellValue(col?.name ?? col);
-        if (!colName) return null;
-        return {
-          name: colName,
-          dataType: unwrapCellValue(col?.dataType) ?? 'unknown',
-          maxLength: typeof col?.maxLength === 'number' ? col.maxLength : null,
-          isNullable: !!(col?.isNullable),
-          isPrimaryKey: !!(col?.isPrimaryKey),
-          isIdentity: !!(col?.isIdentity),
-          isComputed: !!(col?.isComputed),
-          hasDefault: !!(col?.hasDefault),
-        };
-      })
-      .filter((c): c is NonNullable<typeof c> => c !== null);
-
-    const foreignKeys = (table.foreignKeys ?? [])
-      .map((fk) => {
-        const fkName = unwrapCellValue(fk?.name);
-        const parentSchema = unwrapCellValue(fk?.parentSchema);
-        const parentTable = unwrapCellValue(fk?.parentTable);
-        const referencedSchema = unwrapCellValue(fk?.referencedSchema);
-        const referencedTable = unwrapCellValue(fk?.referencedTable);
-        if (!fkName || !parentSchema || !parentTable || !referencedSchema || !referencedTable) {
-          return null;
-        }
-        const mappings = (fk.mappings ?? [])
-          .map((m) => {
-            const column = unwrapCellValue(m?.column);
-            const referencedColumn = unwrapCellValue(m?.referencedColumn);
-            if (!column || !referencedColumn) return null;
-            return { column, referencedColumn };
-          })
-          .filter((m): m is NonNullable<typeof m> => m !== null);
-        return { name: fkName, parentSchema, parentTable, referencedSchema, referencedTable, mappings };
-      })
-      .filter((fk): fk is NonNullable<typeof fk> => fk !== null);
-
-    result.push({ schema, name, columns, foreignKeys });
-  }
-
-  return result;
-}
-
+/** The routine snapshot for "no routines loaded yet". */
 function emptyRoutineSnapshot(): RoutineSnapshot {
   return {
     scalarFunctions: [],
     tableValuedFunctions: [],
     storedProcedures: [],
-  };
-}
-
-function sanitizeRoutineParameters(raw: unknown): RoutineParameterInfo[] {
-  if (!Array.isArray(raw)) return [];
-
-  return raw
-    .map((param) => {
-      const p = param as Record<string, unknown>;
-      const name = unwrapCellValue(p?.name);
-      if (!name) return null;
-
-      return {
-        name,
-        dataType: unwrapCellValue(p?.dataType) ?? 'unknown',
-        maxLength: typeof p?.maxLength === 'number' ? p.maxLength : null,
-        precision: typeof p?.precision === 'number' ? p.precision : null,
-        scale: typeof p?.scale === 'number' ? p.scale : null,
-        isOutput: !!p?.isOutput,
-        hasDefaultValue: !!p?.hasDefaultValue,
-      };
-    })
-    .filter((p): p is NonNullable<typeof p> => p !== null);
-}
-
-function sanitizeRoutineList<T extends { schema: string; name: string; parameters: RoutineParameterInfo[] }>(
-  raw: unknown,
-): T[] {
-  if (!Array.isArray(raw)) return [];
-
-  return raw
-    .map((entry) => {
-      const e = entry as Record<string, unknown>;
-      const schema = unwrapCellValue(e?.schema);
-      const name = unwrapCellValue(e?.name);
-      if (!schema || !name) return null;
-
-      return {
-        schema,
-        name,
-        parameters: sanitizeRoutineParameters(e?.parameters),
-      } as T;
-    })
-    .filter((item): item is T => item !== null);
-}
-
-function sanitizeRoutineSnapshot(raw: {
-  scalarFunctions?: unknown;
-  tableValuedFunctions?: unknown;
-  storedProcedures?: unknown;
-}): RoutineSnapshot {
-  return {
-    scalarFunctions: sanitizeRoutineList<ScalarFunctionInfo>(raw?.scalarFunctions),
-    tableValuedFunctions: sanitizeRoutineList<TableValuedFunctionInfo>(raw?.tableValuedFunctions),
-    storedProcedures: sanitizeRoutineList<StoredProcedureInfo>(raw?.storedProcedures),
   };
 }
 
