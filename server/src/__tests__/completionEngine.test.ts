@@ -1115,3 +1115,38 @@ describe('completionEngine — predicati FK', () => {
     assert.equal(out, `SELECT * FROM dbo.Parent p JOIN dbo.Child c ON 1 = 1 WHERE ${COMPOSITE} `);
   });
 });
+
+describe('completionEngine — parole chiave di contesto e snippet', () => {
+  const labels = (sql: string) => getItems(sql).map((i) => String(i.label));
+
+  it('dopo JOIN con tabella e alias propone ON e non altre tabelle', () => {
+    const out = labels('SELECT * FROM dbo.Orders o JOIN dbo.OrderSummaryView v ');
+    assert.equal(out[0], 'ON');
+    assert.ok(!out.includes('dbo.Orders'));
+  });
+
+  it('dopo ALTER propone solo il tipo di oggetto', () => {
+    assert.deepEqual(labels('ALTER '), ['PROCEDURE', 'VIEW', 'FUNCTION', 'TABLE', 'TRIGGER']);
+  });
+
+  it('dopo ORDER propone solo BY', () => {
+    assert.deepEqual(labels('SELECT * FROM dbo.Orders o ORDER '), ['BY']);
+  });
+
+  it('la parola chiave sostituisce quanto digitato e riapre i suggerimenti', () => {
+    const on = getItems('SELECT * FROM dbo.Orders o JOIN dbo.OrderSummaryView v O').find((i) => i.label === 'ON');
+    const edit = on?.textEdit as any;
+    assert.equal(edit.newText, 'ON ');
+    assert.equal(edit.range.end.character - edit.range.start.character, 1);
+    assert.equal(on?.command?.command, 'editor.action.triggerSuggest');
+  });
+
+  it('gli snippet ap, av, af inseriscono ALTER e riaprono i suggerimenti', () => {
+    const items = getItems('av');
+    const av = items.find((i) => i.label === 'av');
+    assert.equal((av?.textEdit as any)?.newText, 'ALTER VIEW ');
+    assert.equal(av?.command?.command, 'editor.action.triggerSuggest');
+    assert.ok(items.some((i) => i.label === 'ap'));
+    assert.ok(items.some((i) => i.label === 'af'));
+  });
+});
