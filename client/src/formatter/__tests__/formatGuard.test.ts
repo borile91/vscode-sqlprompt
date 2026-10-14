@@ -107,3 +107,35 @@ describe('describeFormattingRisk — results that must be refused', () => {
         assert.match(risk!, /and \d+ more/);
     });
 });
+
+describe('describeFormattingRisk — stringhe letterali identiche byte per byte', () => {
+    it('rifiuta una riga di una stringa su più righe reindentata', () => {
+        const before = "SET @s = 'riga uno;\nriga due';";
+        const after = "SET @s = 'riga uno;\n    riga due';";
+        assert.match(describeFormattingRisk(before, after) ?? '', /string literal 1 changed/);
+    });
+
+    it('rifiuta due righe di una stringa unite', () => {
+        const before = "SELECT 'a;\nb' AS x";
+        const after = "SELECT 'a; b' AS x";
+        assert.match(describeFormattingRisk(before, after) ?? '', /string literal 1 changed/);
+    });
+
+    it("rifiuta un letterale N'…' con spazi interni cambiati", () => {
+        const before = "DECLARE @s NVARCHAR(10) = N'a  b';";
+        const after = "DECLARE @s NVARCHAR(10) = N'a b';";
+        assert.match(describeFormattingRisk(before, after) ?? '', /string literal 1 changed/);
+    });
+
+    it("accetta la riformattazione intorno a stringhe intatte, anche con l'escape ''", () => {
+        const before = "select 'it''s;\n  ok' as a, 'x' from t where b = 'y  z'";
+        const after = "SELECT\n    'it''s;\n  ok' AS a,\n    'x'\nFROM t\nWHERE b = 'y  z'";
+        assert.equal(describeFormattingRisk(before, after), null);
+    });
+
+    it('ignora gli apici dentro commenti e identificatori delimitati', () => {
+        const before = "SELECT [it's] -- l'apice\nFROM t /* d'esempio */";
+        const after = "SELECT [it's] -- l'apice\n  FROM t /* d'esempio */";
+        assert.equal(describeFormattingRisk(before, after), null);
+    });
+});
