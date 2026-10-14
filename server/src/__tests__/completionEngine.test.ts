@@ -5,7 +5,7 @@ import { CompletionItemKind } from 'vscode-languageserver/node';
 
 import { resolveContext } from '../cursorContextResolver.js';
 import { extractStatementAtOffset } from '../documentTextService.js';
-import { buildCompletionList, buildCompletions, quoteIdentifier } from '../completionEngine.js';
+import { buildCompletionList, buildCompletions, quoteIdentifier, setStatementShortcuts } from '../completionEngine.js';
 import type { TableInfo, RoutineSnapshot } from '../schemaLoader.js';
 
 const tables: TableInfo[] = [
@@ -1148,5 +1148,38 @@ describe('completionEngine — parole chiave di contesto e snippet', () => {
     assert.equal(av?.command?.command, 'editor.action.triggerSuggest');
     assert.ok(items.some((i) => i.label === 'ap'));
     assert.ok(items.some((i) => i.label === 'af'));
+  });
+});
+
+describe('completionEngine — scorciatoie di statement (#26)', () => {
+  const snippet = (sql: string, label: string) =>
+    getItems(sql).find((i) => i.label === label && i.kind === CompletionItemKind.Snippet);
+
+  it('st<N> propone SELECT TOP N e chiede di ricalcolare a ogni cifra', () => {
+    assert.equal((snippet('st25', 'st25')?.textEdit as any)?.newText, 'SELECT TOP 25 * FROM ');
+    const sql = 'st2';
+    const document = TextDocument.create('file:///test.sql', 'sql', 1, sql);
+    const context = resolveContext(sql, 0, sql.length, tables);
+    const result = buildCompletionList(context, tables, routines, document, document.positionAt(sql.length), {
+      text: sql, start: 0, end: sql.length, cursorOffset: sql.length,
+    });
+    assert.equal(result.isIncomplete, true);
+  });
+
+  it('le scorciatoie dell\'utente compaiono, ridefiniscono e tolgono quelle predefinite', () => {
+    try {
+      setStatementShortcuts({ bt: 'BEGIN TRAN;\n$CURSOR$\nROLLBACK;', ssf: 'SELECT *\nFROM ', av: '' });
+      const bt = snippet('bt', 'bt');
+      assert.equal((bt?.textEdit as any)?.newText, 'BEGIN TRAN;\n$0\nROLLBACK;');
+      assert.equal(bt?.command, undefined);
+      assert.equal((snippet('ssf', 'ssf')?.textEdit as any)?.newText, 'SELECT *\nFROM ');
+      assert.equal(snippet('av', 'av'), undefined);
+    } finally {
+      setStatementShortcuts(undefined);
+    }
+  });
+
+  it('sct è un sinonimo di scf come in SQL Prompt', () => {
+    assert.equal((snippet('sct', 'sct')?.textEdit as any)?.newText, 'SELECT COUNT(*) FROM ');
   });
 });

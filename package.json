@@ -55,6 +55,15 @@
                     "default": "off",
                     "description": "Traces the communication between VS Code and the language server."
                 },
+                "sqlPrompt.snippets.shortcuts": {
+                    "scope": "window",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    },
+                    "default": {},
+                    "markdownDescription": "Statement shortcuts expanded by the completion list, added to the built-in ones (`ssf`, `scf`, `sct`, `st10`, `st100`, `ap`, `av`, `af`; `st<N>` always expands to `SELECT TOP N * FROM`). Key: the shortcut (letters, digits, `_`); value: the text to insert, `\\n` for a new line and `$CURSOR$` for where the cursor ends up. Redefine a built-in shortcut to change it, or set it to an empty string to remove it. Example: `{ \"sd\": \"SELECT DISTINCT \", \"bt\": \"BEGIN TRAN;\\n$CURSOR$\\nROLLBACK;\" }`"
+                },
                 "sqlPrompt.suppressMssqlIntellisense": {
                     "scope": "window",
                     "type": "boolean",
