@@ -22,6 +22,7 @@ import { extractStatementAtOffset } from "./documentTextService";
 import { resolveContext } from "./cursorContextResolver";
 import { buildCompletionList, resolveTableCompletionItem, setUsageScores } from "./completionEngine";
 import { collidesWithExistingAlias, findAliasRenameTarget, formatAliasName } from "./aliasRename";
+import { listModulesFromSnapshot, ModuleName } from "./alterModules";
 import {
   WireColumns,
   WireForeignKey,
@@ -443,6 +444,22 @@ connection.onRequest(
       connection.console.error(`SQL Prompt: getObjectScript failed — ${err.message}`);
       return { script: null };
     }
+  },
+);
+
+// ALTER scaffolding in modalità connessione diretta: il client non può
+// interrogare sys.objects, quindi l'elenco viene dallo snapshot del server.
+connection.onRequest(
+  "sqlPrompt/listModules",
+  (params: { kind?: string }): ModuleName[] => {
+    const kind = params?.kind;
+    if (kind !== 'procedure' && kind !== 'view' && kind !== 'function') {
+      return [];
+    }
+    // In connessione diretta le tabelle del database connesso precedono quelle
+    // caricate a richiesta da altri database.
+    const database = connectedDatabase ?? (schemaLoader ? tables[0]?.database : undefined);
+    return listModulesFromSnapshot(kind, tables, routines, database);
   },
 );
 
