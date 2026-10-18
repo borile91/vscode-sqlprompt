@@ -1,0 +1,88 @@
+{
+  "metadata": {
+    "id": "4231f73f-92d0-46d8-b5fb-09450152c42c",
+    "name": "Tsqlt"
+  },
+  "whitespace": {
+    "wrapLongLines": false,
+    "wrapLinesLongerThan": 160,
+    "newLines": {
+      "preserveExistingEmptyLinesBetweenStatements": false,
+      "preserveExistingEmptyLinesAfterBatchSeparator": false
+    }
+  },
+  "lists": {
+    "placeSubsequentItemsOnNewLines": "ifLongerThanMaxLineLength",
+    "alignComments": true,
+    "placeCommasBeforeItems": true,
+    "addSpaceBeforeComma": true
+  },
+  "parentheses": {
+    "collapseParenthesesShorterThan": 78,
+    "addSpacesInsideParentheses": true
+  },
+  "casing": {
+    "reservedKeywords": "uppercase",
+    "builtInFunctions": "uppercase",
+    "builtInDataTypes": "uppercase",
+    "useObjectDefinitionCase": true
+  },
+  "dml": {
+    "collapseStatementsShorterThan": 75,
+    "collapseSubqueriesShorterThan": 15
+  },
+  "ddl": {
+    "parenthesisStyle": "expandedIndented",
+    "indentParenthesesContents": true,
+    "placeConstraintColumnsOnNewLines": "ifLongerOrMultipleColumns",
+    "indentClauses": true,
+    "placeFirstProcedureParameterOnNewLine": "always",
+    "collapseStatementsShorterThan": 75
+  },
+  "controlFlow": {
+    "indentBeginAndEndKeywords": true,
+    "collapseStatementsShorterThan": 78
+  },
+  "variables": {
+    "placeAssignedValueOnNewLineIfLongerThanMaxLineLength": false
+  },
+  "joinStatements": {
+    "join": {
+      "keywordAlignment": "toTable",
+      "indentJoinTable": false
+    },
+    "on": {
+      "keywordAlignment": "indented",
+      "conditionAlignment": "toInner"
+    }
+  },
+  "insertStatements": {
+    "columns": {
+      "parenthesisStyle": "compactSimple",
+      "placeSubsequentColumnsOnNewLines": "never"
+    },
+    "values": {
+      "parenthesisStyle": "compactSimple",
+      "indentContents": true
+    }
+  },
+  "functionCalls": {
+    "placeArgumentsOnNewLines": "never"
+  },
+  "caseExpressions": {
+    "placeExpressionOnNewLine": false,
+    "placeFirstWhenOnNewLine": "ifInputExpression",
+    "whenAlignment": "toFirstItem",
+    "collapseCaseExpressionsShorterThan": 75
+  },
+  "operators": {
+    "andOr": {
+      "alignment": "toFirstListItem"
+    },
+    "in": {
+      "placeFirstValueOnNewLine": "never",
+      "placeSubsequentValuesOnNewLines": "never",
+      "addSpaceAroundInContents": true
+    }
+  }
+}
