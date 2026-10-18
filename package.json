@@ -91,6 +91,26 @@
                     "type": "string",
                     "default": "",
                     "description": "Name of the active formatting style (the style's metadata.name, or the filename without .json). Set via the 'SQL Prompt: Select Formatting Style' command."
+                },
+                "sqlPrompt.formatting.engine": {
+                    "scope": "resource",
+                    "type": "string",
+                    "enum": [
+                        "legacy",
+                        "dotnet"
+                    ],
+                    "default": "legacy",
+                    "enumDescriptions": [
+                        "Built-in TypeScript formatter.",
+                        "Preview: .NET engine built on Microsoft ScriptDom, aiming at SQL Prompt parity. Requires the .NET 10 runtime."
+                    ],
+                    "markdownDescription": "Formatting engine. `dotnet` (preview) parses the script with Microsoft ScriptDom like SQL Prompt does and needs the .NET 10 runtime (taken from the *.NET Install Tool* extension when installed, otherwise `dotnet` on the PATH). If the engine cannot start, the built-in formatter is used."
+                },
+                "sqlPrompt.formatting.dotnetPath": {
+                    "scope": "machine",
+                    "type": "string",
+                    "default": "",
+                    "description": "Optional path of the dotnet executable used by the .NET formatting engine."
                 }
             }
         },
@@ -114,12 +134,14 @@
         ]
     },
     "scripts": {
-        "vscode:prepublish": "npm run webpack",
+        "vscode:prepublish": "npm run build:engine && npm run webpack",
         "webpack": "webpack --mode production",
         "webpack:dev": "webpack --mode development",
         "compile": "tsc -b",
         "watch": "tsc -b -w",
-        "postinstall": "cd client && npm install && cd ../server && npm install"
+        "postinstall": "cd client && npm install && cd ../server && npm install",
+        "build:engine": "dotnet publish formatter-engine/src/SqlFormatter.Sidecar/SqlFormatter.Sidecar.csproj -c Release -o client/dist/formatter-engine --nologo",
+        "test:engine": "dotnet test formatter-engine --nologo"
     },
     "devDependencies": {
         "@types/node": "^20.11.0",
