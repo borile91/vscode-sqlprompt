@@ -10,6 +10,7 @@ This page describes what the formatter **actually does today**. The documents be
 | [configurations/](configurations/) | Per-category option examples |
 | [Defaults.json](Defaults.json) | Reference profile listing every SQL Prompt option (implemented or not) |
 | [example-not-passing/](example-not-passing/) | Fixtures that do not format correctly yet, with the analysis of each problem |
+| [ENGINE-DOTNET.md](ENGINE-DOTNET.md) | Motore .NET su ScriptDom (anteprima): architettura, oracolo Redgate, stato |
 
 ---
 
@@ -21,6 +22,8 @@ This page describes what the formatter **actually does today**. The documents be
 |---|---|---|---|
 | `sqlPrompt.formatting.stylesFolder` | `string` | `""` | Absolute path to the folder containing the `.json` style files. Changing it reloads the styles immediately, no window reload needed. |
 | `sqlPrompt.formatting.activeStyle` | `string` | `""` | Name of the active style (`metadata.name`, or the file name without `.json`). Written by the style picker at **workspace** scope; can also be set by hand. |
+| `sqlPrompt.formatting.engine` | `string` | `"legacy"` | Motore: `legacy` (TypeScript) o `dotnet` (anteprima, ScriptDom, richiede .NET 10). Vedi [ENGINE-DOTNET.md](ENGINE-DOTNET.md) |
+| `sqlPrompt.formatting.dotnetPath` | `string` | `""` | Eseguibile `dotnet` per il motore .NET (facoltativo) |
 
 Both settings have `resource` scope, so they can differ per workspace folder.
 
