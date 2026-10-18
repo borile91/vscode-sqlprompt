@@ -12,3 +12,8 @@ client/src/formatter/__tests__/examples/.vs/**
 
 # Snapshot di schema per la suite test:live (contengono metadati di DB reali)
 .live-schema/
+
+# Motore di formattazione .NET
+formatter-engine/**/bin/
+formatter-engine/**/obj/
+formatter-engine/**/TestResults/
