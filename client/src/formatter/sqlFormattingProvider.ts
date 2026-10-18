@@ -10,15 +10,24 @@ import {
 import type { LoadedStyle } from './styleLoader';
 import { formatSqlText } from './formatPipeline';
 import { describeFormattingRisk } from './formatGuard';
+import type { DotnetFormatterHost } from './dotnetFormatter';
+
+export type FormattingEngine = 'legacy' | 'dotnet';
 
 export class SqlFormattingProvider implements DocumentFormattingEditProvider {
-    constructor(private readonly getStyle: () => LoadedStyle | undefined) {}
+    private dotnetFallbackNotified = false;
 
-    provideDocumentFormattingEdits(
+    constructor(
+        private readonly getStyle: () => LoadedStyle | undefined,
+        private readonly getEngine: () => FormattingEngine = () => 'legacy',
+        private readonly dotnet?: DotnetFormatterHost,
+    ) {}
+
+    async provideDocumentFormattingEdits(
         document: TextDocument,
         _options: FormattingOptions,
-        _token: CancellationToken,
-    ): TextEdit[] {
+        token: CancellationToken,
+    ): Promise<TextEdit[]> {
         const style = this.getStyle();
         if (!style) {
             window.showInformationMessage(
@@ -28,18 +37,48 @@ export class SqlFormattingProvider implements DocumentFormattingEditProvider {
         }
 
         const text = document.getText();
-        let formatted: string;
-        try {
-            formatted = formatSqlText(text, style.options);
-        } catch (err: any) {
-            // Il documento resta invariato, ma l'errore va reso visibile:
-            // altrimenti il comando sembrerebbe semplicemente non fare nulla.
-            const message = err?.message ?? String(err);
-            console.error(`[SQL Prompt] formatting failed: ${err?.stack ?? message}`);
-            window.showErrorMessage(
-                `SQL Prompt: formatting failed (${message}). The document was left unchanged.`,
-            );
-            return [];
+        let formatted: string | undefined;
+
+        if (this.getEngine() === 'dotnet' && this.dotnet) {
+            try {
+                const result = await this.dotnet.format(text, style.options);
+                if (!result.ok) {
+                    // Come SQL Prompt: uno script con errori di sintassi non viene formattato
+                    const first = result.errors[0];
+                    window.showWarningMessage(
+                        first
+                            ? `SQL Prompt: the script has a syntax error at line ${first.line}, column ${first.column} (${first.message}). The document was left unchanged.`
+                            : 'SQL Prompt: the script could not be parsed. The document was left unchanged.',
+                    );
+                    return [];
+                }
+                formatted = result.text;
+            } catch (err: any) {
+                // Motore .NET non disponibile: si ripiega sul formatter TypeScript
+                console.error(`[SQL Prompt] .NET formatter unavailable: ${err?.stack ?? err}`);
+                if (!this.dotnetFallbackNotified) {
+                    this.dotnetFallbackNotified = true;
+                    window.showWarningMessage(
+                        `SQL Prompt: the .NET formatting engine is unavailable (${err?.message ?? err}); using the built-in formatter.`,
+                    );
+                }
+            }
+        }
+        if (token.isCancellationRequested) return [];
+
+        if (formatted === undefined) {
+            try {
+                formatted = formatSqlText(text, style.options);
+            } catch (err: any) {
+                // Il documento resta invariato, ma l'errore va reso visibile:
+                // altrimenti il comando sembrerebbe semplicemente non fare nulla.
+                const message = err?.message ?? String(err);
+                console.error(`[SQL Prompt] formatting failed: ${err?.stack ?? message}`);
+                window.showErrorMessage(
+                    `SQL Prompt: formatting failed (${message}). The document was left unchanged.`,
+                );
+                return [];
+            }
         }
 
         // Formatting is cosmetic: it must never be able to break the query.

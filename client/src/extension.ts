@@ -34,7 +34,8 @@ import {
 } from "vscode-languageclient/node";
 
 import { loadStylesFromFolder, LoadedStyle } from './formatter/styleLoader';
-import { SqlFormattingProvider } from './formatter/sqlFormattingProvider';
+import { FormattingEngine, SqlFormattingProvider } from './formatter/sqlFormattingProvider';
+import { DotnetFormatterHost } from './formatter/dotnetFormatter';
 import { normalizeMode, planSuggestions } from './mssqlSuggestions';
 import { SchemaDiskCache, SchemaToken } from './schema/schemaCache';
 import { CompletionUsageStore, usageDatabaseKey } from './schema/usageStore';
@@ -1583,10 +1584,21 @@ export async function activate(context: ExtensionContext) {
     formatterStatusBarItem.command = 'sqlPrompt.selectFormattingStyle';
     context.subscriptions.push(formatterStatusBarItem);
 
+    const formattingConfig = () => workspace.getConfiguration('sqlPrompt.formatting');
+    const dotnetFormatter = new DotnetFormatterHost(
+        context.extensionPath,
+        context.extension.id,
+        () => formattingConfig().get<string>('dotnetPath', ''),
+    );
     context.subscriptions.push(
+        { dispose: () => dotnetFormatter.dispose() },
         languages.registerDocumentFormattingEditProvider(
             [{ scheme: 'file', language: 'sql' }, { scheme: 'untitled', language: 'sql' }],
-            new SqlFormattingProvider(getActiveStyle),
+            new SqlFormattingProvider(
+                getActiveStyle,
+                () => formattingConfig().get<FormattingEngine>('engine', 'legacy'),
+                dotnetFormatter,
+            ),
         ),
         commands.registerCommand('sqlPrompt.selectFormattingStyle', async () => {
             const stylesFolder = workspace

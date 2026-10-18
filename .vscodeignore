@@ -15,3 +15,5 @@ server/tsconfig.json
 tsconfig.json
 .gitignore
 webpack.config.js
+formatter-engine/**
+tools/**
