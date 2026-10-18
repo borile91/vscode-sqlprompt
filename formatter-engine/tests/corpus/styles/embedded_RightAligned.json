@@ -1,0 +1,87 @@
+{
+  "metadata": {
+    "id": "44e8e5d0-2401-4227-aabb-852f1b57bdd9",
+    "name": "Right aligned",
+    "permissions": [
+      "read"
+    ]
+  },
+  "whitespace": {
+    "newLines": {
+      "preserveExistingEmptyLinesAfterBatchSeparator": false
+    }
+  },
+  "parentheses": {
+    "indentParenthesesContents": true,
+    "collapseParenthesesShorterThan": 75
+  },
+  "casing": {
+    "reservedKeywords": "uppercase",
+    "builtInFunctions": "uppercase",
+    "builtInDataTypes": "uppercase",
+    "useObjectDefinitionCase": true
+  },
+  "dml": {
+    "collapseStatementsShorterThan": 75,
+    "collapseShortSubqueries": true,
+    "collapseSubqueriesShorterThan": 75,
+    "clauses": {
+      "clauseAlignment": "rightAligned"
+    }
+  },
+  "ddl": {
+    "placeConstraintsOnNewLines": true,
+    "collapseShortStatements": true,
+    "collapseStatementsShorterThan": 75
+  },
+  "controlFlow": {
+    "collapseStatementsShorterThan": 78
+  },
+  "cte": {
+    "asAlignment": "rightAligned"
+  },
+  "variables": {
+    "placeEqualsSignOnNewLine": true
+  },
+  "joinStatements": {
+    "join": {
+      "keywordAlignment": "rightAlignedToFrom",
+      "indentJoinTable": false
+    },
+    "on": {
+      "keywordAlignment": "rightAlignedToInner"
+    }
+  },
+  "insertStatements": {
+    "columns": {
+      "parenthesisStyle": "compactSimple"
+    },
+    "values": {
+      "parenthesisStyle": "compactSimple",
+      "indentContents": true,
+      "placeSubsequentValuesOnNewLines": "never"
+    }
+  },
+  "caseExpressions": {
+    "placeExpressionOnNewLine": false,
+    "whenAlignment": "toFirstItem",
+    "placeEndOnNewLine": false,
+    "collapseCaseExpressionsShorterThan": 75
+  },
+  "operators": {
+    "comparison": {
+      "align": true
+    },
+    "andOr": {
+      "alignment": "rightAligned"
+    },
+    "between": {
+      "placeOnNewLine": false
+    },
+    "in": {
+      "placeFirstValueOnNewLine": "never",
+      "placeSubsequentValuesOnNewLines": "never",
+      "addSpaceAroundInContents": true
+    }
+  }
+}

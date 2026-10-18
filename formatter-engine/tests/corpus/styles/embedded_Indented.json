@@ -1,0 +1,101 @@
+{
+  "metadata": {
+    "id": "065c58ef-cda3-4786-b611-87dd180b6bc7",
+    "name": "Indented",
+    "permissions": [
+      "read"
+    ]
+  },
+  "whitespace": {
+    "newLines": {
+      "preserveExistingEmptyLinesAfterBatchSeparator": false
+    }
+  },
+  "lists": {
+    "placeFirstItemOnNewLine": "always",
+    "alignAliases": true,
+    "alignComments": true
+  },
+  "parentheses": {
+    "parenthesisStyle": "expandedIndented",
+    "indentParenthesesContents": true,
+    "collapseParenthesesShorterThan": 78
+  },
+  "casing": {
+    "reservedKeywords": "uppercase",
+    "builtInFunctions": "uppercase",
+    "builtInDataTypes": "uppercase",
+    "useObjectDefinitionCase": true
+  },
+  "dml": {
+    "addNewLineAfterDistinctAndTopClauses": true,
+    "collapseStatementsShorterThan": 75,
+    "collapseSubqueriesShorterThan": 75,
+    "clauses": {
+      "clauseAlignment": "toFirstListItem"
+    },
+    "listItems": {
+      "placeFromTableOnNewLine": "always",
+      "placeWhereConditionOnNewLine": "always",
+      "placeGroupByAndOrderByOnNewLine": "always"
+    }
+  },
+  "ddl": {
+    "parenthesisStyle": "expandedIndented",
+    "indentParenthesesContents": true,
+    "alignDataTypesAndConstraints": true,
+    "placeConstraintsOnNewLines": true,
+    "indentClauses": true,
+    "collapseStatementsShorterThan": 75
+  },
+  "controlFlow": {
+    "indentBeginAndEndKeywords": true,
+    "collapseStatementsShorterThan": 78
+  },
+  "cte": {
+    "indentContents": true,
+    "indentName": true,
+    "columnAlignment": "indented"
+  },
+  "variables": {
+    "placeEqualsSignOnNewLine": true
+  },
+  "joinStatements": {
+    "join": {
+      "keywordAlignment": "indented",
+      "placeJoinTableOnNewLine": true
+    },
+    "on": {
+      "keywordAlignment": "indented",
+      "conditionAlignment": "indented"
+    }
+  },
+  "insertStatements": {
+    "columns": {
+      "parenthesisStyle": "expandedIndented"
+    },
+    "values": {
+      "parenthesisStyle": "expandedIndented",
+      "indentContents": true,
+      "placeSubsequentValuesOnNewLines": "never"
+    }
+  },
+  "functionCalls": {
+    "placeArgumentsOnNewLines": "never"
+  },
+  "caseExpressions": {
+    "placeThenOnNewLine": true,
+    "collapseCaseExpressionsShorterThan": 75
+  },
+  "operators": {
+    "andOr": {
+      "alignment": "toFirstListItem"
+    },
+    "in": {
+      "alignment": "indented",
+      "placeFirstValueOnNewLine": "always",
+      "placeSubsequentValuesOnNewLines": "never",
+      "addSpaceAroundInContents": true
+    }
+  }
+}
