@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/SqlFormatter.Engine/SqlFormatter.Engine.csproj" />
+    <Project Path="src/SqlFormatter.Sidecar/SqlFormatter.Sidecar.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SqlFormatter.Tests/SqlFormatter.Tests.csproj" />
+  </Folder>
+</Solution>
