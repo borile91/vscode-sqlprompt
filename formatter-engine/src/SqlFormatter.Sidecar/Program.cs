@@ -8,6 +8,8 @@ using SqlFormatter.Engine.Style;
 //   richiesta: {"id":1,"sql":"...","style":{...stile SQL Prompt...}}
 //   risposta:  {"id":1,"ok":true,"text":"..."}  oppure  {"id":1,"ok":false,"errors":[{"line":1,"column":1,"message":"..."}]}
 // Modalità di prova: format <stile.json> <file.sql>  → stampa il risultato su stdout.
+// Modalità a cartella: format-dir <stile.json> <cartella-input> <cartella-output>
+//   formatta ogni .sql; i file non analizzabili sono elencati su stderr e non scritti.
 
 if (args.Length == 3 && args[0] == "format")
 {
@@ -19,6 +21,27 @@ if (args.Length == 3 && args[0] == "format")
         return 1;
     }
     Console.Out.Write(result.Text);
+    return 0;
+}
+
+if (args.Length == 4 && args[0] == "format-dir")
+{
+    var style = StyleLoader.Load(args[1]);
+    Directory.CreateDirectory(args[3]);
+    int ok = 0, failed = 0;
+    foreach (var file in Directory.GetFiles(args[2], "*.sql").Order())
+    {
+        var result = TSqlFormatter.Format(File.ReadAllText(file), style);
+        if (!result.Success)
+        {
+            failed++;
+            Console.Error.WriteLine($"{Path.GetFileName(file)}: {string.Join("; ", result.Errors.Select(e => $"{e.Line}:{e.Column} {e.Message}"))}");
+            continue;
+        }
+        File.WriteAllText(Path.Combine(args[3], Path.GetFileName(file)), result.Text);
+        ok++;
+    }
+    Console.Out.WriteLine($"formattati: {ok}, non analizzabili: {failed}");
     return 0;
 }
 

@@ -23,6 +23,10 @@ public sealed class CasingRules : TSqlFragmentVisitor
         var rules = new CasingRules(model);
         script.Accept(rules);
         rules.Recase(options);
+        if (options.UseObjectDefinitionCase)
+            foreach (var batch in script.Batches)
+                foreach (var stmt in batch.Statements)
+                    AliasCasing.Apply(model, stmt);
     }
 
     public override void ExplicitVisit(Identifier node)
@@ -38,9 +42,26 @@ public sealed class CasingRules : TSqlFragmentVisitor
         base.ExplicitVisit(node);
     }
 
+    // parametri della procedura: valgono anche per i nomi dei parametri di EXEC
+    private readonly Dictionary<string, string> _procParams = new(StringComparer.OrdinalIgnoreCase);
+
     public override void ExplicitVisit(ProcedureParameter node)
     {
-        if (node.VariableName != null) _declared.TryAdd(node.VariableName.Value, node.VariableName.Value);
+        if (node.VariableName != null)
+        {
+            _declared.TryAdd(node.VariableName.Value, node.VariableName.Value);
+            _procParams.TryAdd(node.VariableName.Value, node.VariableName.Value);
+        }
+        base.ExplicitVisit(node);
+    }
+
+    // EXEC p @Param = @var: @Param prende il maiuscolo solo dai parametri della procedura
+    // che contiene la chiamata, non dalle variabili DECLARE (verificato con la CLI)
+    private readonly HashSet<int> _execParamNames = [];
+
+    public override void ExplicitVisit(ExecuteParameter node)
+    {
+        if (node.Variable != null) _execParamNames.Add(_m.First(node.Variable));
         base.ExplicitVisit(node);
     }
 
@@ -71,7 +92,9 @@ public sealed class CasingRules : TSqlFragmentVisitor
             else if (t.TokenType == TSqlTokenType.Variable)
             {
                 // useObjectDefinitionCase: la variabile prende le maiuscole della sua dichiarazione
-                if (o.UseObjectDefinitionCase && _declared.TryGetValue(slot.Text, out var declared)) slot.Text = declared;
+                var source = _execParamNames.Contains(i) ? _procParams : _declared;
+                if (o.UseObjectDefinitionCase && source.TryGetValue(slot.Text, out var declared))
+                    slot.Text = declared;
                 continue;
             }
             else if (Keywords.IsReservedKeyword(t)) casing = o.ReservedKeywords;
@@ -89,4 +112,86 @@ public sealed class CasingRules : TSqlFragmentVisitor
         Style.Casing.LowerCamelCase => text.ToLowerInvariant(),
         _ => text,
     };
+}
+
+// useObjectDefinitionCase per gli alias di tabella: i riferimenti (T.colonna) prendono le
+// maiuscole della definizione (… AS t). Ogni query ha il proprio ambito: valgono gli alias
+// della sua FROM e poi quelli delle query che la contengono
+internal sealed class AliasCasing : TSqlFragmentVisitor
+{
+    private readonly LayoutModel _m;
+    private readonly List<Dictionary<string, string>> _scopes = [];
+
+    private AliasCasing(LayoutModel model) => _m = model;
+
+    public static void Apply(LayoutModel model, TSqlStatement statement) => statement.Accept(new AliasCasing(model));
+
+    public override void ExplicitVisit(QuerySpecification node) => WithScope(node.FromClause?.TableReferences, () => base.ExplicitVisit(node));
+    public override void ExplicitVisit(UpdateSpecification node) => WithScope(Refs(node.FromClause, null), () => { RecaseTarget(node.Target); base.ExplicitVisit(node); });
+    public override void ExplicitVisit(DeleteSpecification node) => WithScope(Refs(node.FromClause, null), () => { RecaseTarget(node.Target); base.ExplicitVisit(node); });
+
+    // UPDATE p SET … FROM … AS p: il target è un alias della FROM
+    private void RecaseTarget(TableReference? target)
+    {
+        if (target is not NamedTableReference { SchemaObject.Identifiers.Count: 1 } named) return;
+        var id = named.SchemaObject.Identifiers[0];
+        if (id.QuoteType != QuoteType.NotQuoted || _scopes.Count == 0) return;
+        if (_scopes[^1].TryGetValue(id.Value, out var defined))
+        {
+            int slot = _m.First(id);
+            if (slot >= 0) _m.Slots[slot].Text = defined;
+        }
+    }
+
+    private static IList<TableReference> Refs(FromClause? from, TableReference? target)
+    {
+        var list = new List<TableReference>();
+        if (from != null) list.AddRange(from.TableReferences);
+        if (target != null) list.Add(target);
+        return list;
+    }
+
+    private void WithScope(IList<TableReference>? refs, Action visit)
+    {
+        var scope = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (refs != null) foreach (var r in refs) Collect(r, scope);
+        _scopes.Add(scope);
+        visit();
+        _scopes.RemoveAt(_scopes.Count - 1);
+    }
+
+    private static void Collect(TableReference r, Dictionary<string, string> scope)
+    {
+        switch (r)
+        {
+            case JoinTableReference j:
+                Collect(j.FirstTableReference, scope);
+                Collect(j.SecondTableReference, scope);
+                break;
+            case JoinParenthesisTableReference p:
+                Collect(p.Join, scope);
+                break;
+            case TableReferenceWithAlias a when a.Alias != null:
+                scope.TryAdd(a.Alias.Value, a.Alias.Value);
+                break;
+        }
+    }
+
+    // qualificatori nei riferimenti a colonna: t.colonna, t.*
+    public override void ExplicitVisit(ColumnReferenceExpression node)
+    {
+        var ids = node.MultiPartIdentifier?.Identifiers;
+        if (ids != null && ids.Count >= 2 && ids[^2].QuoteType == QuoteType.NotQuoted)
+        {
+            var id = ids[^2];
+            for (int k = _scopes.Count - 1; k >= 0; k--)
+            {
+                if (!_scopes[k].TryGetValue(id.Value, out var defined)) continue;
+                int slot = _m.First(id);
+                if (slot >= 0) _m.Slots[slot].Text = defined;
+                break;
+            }
+        }
+        base.ExplicitVisit(node);
+    }
 }

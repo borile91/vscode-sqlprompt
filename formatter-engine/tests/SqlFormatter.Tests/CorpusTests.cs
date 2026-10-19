@@ -32,8 +32,11 @@ public class CorpusTests(ITestOutputHelper output)
         string input = File.ReadAllText(Path.Combine(CorpusDir, "inputs", file));
         string expected = File.ReadAllText(Path.Combine(CorpusDir, "expected", style, file));
         var result = TSqlFormatter.Format(input, s);
-        return (expected, result.Success ? result.Text : "<<errore di parsing>>");
+        // la CLI di SQL Prompt scrive sempre CRLF; il motore mantiene il fine riga del documento
+        return (Lf(expected), Lf(result.Success ? result.Text : "<<errore di parsing>>"));
     }
+
+    private static string Lf(string text) => text.Replace("\r\n", "\n");
 
     private static HashSet<string> Passing()
     {

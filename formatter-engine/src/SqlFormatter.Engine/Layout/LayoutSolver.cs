@@ -62,7 +62,10 @@ public sealed class LayoutSolver
             {
                 sb.Append(Indent(_col[i]));
             }
-            sb.Append(NormalizeNewLines(s.Text, newLine));
+            string text = s.Token.TokenType == Microsoft.SqlServer.TransactSql.ScriptDom.TSqlTokenType.MultilineComment
+                ? ShiftContinuationLines(s.Text, _col[i] - (s.Token.Column - 1))
+                : s.Text;
+            sb.Append(NormalizeNewLines(text, newLine));
         }
         return sb.ToString();
     }
@@ -102,7 +105,7 @@ public sealed class LayoutSolver
             {
                 if (g.Broken || g.Points.All(p => _collapsedInside[p])) continue;
                 // un commento di riga dentro il gruppo obbliga comunque ad andare a capo
-                if (Exceeds(g.First, g.Last) || HasLineComment(g.First, g.Last - 1))
+                if (Exceeds(g.First, g.Last) || HasLineComment(g.First, g.Last - 1) || SpansLines(g))
                     candidates.Add((g.First, g.Last, () => ApplyGroup(g)));
             }
             foreach (var (p, last) in _wrapRanges)
@@ -118,6 +121,19 @@ public sealed class LayoutSolver
     }
 
     // Riapre un intervallo e rivaluta quelli che contiene, rimasti in sospeso finché era chiuso
+    // Un gruppo "se lungo" va a capo anche se uno dei suoi elementi occupa già più righe
+    private bool SpansLines(BreakGroup g)
+    {
+        if (g.Mode != BreakMode.IfLong) return false;
+        // a capo interni agli elementi: cambi di riga che non cadono su un punto del gruppo
+        // (si parte dal primo elemento: l'a capo dopo la parola chiave non conta)
+        int start = g.ContentStart >= 0 ? g.ContentStart : g.First + 1;
+        while (start <= g.Last && _m.Slots[start].IsComment) start++;
+        for (int i = start + 1; i <= g.Last; i++)
+            if (_line[i] != _line[i - 1] && !g.Points.Contains(i)) return true;
+        return false;
+    }
+
     private void Uncollapse(CollapseRange c)
     {
         c.Collapsed = false;
@@ -230,7 +246,7 @@ public sealed class LayoutSolver
     {
         int n = _m.Count;
         var padTo = new int[n];
-        for (int iter = 0; iter < 4; iter++)
+        for (int iter = 0; iter < 50; iter++)
         {
             ComputeColumnsOnce(padTo);
             bool changed = false;
@@ -241,7 +257,11 @@ public sealed class LayoutSolver
                 int max = 0;
                 foreach (int x in g) max = Math.Max(max, _col[x]);
                 if (_m.AlignGroupEnds.TryGetValue(g, out var ends))
+                {
+                    var memberLines = g.Select(x => _line[x]).ToHashSet();
+                    if (ends.Any(e => memberLines.Contains(_line[e]))) continue;
                     foreach (int e in ends) max = Math.Max(max, _end[e]);
+                }
                 foreach (int x in g)
                 {
                     if (EffectiveBreaks(x) > 0 || padTo[x] == max) continue;
@@ -290,8 +310,14 @@ public sealed class LayoutSolver
         return Math.Max(0, col);
     }
 
+    // L'intervallo sfora se sfora una delle sue righe, comprese le ) ; , che lo seguono
+    // attaccate sulla sua ultima riga
     private bool Exceeds(int first, int last)
     {
+        while (last + 1 < _m.Count && EffectiveBreaks(last + 1) == 0
+               && _m.Slots[last + 1].Token.TokenType is Microsoft.SqlServer.TransactSql.ScriptDom.TSqlTokenType.RightParenthesis
+                   or Microsoft.SqlServer.TransactSql.ScriptDom.TSqlTokenType.Semicolon
+                   or Microsoft.SqlServer.TransactSql.ScriptDom.TSqlTokenType.Comma) last++;
         for (int i = first; i <= last; i++)
             if (_end[i] > _width) return true;
         return false;
@@ -306,6 +332,28 @@ public sealed class LayoutSolver
         int tabs = col / ws.NumberOfSpacesInTabs;
         int rest = col % ws.NumberOfSpacesInTabs;
         return new string('\t', tabs) + new string(' ', rest);
+    }
+
+    // Sposta di delta colonne le righe successive alla prima di un commento a blocco
+    // (le tabulazioni iniziali diventano spazi)
+    private string ShiftContinuationLines(string text, int delta)
+    {
+        if (delta == 0 || !text.Contains('\n')) return text;
+        int tab = Math.Max(1, _style.Whitespace.NumberOfSpacesInTabs);
+        var lines = text.Replace("\r\n", "\n").Split('\n');
+        for (int k = 1; k < lines.Length; k++)
+        {
+            string line = lines[k];
+            int col = 0, p = 0;
+            while (p < line.Length && (line[p] == ' ' || line[p] == '\t'))
+            {
+                col = line[p] == '\t' ? (col / tab + 1) * tab : col + 1;
+                p++;
+            }
+            if (p == line.Length) continue;
+            lines[k] = new string(' ', Math.Max(0, col + delta)) + line[p..];
+        }
+        return string.Join("\n", lines);
     }
 
     private static int CountNewLines(string text)
