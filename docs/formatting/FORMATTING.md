@@ -57,7 +57,9 @@ The provider is registered for `sql` documents with the `file` and `untitled` sc
 - **Toolbar**: pick the style, *New…*, *Duplicate…*, *Rename…*, *Delete* (to the trash), *Open JSON*, *Use for formatting* (makes it the active style), *Revert*, *Save*.
 - **Sections**: the same groups as SQL Prompt (Whitespace, Lists, Parentheses, Casing, DML, DDL, Control flow, CTE, Variables, Joins, INSERT, Function calls, CASE, Operators, RESTORE); a dot marks the sections with options different from the default.
 - **Options**: every SQL Prompt key, with its default; options that depend on another one are disabled while it is off; ↺ restores the default.
+- **Hints**: an option that only has an effect together with another value (e.g. *Indent list items* needs *Place first item on a new line* = Always) says so under its label.
 - **Preview**: the sample SQL of the section, formatted live with the current (unsaved) values and the configured engine; the sample can be edited, and syntax errors are shown above it.
+  - **Preview the current SQL file**: formats the last active SQL editor instead (its selection, if any), and follows its changes.
 
 Saving writes the file in the SQL Prompt format: only the values **different from the default**, `metadata` first, `lastModified` updated; unknown keys are kept. Files saved by the editor can be imported back into SQL Prompt.
 

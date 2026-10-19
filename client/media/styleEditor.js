@@ -12,13 +12,17 @@
     let sectionId = saved.sectionId || 'lists';
     // SQL di anteprima scritto dall'utente, per sezione
     const customSql = saved.customSql || {};
+    // pannello "Sample SQL" aperto o chiuso, e anteprima sul file SQL corrente
+    let sampleOpen = saved.sampleOpen === true;
+    let useEditor = saved.useEditor === true;
+    let editorName = '';
     const preview = { text: '', engine: '', error: '' };
     let previewTimer;
 
     const app = document.getElementById('app');
 
     function persist() {
-        vscode.setState({ sectionId, customSql });
+        vscode.setState({ sectionId, customSql, sampleOpen, useEditor });
     }
 
     function el(tag, attrs, ...children) {
@@ -50,7 +54,9 @@
         previewTimer = setTimeout(() => {
             const section = currentSection();
             if (!section || !selected) return;
-            vscode.postMessage({ type: 'preview', sectionId: section.id, sql: customSql[section.id] });
+            vscode.postMessage(useEditor
+                ? { type: 'preview', sectionId: section.id, source: 'editor' }
+                : { type: 'preview', sectionId: section.id, sql: customSql[section.id] });
         }, delay);
     }
 
@@ -97,6 +103,27 @@
             }));
     }
 
+    function findOption(key) {
+        for (const s of sections) for (const g of s.groups) for (const o of g.options) if (o.key === key) return o;
+        return undefined;
+    }
+
+    // condizioni non soddisfatte in cui l'opzione ha effetto, come testo per l'utente
+    function pendingConditions(option) {
+        if (!option.appliesWhen) return '';
+        const parts = [];
+        for (const [key, want] of Object.entries(option.appliesWhen)) {
+            if (selected.values[key] === want) continue;
+            const other = findOption(key);
+            if (!other) continue;
+            let value = String(want);
+            if (other.type === 'bool') value = want ? 'on' : 'off';
+            else if (other.type === 'enum') value = (other.choices.find(c => c.value === want) || {}).label || value;
+            parts.push('"' + other.label + '" is ' + value);
+        }
+        return parts.length ? 'Takes effect when ' + parts.join(' and ') : '';
+    }
+
     function control(option) {
         const value = selected.values[option.key];
         const enabled = !option.enabledWhen || selected.values[option.enabledWhen] === true;
@@ -115,9 +142,10 @@
                 option.choices.map(c => el('option', { value: c.value, selected: c.value === value }, c.label)));
         }
         const changed = selected.customized.includes(option.key);
+        const pending = enabled ? pendingConditions(option) : '';
         return el('div', { class: 'option ' + option.type + (enabled ? '' : ' disabled') + (changed ? ' changed' : '') },
             option.type === 'bool' ? input : null,
-            el('label', { for: id }, option.label),
+            el('label', { for: id }, option.label, pending ? el('span', { class: 'hint' }, pending) : null),
             option.type === 'bool' ? null : input,
             changed
                 ? el('button', {
@@ -146,9 +174,19 @@
                 el('h2', {}, 'Preview'),
                 el('span', { class: 'engine', id: 'preview-engine', title: 'Engine that produced the preview' }, engineLabel()),
             ),
+            el('label', { class: 'preview-source', title: 'Format the active SQL file (or its selection) instead of the sample' },
+                el('input', {
+                    type: 'checkbox', id: 'use-editor', checked: useEditor,
+                    onchange: e => { useEditor = e.target.checked; persist(); render(); requestPreview(0); },
+                }),
+                el('span', { id: 'editor-name' }, editorLabel()),
+            ),
             el('p', { class: 'error', id: 'preview-error', role: 'status', hidden: !preview.error }, preview.error),
             el('pre', { class: 'sql', id: 'preview-sql', tabindex: 0, 'aria-label': 'Formatted SQL' }, preview.text || ' '),
-            el('details', { class: 'sample', open: usingCustom },
+            useEditor ? null : el('details', {
+                class: 'sample', open: sampleOpen || usingCustom,
+                ontoggle: e => { sampleOpen = e.target.open; persist(); },
+            },
                 el('summary', {}, 'Sample SQL'),
                 el('textarea', {
                     spellcheck: 'false', rows: 8, 'aria-label': 'Sample SQL for the preview',
@@ -164,6 +202,10 @@
                 usingCustom ? button('Restore the sample', () => { delete customSql[section.id]; persist(); render(); requestPreview(0); }) : null,
             ),
         );
+    }
+
+    function editorLabel() {
+        return 'Preview the current SQL file' + (editorName ? ' (' + editorName + ')' : '');
     }
 
     function engineLabel() {
@@ -217,6 +259,12 @@
             selected = m.selected;
             render();
             requestPreview(changedStyle ? 0 : 150);
+            return;
+        } else if (m.type === 'editor') {
+            editorName = m.name || '';
+            const label = document.getElementById('editor-name');
+            if (label) label.textContent = editorLabel();
+            if (useEditor) requestPreview(400);
             return;
         } else if (m.type === 'preview') {
             if (m.sectionId !== sectionId) return;

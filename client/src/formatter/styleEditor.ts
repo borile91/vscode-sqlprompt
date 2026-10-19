@@ -1,7 +1,7 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import { Disposable, Uri, ViewColumn, WebviewPanel, window, workspace } from 'vscode';
+import { Disposable, TextDocument, Uri, ViewColumn, WebviewPanel, window, workspace } from 'vscode';
 import { loadStylesFromFolder, LoadedStyle } from './styleLoader';
 import { applyValues, coerceValue, effectiveValues, findOption, OptionValue, STYLE_SECTIONS, styleFileName } from './styleSchema';
 
@@ -41,6 +41,8 @@ export class StyleEditorPanel {
     private styles: LoadedStyle[] = [];
     private working: WorkingStyle | undefined;
     private previewSeq = 0;
+    /** Ultimo documento SQL attivo: l'anteprima può usarlo al posto dell'esempio della sezione. */
+    private sqlDocument: TextDocument | undefined;
 
     static show(extensionUri: Uri, host: StyleEditorHost): void {
         if (StyleEditorPanel.current) {
@@ -63,6 +65,42 @@ export class StyleEditorPanel {
         panel.webview.html = this.html();
         panel.onDidDispose(() => this.dispose(), null, this.disposables);
         panel.webview.onDidReceiveMessage(m => this.onMessage(m).catch(err => this.reportError(err)), null, this.disposables);
+
+        // il pannello prende il fuoco: il documento SQL è quello attivo prima o uno visibile
+        const active = window.activeTextEditor?.document;
+        this.sqlDocument = active?.languageId === 'sql'
+            ? active
+            : window.visibleTextEditors.find(e => e.document.languageId === 'sql')?.document;
+        window.onDidChangeActiveTextEditor(e => {
+            if (e?.document.languageId !== 'sql') return;
+            this.sqlDocument = e.document;
+            this.postEditor();
+        }, null, this.disposables);
+        workspace.onDidChangeTextDocument(e => {
+            if (e.document === this.sqlDocument) this.postEditor();
+        }, null, this.disposables);
+        workspace.onDidCloseTextDocument(d => {
+            if (d !== this.sqlDocument) return;
+            this.sqlDocument = undefined;
+            this.postEditor();
+        }, null, this.disposables);
+        window.onDidChangeTextEditorSelection(e => {
+            if (e.textEditor.document === this.sqlDocument) this.postEditor();
+        }, null, this.disposables);
+    }
+
+    private postEditor(): void {
+        const name = this.sqlDocument ? path.basename(this.sqlDocument.fileName) : '';
+        this.post({ type: 'editor', name });
+    }
+
+    /** Testo del documento SQL corrente: la selezione, se c'è, altrimenti tutto il documento. */
+    private editorSql(): string | undefined {
+        const doc = this.sqlDocument;
+        if (!doc || doc.isClosed) return undefined;
+        const editor = window.visibleTextEditors.find(e => e.document === doc);
+        if (editor && !editor.selection.isEmpty) return doc.getText(editor.selection);
+        return doc.getText();
     }
 
     private dispose(): void {
@@ -86,6 +124,7 @@ export class StyleEditorPanel {
         switch (m?.type) {
             case 'ready':
                 await this.reload(this.working?.filePath);
+                this.postEditor();
                 break;
             case 'chooseFolder':
                 await this.chooseFolder();
@@ -101,7 +140,7 @@ export class StyleEditorPanel {
                 this.change(String(m.key), findOption(String(m.key))?.default);
                 break;
             case 'preview':
-                await this.preview(String(m.sectionId), typeof m.sql === 'string' ? m.sql : undefined);
+                await this.preview(String(m.sectionId), typeof m.sql === 'string' ? m.sql : undefined, m.source === 'editor');
                 break;
             case 'save':
                 await this.save();
@@ -195,11 +234,19 @@ export class StyleEditorPanel {
         this.sendState();
     }
 
-    private async preview(sectionId: string, sql?: string): Promise<void> {
+    private async preview(sectionId: string, sql: string | undefined, fromEditor: boolean): Promise<void> {
         const section = STYLE_SECTIONS.find(s => s.id === sectionId);
         if (!section) return;
         const seq = ++this.previewSeq;
-        const source = sql ?? section.preview;
+        let source = sql ?? section.preview;
+        if (fromEditor) {
+            const text = this.editorSql();
+            if (text === undefined) {
+                this.post({ type: 'preview', sectionId, text: '', engine: '', error: 'Open a SQL file to preview it with this style.' });
+                return;
+            }
+            source = text;
+        }
         let result: PreviewResult;
         try {
             result = await this.host.formatPreview(source, this.currentJson());

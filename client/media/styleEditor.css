@@ -142,6 +142,7 @@ legend {
 .option.enum select { width: 100%; }
 .option.disabled label { color: var(--vscode-disabledForeground, var(--vscode-descriptionForeground)); }
 .option.changed label { font-weight: 600; }
+.hint { display: block; font-weight: normal; font-size: 0.85em; color: var(--vscode-descriptionForeground); }
 .reset {
     background: transparent;
     color: var(--vscode-textLink-foreground);
@@ -162,6 +163,7 @@ legend {
 }
 .preview-header { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .preview-header h2 { margin: 0; }
+.preview-source { display: flex; align-items: center; gap: 6px; color: var(--vscode-descriptionForeground); }
 .engine { color: var(--vscode-descriptionForeground); font-size: 0.85em; }
 .error { color: var(--vscode-errorForeground); margin: 0; }
 pre.sql {
