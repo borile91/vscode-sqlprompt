@@ -109,6 +109,22 @@ public sealed partial class RuleBuilder : TSqlFragmentVisitor
     // destinato a quel codice; un commento in coda resta sulla riga del codice precedente
     private void ArrangeComments()
     {
+        // commenti in coda su righe consecutive: incolonnati (lists.alignComments)
+        if (_s.Lists.AlignComments)
+        {
+            var run = new List<int>();
+            int lastLine = -2;
+            for (int i = 1; i < _m.Count; i++)
+            {
+                var c = _m.Slots[i];
+                if (!c.IsLineComment || c.OriginalNewLinesBefore > 0) continue;
+                if (c.Token.Line != lastLine + 1) { _m.AddAlignGroup(run); run = []; }
+                run.Add(i);
+                lastLine = c.Token.Line;
+            }
+            _m.AddAlignGroup(run);
+        }
+
         for (int i = 0; i < _m.Count; i++)
         {
             var c = _m.Slots[i];

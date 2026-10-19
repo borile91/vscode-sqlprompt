@@ -20,19 +20,25 @@ public sealed partial class RuleBuilder
             int open = _m.PrevCode(_m.FirstCode(node.Parameters[0]));
             int close = _m.NextCode(_m.Last(node.Parameters[^1]));
             ArrangeParentheses(open, close, create, d.ParenthesisStyle, d.IndentParenthesesContents);
-            ArrangeList(open, node.Parameters, NewLineMode.Never, NewLineMode.Always);
+            // parametri delle funzioni sempre uno per riga (verificato con la CLI)
+            ArrangeList(open, node.Parameters, NewLineMode.Never, NewLineMode.Always, (create, 0));
         }
-        if (node.ReturnType != null)
+        // RETURNS su una riga propria, allineato a CREATE
+        int afterHeader = node.Parameters.Count > 0 ? _m.NextCode(_m.Last(node.Parameters[^1])) : _m.Last(node.Name);
+        int returns = _m.FindForward(afterHeader, _m.Last(node), sl => sl.Token.Text.Equals("RETURNS", StringComparison.OrdinalIgnoreCase));
+        if (returns >= 0)
         {
-            int returns = _m.PrevCode(_m.FirstCode(node.ReturnType));
             _m.Break(returns);
-            _m.AlignRange(returns, _m.Last(node.ReturnType), create, 0);
-            if (node.ReturnType is TableValuedFunctionReturnType tv && tv.DeclareTableVariableBody?.Definition is { } def)
-                ArrangeTableDefinition(def, create);
+            _m.AlignTo(returns, create, 0);
         }
-        // AS e BEGIN … END del corpo
-        int lastHeader = node.ReturnType != null ? _m.Last(node.ReturnType) : _m.Last(node.Name);
-        int @as = _m.FindForward(lastHeader + 1, _m.Last(node), TSqlTokenType.As);
+        if (node.ReturnType is TableValuedFunctionReturnType tv && tv.DeclareTableVariableBody?.Definition is { } def)
+            ArrangeTableDefinition(def, create);
+
+        // AS e corpo (BEGIN … END oppure RETURN ( SELECT … ) delle funzioni inline)
+        int bodyStart = node.ReturnType is SelectFunctionReturnType sel ? _m.FirstCode(sel) : -1;
+        int searchFrom = returns >= 0 ? returns : afterHeader;
+        int @as = _m.FindForward(searchFrom, _m.Last(node), TSqlTokenType.As);
+        if (bodyStart >= 0) @as = _m.FindBackward(bodyStart, searchFrom, sl => sl.Token.TokenType == TSqlTokenType.As);
         if (@as >= 0)
         {
             _m.Break(@as);
@@ -42,6 +48,16 @@ public sealed partial class RuleBuilder
             {
                 _m.Break(body);
                 _m.AlignRange(body, _m.Last(node), create, d.IndentClauses ? _tab : 0);
+            }
+            if (node.ReturnType is SelectFunctionReturnType inline && body >= 0
+                && _m.Slots[body].Token.TokenType == TSqlTokenType.Return)
+            {
+                // RETURN ( … ): la parentesi segue RETURN, la chiusa è l'ultima del corpo
+                int open = _m.NextCode(body);
+                int close = _m.FindBackward(_m.Last(node), open + 1, sl => sl.Token.TokenType == TSqlTokenType.RightParenthesis);
+                if (open < 0 || _m.Slots[open].Token.TokenType != TSqlTokenType.LeftParenthesis) open = -1;
+                if (open > body && close > open)
+                    ArrangeParentheses(open, close, body, _s.Parentheses.ParenthesisStyle, _s.Parentheses.IndentParenthesesContents);
             }
         }
         if (node.StatementList != null)

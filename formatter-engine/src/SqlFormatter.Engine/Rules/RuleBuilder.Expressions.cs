@@ -31,8 +31,12 @@ public sealed partial class RuleBuilder
         var points = new List<int>();
         for (int i = 1; i < operands.Count; i++)
         {
-            int start = _m.FirstCode(operands[i]);
-            int op = _m.PrevCode(start);
+            // l'operatore si cerca tra i due operandi: alcuni nodi (es. EXISTS) non includono
+            // la propria parola chiave nell'intervallo di token
+            int op = _m.FindForward(_m.Last(operands[i - 1]) + 1, _m.FirstCode(operands[i]),
+                sl => sl.Token.TokenType is TSqlTokenType.And or TSqlTokenType.Or);
+            if (op < 0) continue;
+            int start = _m.NextCode(op);
             if (o.PlaceKeywordBeforeCondition)
             {
                 points.Add(op);
@@ -249,6 +253,14 @@ public sealed partial class RuleBuilder
             int open = _m.PrevCode(_m.FirstCode(node.Parameters[0]));
             int close = _m.NextCode(_m.Last(node.Parameters[^1]));
             ArrangeArguments(open, close, node.Parameters);
+            // con collapseShortParenthesisContents una sottoquery come primo argomento va a capo
+            // e si allinea al nome della funzione: STUFF(\n(SELECT …), 1, 1, '')
+            if (_s.Parentheses.CollapseShortParenthesisContents && node.Parameters[0] is ScalarSubquery)
+            {
+                int sub = _m.FirstCode(node.Parameters[0]);
+                _m.Break(sub);
+                _m.AlignTo(sub, _m.FirstCode(node), 0);
+            }
         }
         base.ExplicitVisit(node);
     }

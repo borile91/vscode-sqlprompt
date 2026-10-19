@@ -130,7 +130,7 @@ public static class Spacing
     {
         "CAST", "CONVERT", "COALESCE", "NULLIF", "IDENTITY", "LEFT", "RIGHT", "USER", "CURRENT_USER",
         "SESSION_USER", "SYSTEM_USER", "COLLATE", "CONTAINS", "FREETEXT", "OPENQUERY", "OPENROWSET",
-        "OPENDATASOURCE", "OPENXML", "TRY_CONVERT", "TRY_CAST", "FILE", "UPDATE", "NEXT", "IIF", "PARSE", "TRY_PARSE",
+        "OPENDATASOURCE", "OPENXML", "TRY_CONVERT", "TRY_CAST", "FILE", "UPDATE", "NEXT", "IIF", "PARSE", "TRY_PARSE", "PATH", "RAW",
     };
 
     private static bool IsKeywordCall(TSqlParserToken t) =>

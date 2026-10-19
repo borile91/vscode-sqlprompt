@@ -12,12 +12,18 @@ public sealed class LayoutSolver
 {
     private readonly LayoutModel _m;
     private readonly FormattingStyle _style;
+    // larghezza per le scelte "se più lunga del massimo"
     private readonly int _width;
+    // larghezza per il riempimento, attivo solo con wrapLongLines
+    private readonly int _wrapWidth;
     private readonly bool[] _collapsedInside;
     private readonly int[] _groupBreaks;
     // punti di riempimento: lunghezza del pezzo che inizia nel punto (fino al punto successivo)
     private readonly int[] _wrapSegment;
     private readonly bool[] _wrapBreak;
+    // punti di riempimento spezzati perché il pezzo, su più righe, sfora il limite
+    private readonly bool[] _wrapForced;
+    private readonly List<(int Point, int Last)> _wrapRanges = [];
     private int[] _col = [];
     private int[] _end = [];
     private int[] _line = [];
@@ -27,10 +33,12 @@ public sealed class LayoutSolver
         _m = model;
         _style = style;
         _width = style.Whitespace.WrapLongLines ? style.Whitespace.WrapLinesLongerThan : int.MaxValue;
+        _wrapWidth = style.Whitespace.WrapLongLines ? style.Whitespace.WrapLinesLongerThan : int.MaxValue;
         _collapsedInside = new bool[model.Count];
         _groupBreaks = new int[model.Count];
         _wrapSegment = new int[model.Count];
         _wrapBreak = new bool[model.Count];
+        _wrapForced = new bool[model.Count];
     }
 
     public string Render(string newLine)
@@ -66,7 +74,6 @@ public sealed class LayoutSolver
             if (_m.Slots[i].IsLineComment) _m.Break(i + 1);
 
         DecideCollapses();
-        PrepareWraps();
 
         foreach (var g in _m.Groups)
         {
@@ -74,25 +81,64 @@ public sealed class LayoutSolver
                 ApplyGroup(g);
         }
 
+        PrepareWraps();
+
         // gruppi condizionati alla lunghezza: dall'esterno verso l'interno
         var pending = _m.Groups
             .Where(g => !g.Broken && g.Mode is BreakMode.IfLong or BreakMode.IfLongOrMultiple)
             .OrderBy(g => g.First).ThenByDescending(g => g.Last)
             .ToList();
         ComputeColumns();
-        bool changed = true;
-        while (changed)
+        // Ciclo dall'esterno verso l'interno: a ogni passo si corregge la prima violazione
+        // (per posizione) tra intervalli compattati troppo lunghi, gruppi da spezzare e
+        // pezzi di riempimento con righe oltre il limite; poi si ricalcola
+        while (true)
         {
-            changed = false;
+            var candidates = new List<(int First, int Last, Action Fix)>();
+            foreach (var c in _m.Collapses.Where(c => c.Collapsed))
+                if (_end[c.Last] > c.MaxLength)
+                    candidates.Add((c.First, c.Last, () => Uncollapse(c)));
             foreach (var g in pending)
             {
-                if (g.Broken || !Exceeds(g.First, g.Last)) continue;
-                ApplyGroup(g);
-                ComputeColumns();
-                changed = true;
-                break;
+                if (g.Broken || g.Points.All(p => _collapsedInside[p])) continue;
+                // un commento di riga dentro il gruppo obbliga comunque ad andare a capo
+                if (Exceeds(g.First, g.Last) || HasLineComment(g.First, g.Last - 1))
+                    candidates.Add((g.First, g.Last, () => ApplyGroup(g)));
             }
+            foreach (var (p, last) in _wrapRanges)
+            {
+                if (_wrapForced[p] || _collapsedInside[p] || EffectiveBreaks(p) > 0) continue;
+                if (ExceedsWrap(p, last))
+                    candidates.Add((p, last, () => _wrapForced[p] = true));
+            }
+            if (candidates.Count == 0) break;
+            candidates.OrderBy(c => c.First).ThenByDescending(c => c.Last).First().Fix();
+            ComputeColumns();
         }
+    }
+
+    // Riapre un intervallo e rivaluta quelli che contiene, rimasti in sospeso finché era chiuso
+    private void Uncollapse(CollapseRange c)
+    {
+        c.Collapsed = false;
+        _rejected.Add(c);
+        // stesso intervallo con un'altra soglia: va riaperto anche quello
+        foreach (var same in _m.Collapses.Where(x => x.First == c.First && x.Last == c.Last))
+        {
+            same.Collapsed = false;
+            _rejected.Add(same);
+        }
+        for (int i = c.First + 1; i <= c.Last; i++) _collapsedInside[i] = false;
+        foreach (var inner in _m.Collapses.Where(x => x.Collapsed && x.First >= c.First && x.Last <= c.Last))
+            for (int i = inner.First + 1; i <= inner.Last; i++) _collapsedInside[i] = true;
+        DecideCollapses(c.First, c.Last);
+    }
+
+    private bool ExceedsWrap(int first, int last)
+    {
+        for (int i = first; i <= last; i++)
+            if (_end[i] > _wrapWidth) return true;
+        return false;
     }
 
     private void PrepareWraps()
@@ -106,7 +152,10 @@ public sealed class LayoutSolver
                 // la virgola che chiude il pezzo resta sulla riga
                 if (end + 1 < _m.Count && end + 1 <= g.Last + 1 && _m.Slots[Math.Min(end + 1, _m.Count - 1)].Token.TokenType == Microsoft.SqlServer.TransactSql.ScriptDom.TSqlTokenType.Comma)
                     end++;
-                _wrapSegment[pts[k]] = Math.Max(_wrapSegment[pts[k]], FlatLength(pts[k], Math.Min(end, _m.Count - 1)));
+                // un pezzo che non starebbe comunque in una riga intera non si sposta (come SQL Prompt)
+                int flat = FlatLength(pts[k], Math.Min(end, _m.Count - 1));
+                _wrapRanges.Add((pts[k], Math.Min(end, _m.Count - 1)));
+                _wrapSegment[pts[k]] = flat > _wrapWidth ? 0 : Math.Max(_wrapSegment[pts[k]], flat);
             }
         }
     }
@@ -117,10 +166,14 @@ public sealed class LayoutSolver
         foreach (int p in g.Points) _groupBreaks[p] = Math.Max(_groupBreaks[p], 1);
     }
 
-    private void DecideCollapses()
+    // intervalli riaperti perché troppo lunghi sulla riga: non si compattano più
+    private readonly HashSet<CollapseRange> _rejected = [];
+
+    private void DecideCollapses(int from = 0, int to = int.MaxValue)
     {
         foreach (var c in _m.Collapses.OrderBy(c => c.First).ThenByDescending(c => c.Last))
         {
+            if (c.First < from || c.Last > to || c.Collapsed || _rejected.Contains(c)) continue;
             if (_collapsedInside[c.First]) continue;
             if (HasLineComment(c.First, c.Last - 1)) continue;
             if (FlatLength(c.First, c.Last) >= c.MaxLength) continue;
@@ -148,13 +201,27 @@ public sealed class LayoutSolver
         return len;
     }
 
+    // Lunghezza del pezzo fino al primo a capo già deciso al suo interno: un elemento su più
+    // righe conta solo per la sua prima riga
+    private int FirstLineLength(int first, int last)
+    {
+        int len = 0;
+        for (int i = first; i <= last; i++)
+        {
+            if (i > first && EffectiveBreaks(i) > 0) break;
+            if (i > first && _m.Slots[i].SpaceBefore) len++;
+            len += _m.Slots[i].Text.Length;
+        }
+        return len;
+    }
+
     private int EffectiveBreaks(int i)
     {
         if (i == 0) return 0;
         var s = _m.Slots[i];
         if (_m.Slots[i - 1].IsLineComment) return Math.Max(1, s.Breaks);
         if (_collapsedInside[i]) return 0;
-        return Math.Max(Math.Max(s.Breaks, _groupBreaks[i]), _wrapBreak[i] ? 1 : 0);
+        return Math.Max(Math.Max(s.Breaks, _groupBreaks[i]), _wrapBreak[i] || _wrapForced[i] ? 1 : 0);
     }
 
     // Colonne di tutti i token; i gruppi di allineamento verticale richiedono qualche iterazione
@@ -196,7 +263,7 @@ public sealed class LayoutSolver
             var s = _m.Slots[i];
             int col;
             if (i > 0 && _wrapSegment[i] > 0 && !_collapsedInside[i] && EffectiveBreaks(i) == 0
-                && _end[i - 1] + 1 + _wrapSegment[i] > _width)
+                && _end[i - 1] + 1 + _wrapSegment[i] > _wrapWidth)
                 _wrapBreak[i] = true;
             if (i > 0) line += EffectiveBreaks(i) + CountNewLines(_m.Slots[i - 1].Text);
             _line[i] = line;
