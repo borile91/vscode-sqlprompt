@@ -21,6 +21,13 @@ for f in "$root"/docs/formatting/example-not-passing/examples/*/*.sql; do
   [[ -f "$f" ]] || continue
   cp "$f" "$corpus/inputs/notpassing_$(basename "$(dirname "$f")")__$(basename "$f")"
 done
+# Casi mock anonimizzati (formatter-engine/tests/corpus/mocks): ricavati dalle combinazioni
+# trovate negli script reali, con nomi inventati
+for f in "$corpus"/mocks/*.sql; do
+  [[ -f "$f" ]] || continue
+  cp "$f" "$corpus/inputs/$(basename "$f")"
+done
+
 # Stili incorporati in SQL Prompt (estratti da SQLPrompt.Format.exe): già in corpus/styles/embedded_*.json
 
 for s in "$corpus"/styles/*.json; do
