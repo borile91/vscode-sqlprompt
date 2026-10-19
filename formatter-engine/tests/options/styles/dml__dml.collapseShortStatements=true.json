@@ -1,0 +1,8 @@
+{
+  "metadata": {
+    "name": "dml__dml.collapseShortStatements=true"
+  },
+  "dml": {
+    "collapseShortStatements": true
+  }
+}

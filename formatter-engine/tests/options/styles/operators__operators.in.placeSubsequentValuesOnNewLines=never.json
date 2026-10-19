@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "name": "operators__operators.in.placeSubsequentValuesOnNewLines=never"
+  },
+  "operators": {
+    "in": {
+      "placeSubsequentValuesOnNewLines": "never"
+    }
+  }
+}

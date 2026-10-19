@@ -1,0 +1,8 @@
+{
+  "metadata": {
+    "name": "casing__casing.builtInFunctions=upperCamelCase"
+  },
+  "casing": {
+    "builtInFunctions": "upperCamelCase"
+  }
+}

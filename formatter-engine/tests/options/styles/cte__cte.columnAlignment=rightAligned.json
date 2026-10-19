@@ -1,0 +1,9 @@
+{
+  "metadata": {
+    "name": "cte__cte.columnAlignment=rightAligned"
+  },
+  "cte": {
+    "placeColumnsOnNewLine": true,
+    "columnAlignment": "rightAligned"
+  }
+}

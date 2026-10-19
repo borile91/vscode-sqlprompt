@@ -1,0 +1,9 @@
+{
+  "metadata": {
+    "name": "cte__cte.indentName=true"
+  },
+  "cte": {
+    "placeNameOnNewLine": true,
+    "indentName": true
+  }
+}

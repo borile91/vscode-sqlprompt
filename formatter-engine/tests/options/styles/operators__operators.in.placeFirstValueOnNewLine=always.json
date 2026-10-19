@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "name": "operators__operators.in.placeFirstValueOnNewLine=always"
+  },
+  "operators": {
+    "in": {
+      "placeFirstValueOnNewLine": "always"
+    }
+  }
+}

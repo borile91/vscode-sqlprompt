@@ -1,0 +1,8 @@
+{
+  "metadata": {
+    "name": "ddl__ddl.parenthesisStyle=expandedSplit"
+  },
+  "ddl": {
+    "parenthesisStyle": "expandedSplit"
+  }
+}

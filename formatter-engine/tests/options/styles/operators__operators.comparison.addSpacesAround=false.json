@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "name": "operators__operators.comparison.addSpacesAround=false"
+  },
+  "operators": {
+    "comparison": {
+      "addSpacesAround": false
+    }
+  }
+}

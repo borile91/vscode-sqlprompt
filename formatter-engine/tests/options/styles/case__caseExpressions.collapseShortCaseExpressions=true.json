@@ -1,0 +1,8 @@
+{
+  "metadata": {
+    "name": "case__caseExpressions.collapseShortCaseExpressions=true"
+  },
+  "caseExpressions": {
+    "collapseShortCaseExpressions": true
+  }
+}

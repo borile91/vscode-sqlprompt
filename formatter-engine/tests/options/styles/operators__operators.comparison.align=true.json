@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "name": "operators__operators.comparison.align=true"
+  },
+  "operators": {
+    "comparison": {
+      "align": true
+    }
+  }
+}

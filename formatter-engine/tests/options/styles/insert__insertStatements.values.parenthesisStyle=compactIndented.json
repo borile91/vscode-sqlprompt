@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "name": "insert__insertStatements.values.parenthesisStyle=compactIndented"
+  },
+  "insertStatements": {
+    "values": {
+      "parenthesisStyle": "compactIndented"
+    }
+  }
+}

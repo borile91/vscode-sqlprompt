@@ -1,0 +1,8 @@
+{
+  "metadata": {
+    "name": "casing__casing.reservedKeywords=lowerCamelCase"
+  },
+  "casing": {
+    "reservedKeywords": "lowerCamelCase"
+  }
+}

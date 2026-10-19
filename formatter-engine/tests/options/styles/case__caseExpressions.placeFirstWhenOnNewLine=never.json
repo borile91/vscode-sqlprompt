@@ -1,0 +1,8 @@
+{
+  "metadata": {
+    "name": "case__caseExpressions.placeFirstWhenOnNewLine=never"
+  },
+  "caseExpressions": {
+    "placeFirstWhenOnNewLine": "never"
+  }
+}

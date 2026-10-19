@@ -1,0 +1,8 @@
+{
+  "metadata": {
+    "name": "variables__variables.addSpaceBetweenDataTypeAndPrecision=true"
+  },
+  "variables": {
+    "addSpaceBetweenDataTypeAndPrecision": true
+  }
+}

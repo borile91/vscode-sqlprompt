@@ -1,0 +1,8 @@
+{
+  "metadata": {
+    "name": "case__caseExpressions.alignElseToWhen=false"
+  },
+  "caseExpressions": {
+    "alignElseToWhen": false
+  }
+}

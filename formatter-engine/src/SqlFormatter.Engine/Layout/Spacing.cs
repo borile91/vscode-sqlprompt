@@ -53,13 +53,18 @@ public static class Spacing
                 else if (t == TSqlTokenType.Comma && depth == 1) m.Slots[j].SpaceBefore = false;
             }
             if (close < 0) continue;
+            // functionCalls.addSpacesAroundParentheses: "getdate ()" (i tipi di dato li sistema RuleBuilder)
+            open.SpaceBefore = s.FunctionCalls.AddSpacesAroundParentheses;
             if (close == i + 1)
             {
                 m.Slots[close].SpaceBefore = s.FunctionCalls.AddSpaceBetweenEmptyParentheses;
                 continue;
             }
-            if (!m.Slots[i + 1].IsComment) m.Slots[i + 1].SpaceBefore = inner;
-            if (!m.Slots[close - 1].IsComment) m.Slots[close].SpaceBefore = inner;
+            // spazi interni, ma non tra parentesi consecutive: "stuff((select …" e "getdate())"
+            if (!m.Slots[i + 1].IsComment)
+                m.Slots[i + 1].SpaceBefore = inner && m.Slots[i + 1].Token.TokenType != TSqlTokenType.LeftParenthesis;
+            if (!m.Slots[close - 1].IsComment)
+                m.Slots[close].SpaceBefore = inner && m.Slots[close - 1].Token.TokenType != TSqlTokenType.RightParenthesis;
         }
     }
 
@@ -72,8 +77,8 @@ public static class Spacing
 
         if (m.Slots[c].IsComment || m.Slots[p].IsComment) return true;
         if (ct == TSqlTokenType.Semicolon) return s.Whitespace.WhiteSpaceBeforeSemiColon == SemicolonWhitespace.SpaceBefore;
-        // addSpaceBeforeComma non ha effetti visibili nell'output di SQL Prompt (verificato con la CLI)
-        if (ct == TSqlTokenType.Comma) return false;
+        // con le virgole prima degli elementi lo spazio prima della virgola vale solo a inizio riga
+        if (ct == TSqlTokenType.Comma) return s.Lists.AddSpaceBeforeComma && !s.Lists.PlaceCommasBeforeItems;
         if (pt == TSqlTokenType.Comma) return s.Lists.AddSpaceAfterComma;
         if (ct == TSqlTokenType.Dot || pt == TSqlTokenType.Dot) return false;
         if (ct == TSqlTokenType.DoubleColon || pt == TSqlTokenType.DoubleColon) return false;

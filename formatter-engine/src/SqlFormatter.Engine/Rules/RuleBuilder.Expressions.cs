@@ -10,6 +10,9 @@ public sealed partial class RuleBuilder
     // catene AND/OR già sistemate (il visitor scende anche nei nodi interni della catena)
     private readonly HashSet<BooleanExpression> _arrangedChains = [];
 
+    // primo operando della catena AND/OR a cui appartiene un operando (per le parentesi)
+    private readonly Dictionary<int, int> _chainFirstOperand = [];
+
     // profondità negli argomenti di chiamate a funzione: lì AND/OR restano in linea
     private int _callArgumentDepth;
 
@@ -48,6 +51,7 @@ public sealed partial class RuleBuilder
         var operands = new List<BooleanExpression>();
         Flatten(root, operands);
         int first = OperandStart(operands[0]);
+        foreach (var operand in operands) _chainFirstOperand[_m.FirstCode(operand)] = first;
         int keyword = _m.PrevCode(first);
         // parola chiave che introduce la condizione (WHERE, ON, HAVING, IF, WHILE, WHEN…)
         if (keyword >= 0 && !Keywords.IsReservedKeyword(_m.Slots[keyword].Token)) keyword = first;
@@ -105,7 +109,24 @@ public sealed partial class RuleBuilder
     private void AlignOperator(int op, int firstOperand, int keyword)
     {
         int len = _m.Slots[op].Text.Length;
-        switch (_s.Operators.AndOr.Alignment)
+        var alignment = _s.Operators.AndOr.Alignment;
+        // senza parola chiave (es. dentro una parentesi) a sinistra e a destra l'operatore
+        // finisce prima del primo operando (verificato con la CLI)
+        if (keyword == firstOperand && alignment is AndOrAlignment.LeftAligned or AndOrAlignment.RightAligned)
+            alignment = AndOrAlignment.BeforeFirstListItem;
+        // senza allineamento al primo elemento, dentro una parentesi l'operatore rientra rispetto
+        // a ciò che precede la parentesi (es. "and (a\n    or b)", verificato con la CLI)
+        int open = _m.PrevCode(firstOperand);
+        if (keyword == firstOperand && !_s.Lists.AlignSubsequentItemsWithFirstItem
+            && _s.Operators.AndOr.Alignment is AndOrAlignment.LeftAligned or AndOrAlignment.RightAligned
+            && open >= 0 && _m.Slots[open].Token.TokenType == TSqlTokenType.LeftParenthesis && _m.PrevCode(open) >= 0)
+        {
+            _m.AlignTo(op, _m.PrevCode(open), _tab);
+            int following = _m.NextCode(op);
+            if (following >= 0) _m.AlignTo(following, op, _tab);
+            return;
+        }
+        switch (alignment)
         {
             case AndOrAlignment.LeftAligned: _m.AlignTo(op, keyword, 0); break;
             case AndOrAlignment.RightAligned: _m.AlignTo(op, keyword, 0, AlignKind.Right); break;
@@ -117,7 +138,9 @@ public sealed partial class RuleBuilder
         int next = _m.NextCode(op);
         if (next >= 0) _m.AlignTo(next, op, _tab);
         // operatore allineato alla parola chiave: l'operando si incolonna con il primo
-        if (_s.Operators.AndOr.Alignment is AndOrAlignment.LeftAligned or AndOrAlignment.RightAligned)
+        // (solo con il primo elemento delle liste sulla riga della parola chiave, verificato con la CLI)
+        if (alignment is AndOrAlignment.LeftAligned or AndOrAlignment.RightAligned && _s.Lists.AlignSubsequentItemsWithFirstItem
+            && _s.Lists.PlaceFirstItemOnNewLine == NewLineMode.Never)
             _m.AddAlignGroup([firstOperand, next]);
     }
 
@@ -131,9 +154,12 @@ public sealed partial class RuleBuilder
         int baseAnchor = before >= 0 && _m.Slots[before].Token.TokenType is TSqlTokenType.And or TSqlTokenType.Or
             ? before
             : open;
-        if (node.Expression is BooleanBinaryExpression)
+        if (node.Expression is BooleanBinaryExpression && before >= 0)
         {
-            ArrangeParentheses(open, close, baseAnchor == open ? before : baseAnchor, _s.Parentheses.ParenthesisStyle, _s.Parentheses.IndentParenthesesContents);
+            // dopo AND/OR la colonna dell'elemento è quella del primo operando della catena;
+            // dopo WHERE/ON/… la parentesi è il primo elemento e non va a capo
+            int item = baseAnchor != open && _chainFirstOperand.TryGetValue(open, out int chainFirst) ? chainFirst : open;
+            ArrangeParenthesesAfter(open, close, before, item, _s.Parentheses.ParenthesisStyle, _s.Parentheses.IndentParenthesesContents);
             if (_s.Parentheses.CollapseShortParenthesisContents)
                 _m.AddCollapse(open, close, _s.Parentheses.CollapseParenthesesShorterThan);
         }
@@ -211,6 +237,8 @@ public sealed partial class RuleBuilder
         {
             CaseWhenAlignment.ToCase => (@case, 0),
             CaseWhenAlignment.ToFirstItem when !firstOnNewLine => (firstWhen, 0),
+            // primo WHEN a capo: la colonna in cui sarebbe dopo "CASE " (verificato con la CLI)
+            CaseWhenAlignment.ToFirstItem => (@case, _m.Slots[@case].Text.Length + 1),
             _ => (@case, _tab),
         };
         _m.AlignRange(@case + 1, end, @case, _tab);
@@ -243,8 +271,9 @@ public sealed partial class RuleBuilder
             }
             if (o.PlaceExpressionOnNewLine)
             {
+                // il risultato rientra dal WHEN anche con THEN su una riga propria (verificato con la CLI)
                 _m.Break(thenValue);
-                _m.AlignTo(thenValue, o.PlaceThenOnNewLine ? then : when, _tab);
+                _m.AlignTo(thenValue, when, _tab);
             }
         }
 
@@ -254,12 +283,14 @@ public sealed partial class RuleBuilder
             int @else = _m.PrevCode(elseValue);
             if (o.PlaceElseOnNewLine)
             {
+                // ELSE come i WHEN successivi al primo, oppure allineato a CASE (verificato con la CLI)
                 _m.Break(@else);
-                if (o.AlignElseToWhen) _m.AlignTo(@else, firstWhen, 0);
-                else _m.AlignTo(@else, @case, _tab);
+                if (o.AlignElseToWhen) _m.AlignTo(@else, whenPos.anchor, whenPos.offset);
+                else _m.AlignTo(@else, @case, 0);
             }
             _m.AlignRange(elseValue, _m.Last(elseExpr), @else, _tab);
-            if (o.PlaceExpressionOnNewLine)
+            // con ELSE in linea anche il suo valore resta in linea
+            if (o.PlaceExpressionOnNewLine && o.PlaceElseOnNewLine)
             {
                 _m.Break(elseValue);
                 _m.AlignTo(elseValue, @else, _tab);
@@ -326,7 +357,13 @@ public sealed partial class RuleBuilder
     // Nomi seguiti da parentesi senza spazio: tipi di dato con parametri, funzioni tabellari
     public override void ExplicitVisit(SqlDataTypeReference node)
     {
-        if (node.Parameters.Count > 0) _m.NoSpaceBefore(_m.NextCode(_m.Last(node.Name)));
+        // variables.addSpaceBetweenDataTypeAndPrecision: "varchar (10)" ovunque (verificato con la CLI)
+        if (node.Parameters.Count > 0)
+        {
+            int open = _m.NextCode(_m.Last(node.Name));
+            int close = _m.Last(node);
+            _dataTypeParentheses.Add((open, close));
+        }
         base.ExplicitVisit(node);
     }
 
@@ -341,6 +378,21 @@ public sealed partial class RuleBuilder
     }
 
     private readonly HashSet<int> _tableFunctionCloses = [];
+
+    // parentesi dei tipi di dato: dopo la spaziatura delle chiamate a funzione, che non vale per i tipi
+    private readonly List<(int Open, int Close)> _dataTypeParentheses = [];
+
+    private void FixDataTypeParentheses()
+    {
+        foreach (var (open, close) in _dataTypeParentheses)
+        {
+            if (_s.Variables.AddSpaceBetweenDataTypeAndPrecision) _m.SpaceBefore(open);
+            else _m.NoSpaceBefore(open);
+            int inner = _m.NextCode(open);
+            if (inner >= 0 && !_m.Slots[inner].IsComment) _m.NoSpaceBefore(inner);
+            if (close >= 0 && _m.Slots[close].Token.TokenType == TSqlTokenType.RightParenthesis) _m.NoSpaceBefore(close);
+        }
+    }
 
     // ---- IN (valori) ----
 

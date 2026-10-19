@@ -1,0 +1,8 @@
+{
+  "metadata": {
+    "name": "ddl__ddl.collapseStatementsShorterThan=default"
+  },
+  "ddl": {
+    "collapseShortStatements": true
+  }
+}

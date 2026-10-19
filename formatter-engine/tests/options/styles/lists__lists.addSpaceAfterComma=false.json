@@ -1,0 +1,9 @@
+{
+  "metadata": {
+    "name": "lists__lists.addSpaceAfterComma=false"
+  },
+  "lists": {
+    "placeSubsequentItemsOnNewLines": "never",
+    "addSpaceAfterComma": false
+  }
+}

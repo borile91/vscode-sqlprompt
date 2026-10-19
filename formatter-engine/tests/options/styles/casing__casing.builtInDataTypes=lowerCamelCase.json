@@ -1,0 +1,8 @@
+{
+  "metadata": {
+    "name": "casing__casing.builtInDataTypes=lowerCamelCase"
+  },
+  "casing": {
+    "builtInDataTypes": "lowerCamelCase"
+  }
+}

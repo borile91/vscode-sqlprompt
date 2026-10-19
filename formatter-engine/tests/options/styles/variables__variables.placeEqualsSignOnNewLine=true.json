@@ -1,0 +1,8 @@
+{
+  "metadata": {
+    "name": "variables__variables.placeEqualsSignOnNewLine=true"
+  },
+  "variables": {
+    "placeEqualsSignOnNewLine": true
+  }
+}

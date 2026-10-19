@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "name": "operators__operators.in.alignment=indented"
+  },
+  "operators": {
+    "in": {
+      "alignment": "indented"
+    }
+  }
+}

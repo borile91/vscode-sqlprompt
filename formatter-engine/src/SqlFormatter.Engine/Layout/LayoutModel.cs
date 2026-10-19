@@ -36,6 +36,8 @@ public sealed class Slot
     public int Anchor { get; set; } = -1;
     public int Offset { get; set; }
     public AlignKind Align { get; set; } = AlignKind.Left;
+    // anche sulla stessa riga il token non sta prima di colonna(Anchor) + Offset (spazi di riempimento)
+    public bool PadInline { get; set; }
 
     public bool IsComment => Token.TokenType is TSqlTokenType.SingleLineComment or TSqlTokenType.MultilineComment;
     public bool IsLineComment => Token.TokenType == TSqlTokenType.SingleLineComment;
@@ -74,6 +76,9 @@ public sealed class LayoutModel
     // per ogni gruppo, token la cui fine (+1 spazio) entra nel calcolo della colonna comune
     // senza essere spostati (es. tipi di dato delle DECLARE senza valore)
     public Dictionary<List<int>, List<int>> AlignGroupEnds { get; } = new();
+    // gruppi in cui i membri che aprono una riga si mettono nella colonna del gruppo,
+    // decisa dai soli membri che restano sulla riga della loro parola chiave
+    public HashSet<List<int>> FollowingGroups { get; } = new(ReferenceEqualityComparer.Instance);
     public IList<TSqlParserToken> Stream { get; }
 
     public LayoutModel(IList<TSqlParserToken> stream)
@@ -214,13 +219,15 @@ public sealed class LayoutModel
             Collapses.Add(new CollapseRange { First = first, Last = last, MaxLength = maxLength });
     }
 
-    public void AddAlignGroup(IEnumerable<int> slots, IEnumerable<int>? ends = null)
+    // Restituisce il gruppo creato (si possono aggiungere elementi dopo), o null se non serve
+    public List<int>? AddAlignGroup(IEnumerable<int> slots, IEnumerable<int>? ends = null)
     {
         var list = slots.Where(x => x >= 0).Distinct().ToList();
         var endList = ends?.Where(x => x >= 0).ToList() ?? [];
-        if (list.Count + endList.Count < 2 || list.Count == 0) return;
+        if (list.Count + endList.Count < 2 || list.Count == 0) return null;
         AlignGroups.Add(list);
         if (endList.Count > 0) AlignGroupEnds[list] = endList;
+        return list;
     }
 
     public void NoSpaceBefore(int slot)

@@ -25,6 +25,7 @@ public sealed partial class RuleBuilder : TSqlFragmentVisitor
         Spacing.Apply(_m, _s);
         script.Accept(this);
         Spacing.FixCallParentheses(_m, _s);
+        FixDataTypeParentheses();
         foreach (int close in _tableFunctionCloses)
         {
             int next = close + 1;

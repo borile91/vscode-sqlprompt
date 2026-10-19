@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "name": "dml__dml.clauses.clauseAlignment=toFirstListItem"
+  },
+  "dml": {
+    "clauses": {
+      "clauseAlignment": "toFirstListItem"
+    }
+  }
+}

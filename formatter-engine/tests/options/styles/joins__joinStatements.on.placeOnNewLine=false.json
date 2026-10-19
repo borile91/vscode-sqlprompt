@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "name": "joins__joinStatements.on.placeOnNewLine=false"
+  },
+  "joinStatements": {
+    "on": {
+      "placeOnNewLine": false
+    }
+  }
+}

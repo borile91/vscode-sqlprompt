@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "name": "joins__joinStatements.on.keywordAlignment=toTable"
+  },
+  "joinStatements": {
+    "on": {
+      "keywordAlignment": "toTable"
+    }
+  }
+}

@@ -9,6 +9,9 @@ public sealed partial class RuleBuilder
 {
     // SELECT delle query aperte: le clausole si allineano al SELECT della propria query
     private readonly Stack<int> _queryStarts = new();
+    // colonna comune degli elementi delle clausole (alignItemsAcrossClauses) della query aperta:
+    // le tabelle dei JOIN allineati a FROM vi si aggiungono
+    private readonly Stack<List<int>?> _acrossClauses = new();
 
     public override void ExplicitVisit(QuerySpecification node)
     {
@@ -24,11 +27,18 @@ public sealed partial class RuleBuilder
             int first = _m.FirstCode(node.SelectElements[0]);
             int firstAfterKeyword = _m.NextCode(select);
             ArrangeList(select, node.SelectElements, _s.Lists.PlaceFirstItemOnNewLine, _s.Lists.PlaceSubsequentItemsOnNewLines);
+            // DISTINCT/TOP su una riga propria, nella colonna degli elementi
+            if (afterSelect != select && _s.Dml.PlaceDistinctAndTopClausesOnNewLine)
+            {
+                _m.Break(firstAfterKeyword);
+                _m.AlignTo(firstAfterKeyword, select, _m.Slots[select].Text.Length + 1);
+            }
             // dopo DISTINCT/TOP il primo elemento va a capo, nella colonna in cui sarebbe dopo SELECT
             if (afterSelect != select && _s.Dml.AddNewLineAfterDistinctAndTopClauses)
             {
                 _m.Break(first);
                 _m.AlignTo(first, select, _m.Slots[select].Text.Length + 1);
+                clauses.Add((select, first));
             }
             clauses.Add((select, firstAfterKeyword));
             if (_s.Lists.AlignAliases) AlignAliases(node.SelectElements);
@@ -45,6 +55,7 @@ public sealed partial class RuleBuilder
             {
                 ArrangeList(kw, refs, _s.Dml.ListItems.PlaceFromTableOnNewLine, NewLineMode.Always);
                 clauses.Add((kw, _m.FirstCode(refs[0])));
+                if (_s.Lists.AlignAliases) AlignTableAliases(refs);
             }
         }
         if (node.WhereClause != null)
@@ -98,12 +109,20 @@ public sealed partial class RuleBuilder
                 _m.AlignTo(kw, open, 0);
         }
 
-        // gli elementi di tutte le clausole partono dalla stessa colonna
-        if (_s.Lists.AlignItemsAcrossClauses)
-            _m.AddAlignGroup(clauses.Select(c => c.FirstItem));
+        // gli elementi di tutte le clausole partono dalla colonna della parola chiave più lunga;
+        // un elemento a capo (es. tabella del FROM con placeFromTableOnNewLine) va in quella colonna.
+        // Con le parole chiave allineate a destra gli elementi seguono già la parola chiave.
+        List<int>? across = null;
+        if (_s.Lists.AlignItemsAcrossClauses && _s.Lists.AlignSubsequentItemsWithFirstItem && _s.Dml.Clauses.ClauseAlignment != ClauseAlignment.RightAligned)
+        {
+            across = _m.AddAlignGroup(clauses.Select(c => c.FirstItem));
+            if (across != null) _m.FollowingGroups.Add(across);
+        }
 
         _queryStarts.Push(select);
+        _acrossClauses.Push(across);
         base.ExplicitVisit(node);
+        _acrossClauses.Pop();
         _queryStarts.Pop();
     }
 
@@ -215,6 +234,29 @@ public sealed partial class RuleBuilder
         _m.AddAlignGroup(aliases);
     }
 
+    // Alias delle tabelle di FROM e JOIN in colonna (alignAliases, verificato con la CLI)
+    private void AlignTableAliases(IList<TableReference> refs)
+    {
+        var aliases = new List<int>();
+        void Collect(TableReference t)
+        {
+            switch (t)
+            {
+                case JoinTableReference j:
+                    Collect(j.FirstTableReference);
+                    Collect(j.SecondTableReference);
+                    break;
+                case TableReferenceWithAlias { Alias: not null } a when a is NamedTableReference:
+                    int alias = _m.First(a.Alias);
+                    int @as = _m.PrevCode(alias);
+                    aliases.Add(@as >= 0 && _m.Slots[@as].Token.TokenType == TSqlTokenType.As ? @as : alias);
+                    break;
+            }
+        }
+        foreach (var r in refs) Collect(r);
+        _m.AddAlignGroup(aliases);
+    }
+
     // ---- FROM e JOIN ----
 
     private int FromKeyword(TSqlFragment tableRef)
@@ -270,6 +312,11 @@ public sealed partial class RuleBuilder
             _m.Break(table);
             _m.AlignTo(table, join, o.Join.IndentJoinTable ? _tab : 0);
         }
+        // la tabella del JOIN si incolonna con gli elementi delle clausole (se va a capo prende la
+        // colonna comune), tranne con il JOIN allineato alla prima tabella (verificato con la CLI)
+        if (o.Join.KeywordAlignment != JoinKeywordAlignment.ToTable
+            && _acrossClauses.Count > 0 && _acrossClauses.Peek() is { } across)
+            across.Add(table);
         if (o.Join.InsertEmptyLineBetweenJoinClauses && node.FirstTableReference is JoinTableReference)
             _m.Break(join, 2);
 
@@ -319,12 +366,79 @@ public sealed partial class RuleBuilder
         int open = _m.PrevCode(_m.FirstCode(query));
         int close = _m.NextCode(_m.Last(query));
         if (open < 0 || close < 0 || _m.Slots[open].Token.TokenType != TSqlTokenType.LeftParenthesis) return;
-        ArrangeParentheses(open, close, baseAnchor, _s.Parentheses.ParenthesisStyle, _s.Parentheses.IndentParenthesesContents);
+        int keyword = _m.PrevCode(open);
+        // EXISTS (…): la colonna dell'elemento è quella di EXISTS; dopo FROM/JOIN la parentesi è l'elemento
+        int item = keyword < 0 ? baseAnchor
+            : _m.Slots[keyword].Token.TokenType == TSqlTokenType.Exists ? keyword
+            : IsClauseKeyword(keyword) ? open
+            : baseAnchor;
+        ArrangeParenthesesAfter(open, close, keyword, item, _s.Parentheses.ParenthesisStyle, _s.Parentheses.IndentParenthesesContents);
         if (_s.Dml.CollapseShortSubqueries)
             _m.AddCollapse(open, close, _s.Dml.CollapseSubqueriesShorterThan);
         // anche le sottoquery sono parentesi: valgono le soglie delle parentesi
         if (_s.Parentheses.CollapseShortParenthesisContents)
             _m.AddCollapse(open, close, _s.Parentheses.CollapseParenthesesShorterThan);
+    }
+
+    // Parola chiave dopo cui la parentesi è il primo elemento della clausola
+    private bool IsClauseKeyword(int slot) => _m.Slots[slot].Token.TokenType is TSqlTokenType.From or TSqlTokenType.Join
+        or TSqlTokenType.Where or TSqlTokenType.Having or TSqlTokenType.On or TSqlTokenType.Select
+        || _m.Slots[slot].Text.Equals("APPLY", StringComparison.OrdinalIgnoreCase);
+
+    // Parentesi dopo una parola chiave (AS di una CTE, EXISTS, AND/OR, IN…) secondo lo stile delle parentesi
+    // (verificato con la CLI, una opzione per volta):
+    // - compatte: il contenuto segue "("; la "(" resta dopo la parola chiave (simple), va a capo alla
+    //   colonna dell'elemento (toStatement), rientrata rispetto alla parola chiave (indented) o
+    //   allineata alla sua fine (rightAligned);
+    // - espanse: come le compatte per la "(", poi contenuto e ")" su righe proprie alla colonna della "(";
+    //   split lascia la "(" dopo la parola chiave e porta contenuto e ")" alla colonna dell'elemento.
+    // item è il token che dà la colonna dell'elemento; se è la "(" stessa (primo elemento di una
+    // clausola) la parentesi non va a capo.
+    private void ArrangeParenthesesAfter(int open, int close, int keyword, int item, ParenthesisStyle style, bool indentContents)
+    {
+        int first = _m.NextCode(open);
+        int last = _m.PrevCode(close);
+        if (first < 0 || first > last || keyword < 0) return;
+        bool firstItem = item == open;
+        bool expanded = style.ToString().StartsWith("Expanded");
+        bool openFollows = firstItem || style is ParenthesisStyle.CompactSimple or ParenthesisStyle.ExpandedSimple or ParenthesisStyle.ExpandedSplit;
+        if (!openFollows)
+        {
+            _m.Break(open);
+            switch (style)
+            {
+                case ParenthesisStyle.CompactToStatement:
+                case ParenthesisStyle.ExpandedToStatement:
+                    _m.AlignTo(open, item, 0);
+                    break;
+                case ParenthesisStyle.CompactIndented:
+                case ParenthesisStyle.ExpandedIndented:
+                    _m.AlignTo(open, keyword, _tab);
+                    break;
+                default:
+                    _m.AlignTo(open, keyword, 0, AlignKind.Right);
+                    break;
+            }
+        }
+        if (expanded)
+        {
+            int column = style == ParenthesisStyle.ExpandedSplit && !firstItem ? item : open;
+            _m.Break(first);
+            _m.AlignRange(first, last, column, indentContents ? _tab : 0);
+            _m.Break(close);
+            _m.AlignTo(close, column, 0);
+        }
+        else if (indentContents)
+        {
+            // contenuto rientrato anche sulla riga della "(": "(   select"
+            _m.AlignRange(first, last, open, _tab);
+            _m.Slots[first].PadInline = true;
+        }
+        else
+        {
+            // se il contenuto va a capo (es. dopo un commento) riparte dalla colonna della parentesi
+            _m.AlignRange(first, last, open, 0);
+        }
     }
 
     private void ArrangeParentheses(int open, int close, int baseAnchor, ParenthesisStyle style, bool indentContents)
@@ -382,11 +496,17 @@ public sealed partial class RuleBuilder
         }
         if (node.WhereClause != null)
         {
-            Clause(_m.FirstCode(node.WhereClause), update);
-            if (node.WhereClause.SearchCondition != null) items.Add(_m.FirstCode(node.WhereClause.SearchCondition));
+            int kw = _m.FirstCode(node.WhereClause);
+            Clause(kw, update);
+            if (node.WhereClause.SearchCondition != null)
+            {
+                FirstItemOnNewLine(kw, node.WhereClause.SearchCondition, _s.Dml.ListItems.PlaceWhereConditionOnNewLine);
+                items.Add(_m.FirstCode(node.WhereClause.SearchCondition));
+            }
         }
-        if (_s.Lists.AlignItemsAcrossClauses)
-            _m.AddAlignGroup(items);
+        if (_s.Lists.AlignItemsAcrossClauses && _s.Lists.AlignSubsequentItemsWithFirstItem && _s.Dml.Clauses.ClauseAlignment != ClauseAlignment.RightAligned
+            && _m.AddAlignGroup(items) is { } across)
+            _m.FollowingGroups.Add(across);
         _queryStarts.Push(update);
         base.ExplicitVisit(node);
         _queryStarts.Pop();
@@ -406,13 +526,26 @@ public sealed partial class RuleBuilder
             ArrangeList(kw, node.FromClause.TableReferences, _s.Dml.ListItems.PlaceFromTableOnNewLine, NewLineMode.Always);
             items.Add(_m.FirstCode(node.FromClause.TableReferences[0]));
         }
+        else if (_s.Dml.ListItems.PlaceFromTableOnNewLine == NewLineMode.Always)
+        {
+            // DELETE FROM destinazione: la destinazione va a capo nella colonna dopo DELETE
+            int target = _m.FirstCode(node.Target);
+            _m.Break(target);
+            _m.AlignTo(target, delete, _m.Slots[delete].Text.Length + 1);
+        }
         if (node.WhereClause != null)
         {
-            Clause(_m.FirstCode(node.WhereClause), delete);
-            if (node.WhereClause.SearchCondition != null) items.Add(_m.FirstCode(node.WhereClause.SearchCondition));
+            int kw = _m.FirstCode(node.WhereClause);
+            Clause(kw, delete);
+            if (node.WhereClause.SearchCondition != null)
+            {
+                FirstItemOnNewLine(kw, node.WhereClause.SearchCondition, _s.Dml.ListItems.PlaceWhereConditionOnNewLine);
+                items.Add(_m.FirstCode(node.WhereClause.SearchCondition));
+            }
         }
-        if (_s.Lists.AlignItemsAcrossClauses && items.Count > 1)
-            _m.AddAlignGroup(items);
+        if (_s.Lists.AlignItemsAcrossClauses && _s.Lists.AlignSubsequentItemsWithFirstItem && items.Count > 1 && _s.Dml.Clauses.ClauseAlignment != ClauseAlignment.RightAligned
+            && _m.AddAlignGroup(items) is { } across)
+            _m.FollowingGroups.Add(across);
         _queryStarts.Push(delete);
         base.ExplicitVisit(node);
         _queryStarts.Pop();
@@ -444,6 +577,16 @@ public sealed partial class RuleBuilder
                 int close = _m.NextCode(_m.Last(row.ColumnValues[^1]));
                 ArrangeParentheses(open, close, kw, v.ParenthesisStyle, v.IndentContents);
                 ArrangeList(open, row.ColumnValues, NewLineMode.Never, v.PlaceSubsequentValuesOnNewLines);
+                // compatte non semplici: la riga di valori va a capo sotto VALUES (verificato con la CLI)
+                if (row == values.RowValues[0])
+                {
+                    switch (v.ParenthesisStyle)
+                    {
+                        case ParenthesisStyle.CompactToStatement: _m.Break(open); _m.AlignTo(open, kw, 0); break;
+                        case ParenthesisStyle.CompactIndented: _m.Break(open); _m.AlignTo(open, kw, _tab); break;
+                        case ParenthesisStyle.CompactRightAligned: _m.Break(open); _m.AlignTo(open, kw, 0, AlignKind.Right); break;
+                    }
+                }
             }
         }
         else if (node.InsertSource is SelectInsertSource sel)

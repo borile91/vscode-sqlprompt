@@ -1,0 +1,8 @@
+{
+  "metadata": {
+    "name": "case__caseExpressions.placeThenOnNewLine=true"
+  },
+  "caseExpressions": {
+    "placeThenOnNewLine": true
+  }
+}

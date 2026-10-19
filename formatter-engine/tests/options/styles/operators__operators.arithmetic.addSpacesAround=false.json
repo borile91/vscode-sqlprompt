@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "name": "operators__operators.arithmetic.addSpacesAround=false"
+  },
+  "operators": {
+    "arithmetic": {
+      "addSpacesAround": false
+    }
+  }
+}

@@ -62,9 +62,10 @@ public sealed class LayoutSolver
             {
                 sb.Append(Indent(_col[i]));
             }
-            string text = s.Token.TokenType == Microsoft.SqlServer.TransactSql.ScriptDom.TSqlTokenType.MultilineComment
-                ? ShiftContinuationLines(s.Text, _col[i] - (s.Token.Column - 1))
-                : s.Text;
+            string text = s.Token.TokenType != Microsoft.SqlServer.TransactSql.ScriptDom.TSqlTokenType.MultilineComment ? s.Text
+                : _style.Whitespace.NewLines.AlignMultilineCommentsMatchingPatterns && StarredComment(s.Text)
+                    ? AlignContinuationLines(s.Text, _col[i])
+                    : ShiftContinuationLines(s.Text, _col[i] - (s.Token.Column - 1));
             sb.Append(NormalizeNewLines(text, newLine));
         }
         return sb.ToString();
@@ -246,6 +247,9 @@ public sealed class LayoutSolver
     {
         int n = _m.Count;
         var padTo = new int[n];
+        _followsGroup = new bool[n];
+        foreach (var g in _m.FollowingGroups)
+            foreach (int x in g) _followsGroup[x] = true;
         for (int iter = 0; iter < 50; iter++)
         {
             ComputeColumnsOnce(padTo);
@@ -254,8 +258,23 @@ public sealed class LayoutSolver
             {
                 // si allinea in colonna solo se ogni membro sta su una riga diversa
                 if (g.Select(x => _line[x]).Distinct().Count() != g.Count) continue;
+                bool following = _m.FollowingGroups.Contains(g);
                 int max = 0;
-                foreach (int x in g) max = Math.Max(max, _col[x]);
+                foreach (int x in g)
+                    if (!following || EffectiveBreaks(x) == 0) max = Math.Max(max, _col[x]);
+                if (following)
+                {
+                    if (max == 0) continue;
+                    // colonna comune arrotondata alla tabulazione successiva (lists.alignItemsToTabStops)
+                    int tab = Math.Max(1, _style.Whitespace.NumberOfSpacesInTabs);
+                    if (_style.Lists.AlignItemsToTabStops && max % tab != 0) max = (max / tab + 1) * tab;
+                    foreach (int x in g)
+                    {
+                        if (EffectiveBreaks(x) == 0 || padTo[x] == max) continue;
+                        padTo[x] = max;
+                        changed = true;
+                    }
+                }
                 if (_m.AlignGroupEnds.TryGetValue(g, out var ends))
                 {
                     var memberLines = g.Select(x => _line[x]).ToHashSet();
@@ -271,6 +290,9 @@ public sealed class LayoutSolver
             if (!changed) break;
         }
     }
+
+    // membri di gruppi "a seguire" (vedi LayoutModel.FollowingGroups)
+    private bool[] _followsGroup = [];
 
     private void ComputeColumnsOnce(int[] padTo)
     {
@@ -290,9 +312,10 @@ public sealed class LayoutSolver
             if (i > 0) line += EffectiveBreaks(i) + CountNewLines(_m.Slots[i - 1].Text);
             _line[i] = line;
             if (i == 0 || EffectiveBreaks(i) > 0)
-                col = IndentColumn(i);
+                col = _followsGroup[i] && padTo[i] > 0 ? padTo[i] : IndentColumn(i);
             else
-                col = Math.Max(_end[i - 1] + (s.SpaceBefore ? 1 : 0), padTo[i]);
+                col = Math.Max(Math.Max(_end[i - 1] + (s.SpaceBefore ? 1 : 0), padTo[i]),
+                    s.PadInline ? IndentColumn(i) : 0);
             _col[i] = col;
             int nl = s.Text.LastIndexOf('\n');
             _end[i] = nl < 0 ? col + s.Text.Length : s.Text.Length - nl - 1;
@@ -310,13 +333,12 @@ public sealed class LayoutSolver
         return Math.Max(0, col);
     }
 
-    // L'intervallo sfora se sfora una delle sue righe, comprese le ) ; , che lo seguono
-    // attaccate sulla sua ultima riga
+    // L'intervallo sfora se sfora una delle sue righe, comprese le ) , che lo seguono attaccate
+    // sulla sua ultima riga (il ; finale non conta, verificato con la CLI)
     private bool Exceeds(int first, int last)
     {
         while (last + 1 < _m.Count && EffectiveBreaks(last + 1) == 0
                && _m.Slots[last + 1].Token.TokenType is Microsoft.SqlServer.TransactSql.ScriptDom.TSqlTokenType.RightParenthesis
-                   or Microsoft.SqlServer.TransactSql.ScriptDom.TSqlTokenType.Semicolon
                    or Microsoft.SqlServer.TransactSql.ScriptDom.TSqlTokenType.Comma) last++;
         for (int i = first; i <= last; i++)
             if (_end[i] > _width) return true;
@@ -332,6 +354,25 @@ public sealed class LayoutSolver
         int tabs = col / ws.NumberOfSpacesInTabs;
         int rest = col % ws.NumberOfSpacesInTabs;
         return new string('\t', tabs) + new string(' ', rest);
+    }
+
+    // Commento a blocco con tutte le righe successive che iniziano con "*" (stile /* … * … */)
+    private static bool StarredComment(string text)
+    {
+        var lines = text.Replace("\r\n", "\n").Split('\n');
+        return lines.Length > 1 && lines.Skip(1).All(l => l.TrimStart().Length == 0 || l.TrimStart().StartsWith('*'));
+    }
+
+    // Le righe con "*" si allineano alla colonna di "/*" (verificato con la CLI)
+    private static string AlignContinuationLines(string text, int column)
+    {
+        var lines = text.Replace("\r\n", "\n").Split('\n');
+        for (int k = 1; k < lines.Length; k++)
+        {
+            string trimmed = lines[k].TrimStart();
+            if (trimmed.Length > 0) lines[k] = new string(' ', column) + trimmed;
+        }
+        return string.Join("\n", lines);
     }
 
     // Sposta di delta colonne le righe successive alla prima di un commento a blocco

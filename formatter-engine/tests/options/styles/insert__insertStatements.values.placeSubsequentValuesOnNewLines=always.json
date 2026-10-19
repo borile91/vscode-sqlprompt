@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "name": "insert__insertStatements.values.placeSubsequentValuesOnNewLines=always"
+  },
+  "insertStatements": {
+    "values": {
+      "placeSubsequentValuesOnNewLines": "always"
+    }
+  }
+}

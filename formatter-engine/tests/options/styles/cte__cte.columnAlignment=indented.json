@@ -1,0 +1,9 @@
+{
+  "metadata": {
+    "name": "cte__cte.columnAlignment=indented"
+  },
+  "cte": {
+    "placeColumnsOnNewLine": true,
+    "columnAlignment": "indented"
+  }
+}

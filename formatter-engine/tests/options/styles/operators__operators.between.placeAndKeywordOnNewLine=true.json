@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "name": "operators__operators.between.placeAndKeywordOnNewLine=true"
+  },
+  "operators": {
+    "between": {
+      "placeAndKeywordOnNewLine": true
+    }
+  }
+}

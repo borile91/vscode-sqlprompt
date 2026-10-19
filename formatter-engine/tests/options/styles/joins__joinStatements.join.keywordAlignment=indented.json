@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "name": "joins__joinStatements.join.keywordAlignment=indented"
+  },
+  "joinStatements": {
+    "join": {
+      "keywordAlignment": "indented"
+    }
+  }
+}

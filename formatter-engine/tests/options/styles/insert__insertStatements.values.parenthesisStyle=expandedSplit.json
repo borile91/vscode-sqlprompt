@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "name": "insert__insertStatements.values.parenthesisStyle=expandedSplit"
+  },
+  "insertStatements": {
+    "values": {
+      "parenthesisStyle": "expandedSplit"
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "metadata": {
+    "name": "parentheses__parentheses.collapseParenthesesShorterThan=30"
+  },
+  "parentheses": {
+    "collapseShortParenthesisContents": true,
+    "collapseParenthesesShorterThan": 30
+  }
+}

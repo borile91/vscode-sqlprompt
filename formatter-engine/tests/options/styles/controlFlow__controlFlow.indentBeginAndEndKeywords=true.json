@@ -1,0 +1,8 @@
+{
+  "metadata": {
+    "name": "controlFlow__controlFlow.indentBeginAndEndKeywords=true"
+  },
+  "controlFlow": {
+    "indentBeginAndEndKeywords": true
+  }
+}

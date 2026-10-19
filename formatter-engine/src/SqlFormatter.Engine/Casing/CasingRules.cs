@@ -108,10 +108,44 @@ public sealed class CasingRules : TSqlFragmentVisitor
     {
         Style.Casing.Uppercase => text.ToUpperInvariant(),
         Style.Casing.Lowercase => text.ToLowerInvariant(),
-        Style.Casing.UpperCamelCase => text.Length == 0 ? text : char.ToUpperInvariant(text[0]) + text[1..].ToLowerInvariant(),
-        Style.Casing.LowerCamelCase => text.ToLowerInvariant(),
+        Style.Casing.UpperCamelCase => Camel(text, upper: true),
+        Style.Casing.LowerCamelCase => Camel(text, upper: false),
         _ => text,
     };
+
+    // Nomi composti di più parole: in camel case ogni parola ha l'iniziale maiuscola
+    // (GETDATE → GetDate / getDate, @@ROWCOUNT → @@RowCount / @@rowCount)
+    private static readonly Dictionary<string, string> Words = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["GETDATE"] = "GetDate", ["GETUTCDATE"] = "GetUtcDate", ["SYSDATETIME"] = "SysDateTime",
+        ["SYSUTCDATETIME"] = "SysUtcDateTime", ["SYSDATETIMEOFFSET"] = "SysDateTimeOffset",
+        ["DATEADD"] = "DateAdd", ["DATEDIFF"] = "DateDiff", ["DATEDIFF_BIG"] = "DateDiff_Big", ["DATEPART"] = "DatePart",
+        ["DATENAME"] = "DateName", ["DATEFROMPARTS"] = "DateFromParts", ["DATETIMEFROMPARTS"] = "DateTimeFromParts",
+        ["EOMONTH"] = "EoMonth", ["ISNULL"] = "IsNull", ["ISNUMERIC"] = "IsNumeric", ["ISDATE"] = "IsDate",
+        ["NULLIF"] = "NullIf", ["DATALENGTH"] = "DataLength", ["CHARINDEX"] = "CharIndex", ["PATINDEX"] = "PatIndex",
+        ["SUBSTRING"] = "SubString", ["LTRIM"] = "LTrim", ["RTRIM"] = "RTrim", ["NEWID"] = "NewId",
+        ["NEWSEQUENTIALID"] = "NewSequentialId", ["OBJECT_ID"] = "Object_Id", ["OBJECT_NAME"] = "Object_Name",
+        ["DB_NAME"] = "Db_Name", ["DB_ID"] = "Db_Id", ["SCOPE_IDENTITY"] = "Scope_Identity", ["IDENT_CURRENT"] = "Ident_Current",
+        ["ROW_NUMBER"] = "Row_Number", ["DENSE_RANK"] = "Dense_Rank", ["COUNT_BIG"] = "Count_Big", ["STRING_AGG"] = "String_Agg",
+        ["CONCAT_WS"] = "Concat_Ws", ["ERROR_MESSAGE"] = "Error_Message", ["ERROR_NUMBER"] = "Error_Number",
+        ["ERROR_LINE"] = "Error_Line", ["ERROR_SEVERITY"] = "Error_Severity", ["ERROR_STATE"] = "Error_State",
+        ["ERROR_PROCEDURE"] = "Error_Procedure", ["TRY_CONVERT"] = "Try_Convert", ["TRY_CAST"] = "Try_Cast",
+        ["TRY_PARSE"] = "Try_Parse",
+        ["ROWCOUNT"] = "RowCount", ["TRANCOUNT"] = "TranCount", ["FETCH_STATUS"] = "Fetch_Status",
+        ["SERVERNAME"] = "ServerName", ["SERVICENAME"] = "ServiceName", ["SPID"] = "SpId", ["DATEFIRST"] = "DateFirst",
+        ["PROCID"] = "ProcId", ["LANGUAGE"] = "Language", ["NESTLEVEL"] = "NestLevel",
+    };
+
+    private static string Camel(string text, bool upper)
+    {
+        int p = 0;
+        while (p < text.Length && text[p] == '@') p++;
+        string prefix = text[..p], name = text[p..];
+        if (name.Length == 0) return text;
+        string camel = Words.TryGetValue(name, out var w) ? w : char.ToUpperInvariant(name[0]) + name[1..].ToLowerInvariant();
+        if (!upper) camel = char.ToLowerInvariant(camel[0]) + camel[1..];
+        return prefix + camel;
+    }
 }
 
 // useObjectDefinitionCase per gli alias di tabella: i riferimenti (T.colonna) prendono le

@@ -1,0 +1,8 @@
+{
+  "metadata": {
+    "name": "controlFlow__controlFlow.placeBeginAndEndOnNewLine=false"
+  },
+  "controlFlow": {
+    "placeBeginAndEndOnNewLine": false
+  }
+}

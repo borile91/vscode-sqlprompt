@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "name": "restore__restoreStatements.moveTo.placeOnNewLine=false"
+  },
+  "restoreStatements": {
+    "moveTo": {
+      "placeOnNewLine": false
+    }
+  }
+}

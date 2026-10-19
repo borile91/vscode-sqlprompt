@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "name": "insert__insertStatements.columns.parenthesisStyle=compactRightAligned"
+  },
+  "insertStatements": {
+    "columns": {
+      "parenthesisStyle": "compactRightAligned"
+    }
+  }
+}

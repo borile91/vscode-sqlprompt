@@ -19,6 +19,11 @@ interface OptionBase {
     label: string;
     /** Opzione attiva solo se un'altra opzione booleana è vera. */
     enabledWhen?: string;
+    /**
+     * L'opzione ha effetto solo con questi valori di altre opzioni: l'editor lo segnala
+     * e i casi di test (tools/redgate-oracle/options-cases.mjs) li impostano.
+     */
+    appliesWhen?: Record<string, OptionValue>;
 }
 
 export interface BoolOption extends OptionBase { type: 'bool'; default: boolean }
@@ -41,6 +46,8 @@ export interface StyleSection {
 
 const bool = (key: string, label: string, def: boolean, enabledWhen?: string): BoolOption =>
     ({ type: 'bool', key, label, default: def, enabledWhen });
+/** Aggiunge a un'opzione le condizioni in cui ha effetto. */
+const when = <T extends StyleOption>(option: T, appliesWhen: Record<string, OptionValue>): T => ({ ...option, appliesWhen });
 const int = (key: string, label: string, def: number, enabledWhen?: string, min = 0, max = 1000): IntOption =>
     ({ type: 'int', key, label, default: def, min, max, enabledWhen });
 const choice = (key: string, label: string, def: string, choices: [string, string][], enabledWhen?: string): EnumOption =>
@@ -107,9 +114,11 @@ export const STYLE_SECTIONS: StyleSection[] = [
                 title: 'Empty lines',
                 options: [
                     bool('whitespace.newLines.preserveExistingEmptyLinesBetweenStatements', 'Preserve existing empty lines between statements', true),
-                    int('whitespace.newLines.emptyLinesBetweenStatements', 'Empty lines between statements', 1, undefined, 0, 10),
+                    when(int('whitespace.newLines.emptyLinesBetweenStatements', 'Empty lines between statements', 1, undefined, 0, 10),
+                        { 'whitespace.newLines.preserveExistingEmptyLinesBetweenStatements': false }),
                     bool('whitespace.newLines.preserveExistingEmptyLinesAfterBatchSeparator', 'Preserve existing empty lines after GO', true),
-                    int('whitespace.newLines.emptyLinesAfterBatchSeparator', 'Empty lines after GO', 1, undefined, 0, 10),
+                    when(int('whitespace.newLines.emptyLinesAfterBatchSeparator', 'Empty lines after GO', 1, undefined, 0, 10),
+                        { 'whitespace.newLines.preserveExistingEmptyLinesAfterBatchSeparator': false }),
                 ],
             },
             {
@@ -123,8 +132,17 @@ export const STYLE_SECTIONS: StyleSection[] = [
                 ],
             },
         ],
-        preview: `declare @sede varchar(3) = 'MI1'; declare @anno int = 2024;
-select l.TITOLO from bib.LIBRI as l where l.ANNO = @anno;
+        preview: `declare @sede varchar(3) = 'MI1'; -- sede
+declare @anno int = 2024;      -- anno di riferimento
+if @anno > 2000
+begin
+/*
+ * libri dell'anno
+ */
+-- prima riga del commento
+      -- seconda riga del commento
+select l.TITOLO, l.TITOLO + ' - ' + l.SOTTOTITOLO + ' - ' + l.EDITORE + ' - ' + l.COLLANA + ' - ' + l.LINGUA + ' (' + l.FORMATO + ')' as Descrizione from bib.LIBRI as l where l.ANNO = @anno;
+end;
 go
 update bib.LIBRI set ATTIVO = 0 where ANNO < 1950;`,
     },
@@ -139,7 +157,7 @@ update bib.LIBRI set ATTIVO = 0 where ANNO < 1950;`,
                         ['always', 'Always'], ['never', 'Never'], ['ifSubsequentItems', 'If there are subsequent items'],
                     ]),
                     choice('lists.placeSubsequentItemsOnNewLines', 'Place subsequent items on new lines', 'always', ALWAYS_NEVER_LONG),
-                    bool('lists.indentListItems', 'Indent list items', true),
+                    when(bool('lists.indentListItems', 'Indent list items', true), { 'lists.placeFirstItemOnNewLine': 'always' }),
                 ],
             },
             {
@@ -160,11 +178,18 @@ update bib.LIBRI set ATTIVO = 0 where ANNO < 1950;`,
                         ['beforeItem', 'Before the item'], ['toList', 'To the list'], ['toStatement', 'To the statement'],
                     ], 'lists.placeCommasBeforeItems'),
                     bool('lists.addSpaceBeforeComma', 'Add a space before commas', false),
-                    bool('lists.addSpaceAfterComma', 'Add a space after commas', true),
+                    when(bool('lists.addSpaceAfterComma', 'Add a space after commas', true), { 'lists.placeSubsequentItemsOnNewLines': 'never' }),
                 ],
             },
         ],
-        preview: SAMPLE_QUERY,
+        preview: `select l.ID_LIBRO, -- chiave
+l.TITOLO as Titolo, -- titolo del libro
+a.NOME as Autore, count(p.ID_PRESTITO) as Prestiti, max(p.DATA_PRESTITO) as Ultimo
+from bib.LIBRI as l inner join bib.AUTORI as a on a.ID_AUTORE = l.ID_AUTORE and a.ATTIVO = 1
+left join bib.PRESTITI as p on p.ID_LIBRO = l.ID_LIBRO
+where l.ATTIVO = 1 and (l.ANNO > 2000 or l.COLLANA = 'Classici') and l.ID_SEDE in (select s.ID_SEDE from bib.SEDI as s where s.APERTA = 1)
+group by l.ID_LIBRO, l.TITOLO, a.NOME
+order by Prestiti desc;`,
     },
     {
         id: 'parentheses',
@@ -189,7 +214,7 @@ update bib.LIBRI set ATTIVO = 0 where ANNO < 1950;`,
         ],
         preview: `select l.TITOLO from bib.LIBRI as l
 where (l.ANNO > 2000 and (l.COLLANA = 'Classici' or l.COLLANA is null))
-and exists (select 1 from bib.PRESTITI as p where p.ID_LIBRO = l.ID_LIBRO and p.STATO is null);`,
+and exists (select 1 from bib.PRESTITI as p where p.ID_LIBRO = l.ID_LIBRO and p.STATO is null) and l.PREZZO*(1+l.IVA)>20;`,
     },
     {
         id: 'casing',
@@ -206,9 +231,9 @@ and exists (select 1 from bib.PRESTITI as p where p.ID_LIBRO = l.ID_LIBRO and p.
                 ],
             },
         ],
-        preview: `declare @Totale int = 0;
+        preview: `declare @Totale Int = 0, @Nota VarChar(20);
 Select @totale = Count(*) From bib.LIBRI As L Where L.ATTIVO = 1 And Getdate() > L.DATA_ARRIVO;
-print @@rowcount;`,
+print @@ROWcount;`,
     },
     {
         id: 'dml',
@@ -253,7 +278,10 @@ print @@rowcount;`,
         preview: `select top (10) l.TITOLO, l.ANNO from bib.LIBRI as l where l.ATTIVO = 1 order by l.ANNO desc;
 select distinct a.NOME from bib.AUTORI as a;
 update p set p.STATO = 'C' from bib.PRESTITI as p where p.DATA_RESTITUZIONE is not null;
-delete from bib.PRENOTAZIONI where SCADENZA < getdate();`,
+delete from bib.PRENOTAZIONI where SCADENZA < getdate();
+select a.NOME, s.NOME from bib.AUTORI as a, bib.SEDI as s where a.ID_SEDE = s.ID_SEDE and s.APERTA = 1 order by a.NOME, s.NOME;
+select l.TITOLO from bib.LIBRI as l where l.ID_AUTORE in (select a.ID_AUTORE from bib.AUTORI as a);
+insert into bib.REGISTRO (MESSAGGIO) values ('pulizia completata');`,
     },
     {
         id: 'ddl',
@@ -289,7 +317,8 @@ delete from bib.PRENOTAZIONI where SCADENZA < getdate();`,
                 ],
             },
         ],
-        preview: `create table bib.PRESTITI (ID_PRESTITO int identity(1, 1) not null, ID_LIBRO int not null, DATA_PRESTITO datetime constraint DF_PRESTITI_DATA default (getdate()) not null,
+        preview: `create table bib.TAG (ID_TAG int not null, NOME varchar(50) null);
+create table bib.PRESTITI (ID_PRESTITO int identity(1, 1) not null, ID_LIBRO int not null, DATA_PRESTITO datetime constraint DF_PRESTITI_DATA default (getdate()) not null,
 constraint PK_PRESTITI primary key clustered (ID_PRESTITO asc), constraint FK_PRESTITI_LIBRI foreign key (ID_LIBRO) references bib.LIBRI (ID_LIBRO));
 go
 create procedure bib.spPrestitiSocio @idSocio int, @soloAperti bit = 1 as
@@ -331,9 +360,9 @@ begin try exec bib.spPulizia; end try begin catch print error_message(); end cat
                     choice('cte.parenthesisStyle', 'Parenthesis style', 'compactSimple', PARENTHESIS_STYLES),
                     bool('cte.indentContents', 'Indent contents', false),
                     bool('cte.placeNameOnNewLine', 'Place the name on a new line', false),
-                    bool('cte.indentName', 'Indent the name', false),
+                    when(bool('cte.indentName', 'Indent the name', false), { 'cte.placeNameOnNewLine': true }),
                     bool('cte.placeColumnsOnNewLine', 'Place columns on a new line', false),
-                    choice('cte.columnAlignment', 'Column alignment', 'leftAligned', ALIGN_LEFT_INDENT_RIGHT),
+                    when(choice('cte.columnAlignment', 'Column alignment', 'leftAligned', ALIGN_LEFT_INDENT_RIGHT), { 'cte.placeColumnsOnNewLine': true }),
                     bool('cte.placeAsOnNewLine', 'Place AS on a new line', true),
                     choice('cte.asAlignment', 'AS alignment', 'leftAligned', ALIGN_LEFT_INDENT_RIGHT),
                 ],
@@ -357,7 +386,8 @@ select l.TITOLO, pr.CONTA from bib.LIBRI as l inner join prestitiRecenti as pr o
             },
         ],
         preview: `declare @sede varchar(3) = 'MI1', @dataRif datetime, @soglia numeric(12, 3) = 10.5, @attivo bit = 1;
-set @dataRif = isnull(@dataRif, getdate());`,
+set @dataRif = isnull(@dataRif, getdate());
+declare @descrizioneCompleta nvarchar(400) = concat(@sede, ' - ', convert(varchar(10), @dataRif, 103), ' - soglia ', @soglia, ' - attivi ', @attivo, ' - fine');`,
     },
     {
         id: 'joins',
@@ -372,7 +402,7 @@ set @dataRif = isnull(@dataRif, getdate());`,
                     ]),
                     bool('joinStatements.join.insertEmptyLineBetweenJoinClauses', 'Empty line between JOIN clauses', false),
                     bool('joinStatements.join.placeJoinTableOnNewLine', 'Place the joined table on a new line', false),
-                    bool('joinStatements.join.indentJoinTable', 'Indent the joined table', true),
+                    when(bool('joinStatements.join.indentJoinTable', 'Indent the joined table', true), { 'joinStatements.join.placeJoinTableOnNewLine': true }),
                 ],
             },
             {
@@ -384,9 +414,9 @@ set @dataRif = isnull(@dataRif, getdate());`,
                         ['toTable', 'To the table'], ['indented', 'Indented'],
                     ]),
                     bool('joinStatements.on.placeConditionOnNewLine', 'Place the condition on a new line', false),
-                    choice('joinStatements.on.conditionAlignment', 'Condition alignment', 'toOnKeyword', [
+                    when(choice('joinStatements.on.conditionAlignment', 'Condition alignment', 'toOnKeyword', [
                         ['toOnKeyword', 'To ON'], ['toInner', 'To INNER'], ['toTable', 'To the table'], ['indented', 'Indented'],
-                    ]),
+                    ]), { 'joinStatements.on.placeConditionOnNewLine': true }),
                 ],
             },
         ],
@@ -408,12 +438,13 @@ set @dataRif = isnull(@dataRif, getdate());`,
                 title: 'Values',
                 options: [
                     choice('insertStatements.values.parenthesisStyle', 'Parenthesis style', 'compactToStatement', PARENTHESIS_STYLES),
-                    bool('insertStatements.values.indentContents', 'Indent contents', false),
+                    when(bool('insertStatements.values.indentContents', 'Indent contents', false),
+                        { 'insertStatements.values.parenthesisStyle': 'expandedToStatement' }),
                     choice('insertStatements.values.placeSubsequentValuesOnNewLines', 'Subsequent values on new lines', 'never', ALWAYS_NEVER_LONG),
                 ],
             },
         ],
-        preview: `insert into bib.LIBRI (TITOLO, ANNO, ID_AUTORE, ATTIVO) values ('Il nome della rosa', 1980, 12, 1), ('Il pendolo di Foucault', 1988, 12, 1);
+        preview: `insert into bib.LIBRI (TITOLO, ANNO, ID_AUTORE, ATTIVO) values ('Il nome della rosa', 1980, 12, 1), ('Il pendolo di Foucault', 1988, 12, 1), ('La misteriosa fiamma della regina Loana', 2004, 12, 1);
 insert into bib.STORICO (ID_LIBRO, DATA) select l.ID_LIBRO, getdate() from bib.LIBRI as l where l.ATTIVO = 0;`,
     },
     {
@@ -510,9 +541,9 @@ case l.FORMATO when 'C' then 'cartaceo' when 'E' then 'ebook' end as Formato fro
                 options: [
                     bool('operators.between.placeOnNewLine', 'Place BETWEEN on a new line', true),
                     bool('operators.between.placeAndKeywordOnNewLine', 'Place AND of BETWEEN on a new line', false),
-                    choice('operators.between.andAlignment', 'BETWEEN … AND alignment', 'toBetween', [
+                    when(choice('operators.between.andAlignment', 'BETWEEN … AND alignment', 'toBetween', [
                         ['toBetween', 'To BETWEEN'], ['rightAlignedToBetween', 'Right aligned to BETWEEN'], ['toBeginningOfExpression', 'To the start of the expression'],
-                    ]),
+                    ]), { 'operators.between.placeAndKeywordOnNewLine': true }),
                     bool('operators.comparison.align', 'Align comparison operators', false),
                     bool('operators.comparison.addSpacesAround', 'Spaces around comparison operators', true),
                     bool('operators.arithmetic.addSpacesAround', 'Spaces around arithmetic operators', true),
@@ -521,6 +552,7 @@ case l.FORMATO when 'C' then 'cartaceo' when 'E' then 'ebook' end as Formato fro
         ],
         preview: `select l.TITOLO from bib.LIBRI as l
 where l.ATTIVO=1 and l.ANNO between 1990 and 2010 and (l.COLLANA='Classici' or l.COLLANA is null) and l.ID_SEDE in (1, 2, 3, 4)
+and l.LINGUA in ('italiano', 'inglese', 'francese', 'tedesco', 'spagnolo', 'portoghese', 'olandese', 'svedese', 'norvegese', 'danese')
 and l.PREZZO*1.22>20;`,
     },
     {

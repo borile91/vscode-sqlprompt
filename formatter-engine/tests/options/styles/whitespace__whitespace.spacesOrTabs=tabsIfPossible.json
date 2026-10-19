@@ -1,0 +1,8 @@
+{
+  "metadata": {
+    "name": "whitespace__whitespace.spacesOrTabs=tabsIfPossible"
+  },
+  "whitespace": {
+    "spacesOrTabs": "tabsIfPossible"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "name": "restore__restoreStatements.moveTo.toKeywordAlignment=rightAlignedToMove"
+  },
+  "restoreStatements": {
+    "moveTo": {
+      "toKeywordAlignment": "rightAlignedToMove"
+    }
+  }
+}

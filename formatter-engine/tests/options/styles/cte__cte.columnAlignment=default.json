@@ -1,0 +1,8 @@
+{
+  "metadata": {
+    "name": "cte__cte.columnAlignment=default"
+  },
+  "cte": {
+    "placeColumnsOnNewLine": true
+  }
+}

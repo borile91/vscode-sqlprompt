@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "name": "operators__operators.andOr.placeOnNewLine=never"
+  },
+  "operators": {
+    "andOr": {
+      "placeOnNewLine": "never"
+    }
+  }
+}
