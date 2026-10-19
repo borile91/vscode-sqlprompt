@@ -19,7 +19,7 @@ export class SqlFormattingProvider implements DocumentFormattingEditProvider {
 
     constructor(
         private readonly getStyle: () => LoadedStyle | undefined,
-        private readonly getEngine: () => FormattingEngine = () => 'legacy',
+        private readonly getEngine: () => FormattingEngine = () => 'dotnet',
         private readonly dotnet?: DotnetFormatterHost,
     ) {}
 
