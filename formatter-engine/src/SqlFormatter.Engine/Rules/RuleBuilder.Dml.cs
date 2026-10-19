@@ -85,6 +85,17 @@ public sealed partial class RuleBuilder
             }
         }
 
+        if (node.ForClause != null)
+        {
+            int kw = _m.FindBackward(_m.FirstCode(node.ForClause), select, sl => sl.Token.TokenType == TSqlTokenType.For);
+            Clause(kw, select);
+            // sottoquery tra parentesi compatte: FOR XML si allinea alla parentesi, non al SELECT
+            int open = _m.PrevCode(select);
+            if (open >= 0 && _m.Slots[open].Token.TokenType == TSqlTokenType.LeftParenthesis
+                && _s.Parentheses.ParenthesisStyle.ToString().StartsWith("Compact"))
+                _m.AlignTo(kw, open, 0);
+        }
+
         // gli elementi di tutte le clausole partono dalla stessa colonna
         if (_s.Lists.AlignItemsAcrossClauses)
             _m.AddAlignGroup(clauses.Select(c => c.FirstItem));
@@ -307,6 +318,9 @@ public sealed partial class RuleBuilder
         ArrangeParentheses(open, close, baseAnchor, _s.Parentheses.ParenthesisStyle, _s.Parentheses.IndentParenthesesContents);
         if (_s.Dml.CollapseShortSubqueries)
             _m.AddCollapse(open, close, _s.Dml.CollapseSubqueriesShorterThan);
+        // anche le sottoquery sono parentesi: valgono le soglie delle parentesi
+        if (_s.Parentheses.CollapseShortParenthesisContents)
+            _m.AddCollapse(open, close, _s.Parentheses.CollapseParenthesesShorterThan);
     }
 
     private void ArrangeParentheses(int open, int close, int baseAnchor, ParenthesisStyle style, bool indentContents)
@@ -335,8 +349,9 @@ public sealed partial class RuleBuilder
                 _m.AlignTo(close, baseAnchor, 0);
                 break;
             default:
-                // compatte: il contenuto segue la parentesi e, se va a capo, si allinea dopo di essa
-                _m.AlignRange(first, last, first, 0);
+                // compatte: il contenuto segue la parentesi; se va a capo (es. dopo un commento)
+                // riparte dalla colonna della parentesi
+                _m.AlignRange(first, last, open, 0);
                 break;
         }
     }

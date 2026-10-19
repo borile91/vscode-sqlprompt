@@ -20,6 +20,9 @@
 1_Vertical/4_Scripting__example4.sql
 1_Vertical/4_Scripting__example5.sql
 1_Vertical/4_Scripting__example6.sql
+1_Vertical/notpassing_1_Vertical__example7.sql
+1_Vertical/notpassing_2_Inline__example7.sql
+1_Vertical/notpassing_3_Tsqlt__example7.sql
 2_Inline/1_Vertical__example2.sql
 2_Inline/1_Vertical__example3.sql
 2_Inline/2_Inline__example2.sql
@@ -28,6 +31,9 @@
 2_Inline/3_Tsqlt__example3.sql
 2_Inline/4_Scripting__example2.sql
 2_Inline/4_Scripting__example3.sql
+2_Inline/notpassing_1_Vertical__example7.sql
+2_Inline/notpassing_2_Inline__example7.sql
+2_Inline/notpassing_3_Tsqlt__example7.sql
 3_Tsqlt/1_Vertical__example2.sql
 3_Tsqlt/1_Vertical__example3.sql
 3_Tsqlt/1_Vertical__example5.sql
@@ -44,6 +50,9 @@
 3_Tsqlt/4_Scripting__example3.sql
 3_Tsqlt/4_Scripting__example5.sql
 3_Tsqlt/4_Scripting__example6.sql
+3_Tsqlt/notpassing_1_Vertical__example7.sql
+3_Tsqlt/notpassing_2_Inline__example7.sql
+3_Tsqlt/notpassing_3_Tsqlt__example7.sql
 4_Scripting/1_Vertical__example2.sql
 4_Scripting/1_Vertical__example3.sql
 4_Scripting/1_Vertical__example4.sql
@@ -56,6 +65,7 @@
 4_Scripting/4_Scripting__example2.sql
 4_Scripting/4_Scripting__example3.sql
 4_Scripting/4_Scripting__example4.sql
+4_Scripting/notpassing_4_Scripting__example7.sql
 embedded_Collapsed/1_Vertical__example2.sql
 embedded_Collapsed/2_Inline__example2.sql
 embedded_Collapsed/3_Tsqlt__example2.sql
