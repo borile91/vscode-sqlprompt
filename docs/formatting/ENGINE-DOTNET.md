@@ -57,7 +57,7 @@ Motore di formattazione **predefinito** (`sqlPrompt.formatting.engine = "dotnet"
   - `sqlPrompt.formatting.dotnetPath`: eseguibile `dotnet` (facoltativo).
 - **Runtime .NET**, nell'ordine:
   1. percorso configurato;
-  2. estensione **.NET Install Tool** (`dotnet.acquire`, versione 10.0), se installata;
+  2. estensione **.NET Install Tool** (`dotnet.acquire`, versione 10.0): è una dipendenza dell'estensione, quindi il runtime si scarica da solo al primo uso;
   3. `dotnet` dal `PATH`.
 - **Ripiego**: se il motore non parte si usa il formatter TypeScript, con un avviso una sola volta.
 - **Errore di sintassi**: il documento resta invariato e l'avviso indica riga e colonna.
