@@ -27,30 +27,50 @@ done
 shift $((OPTIND - 1))
 [[ -n "$style" && -n "$out" && $# -gt 0 ]] || { echo "uso: $0 -s stile.json -o uscita [-c] file.sql..." >&2; exit 2; }
 
+# Parallels sospende la VM quando è inattiva: la si riprende prima di usarla
+if prlctl list -a | grep -q "suspended .*$VM\|paused .*$VM"; then
+  prlctl resume "$VM" >/dev/null
+fi
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  prlctl exec "$VM" cmd /c "echo ok" 2>/dev/null | grep -q ok && break
+  sleep 3
+done
+
 run="run-$$-$(date +%s)"
 stage="$HOST_ROOT/$run"
-mkdir -p "$stage/sql" "$out"
+mkdir -p "$stage" "$out"
 trap 'rm -rf "$stage"' EXIT
-
 cp "$style" "$stage/style.json"
-for f in "$@"; do cp "$f" "$stage/sql/"; done
 
-# Script batch eseguito nella VM: le unità mappate non esistono nel contesto di prlctl, quindi percorsi UNC
-printf '@echo off\r\n"%s" --i-agree-to-the-eula %s -p "%s\\%s\\sql" -s "%s\\%s\\style.json" > "%s\\%s\\log.txt" 2>&1\r\necho %%ERRORLEVEL%% > "%s\\%s\\exit.txt"\r\n' \
-  "$CLI" "$casing" "$UNC_ROOT" "$run" "$UNC_ROOT" "$run" "$UNC_ROOT" "$run" "$UNC_ROOT" "$run" > "$stage/run.cmd"
+# A blocchi: una sessione prlctl exec troppo lunga viene interrotta (PRL_ERR_IO_STOPPED)
+chunk="${ORACLE_CHUNK:-150}"
+files=("$@")
+for ((start = 0; start < ${#files[@]}; start += chunk)); do
+  part="p$((start / chunk))"
+  mkdir -p "$stage/$part"
+  for f in "${files[@]:start:chunk}"; do cp "$f" "$stage/$part/"; done
 
-prlctl exec "$VM" cmd /c "$UNC_ROOT\\$run\\run.cmd" >/dev/null
+  # Script batch eseguito nella VM: le unità mappate non esistono nel contesto di prlctl, quindi percorsi UNC
+  printf '@echo off\r\n"%s" --i-agree-to-the-eula %s -p "%s\\%s\\%s" -s "%s\\%s\\style.json" > "%s\\%s\\%s.log" 2>&1\r\necho %%ERRORLEVEL%% > "%s\\%s\\%s.exit"\r\n' \
+    "$CLI" "$casing" "$UNC_ROOT" "$run" "$part" "$UNC_ROOT" "$run" "$UNC_ROOT" "$run" "$part" "$UNC_ROOT" "$run" "$part" > "$stage/$part.cmd"
 
-code=$(tr -d '\r\n ' < "$stage/exit.txt")
-if [[ "$code" != "0" ]]; then
-  cat "$stage/log.txt" >&2
-  exit 1
-fi
-# La CLI esce con 0 anche quando non trova lo stile: l'errore va letto dal log
-if grep -q "Error encountered" "$stage/log.txt"; then
-  cat "$stage/log.txt" >&2
-  exit 1
-fi
-# File non parsabili: la CLI li lascia invariati e lo segnala nel log
-grep -i -E "fail|skip|could not" "$stage/log.txt" >&2 || true
-cp "$stage/sql/"*.sql "$out/"
+  # prlctl exec a volte cade (VM sospesa, sessione interrotta): si riprova il blocco
+  for attempt in 1 2 3; do
+    rm -f "$stage/$part.exit"
+    prlctl exec "$VM" cmd /c "$UNC_ROOT\\$run\\$part.cmd" >/dev/null 2>&1 || true
+    [[ -f "$stage/$part.exit" ]] && break
+    prlctl resume "$VM" >/dev/null 2>&1 || true
+    sleep 5
+  done
+  [[ -f "$stage/$part.exit" ]] || { echo "blocco $part fallito dopo 3 tentativi" >&2; exit 1; }
+
+  code=$(tr -d '\r\n ' < "$stage/$part.exit")
+  # La CLI esce con 0 anche quando non trova lo stile: l'errore va letto dal log
+  if [[ "$code" != "0" ]] || grep -q "Error encountered" "$stage/$part.log"; then
+    cat "$stage/$part.log" >&2
+    exit 1
+  fi
+  # File non parsabili: la CLI li lascia invariati e lo segnala nel log
+  grep -i -E "fail|skip|could not" "$stage/$part.log" >&2 || true
+  cp "$stage/$part/"*.sql "$out/"
+done
