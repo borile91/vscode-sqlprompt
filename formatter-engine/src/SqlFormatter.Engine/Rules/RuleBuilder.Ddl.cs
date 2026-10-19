@@ -89,8 +89,40 @@ public sealed partial class RuleBuilder
         if (items.Count == 0) return;
         int open = _m.PrevCode(_m.FirstCode(items[0]));
         int close = _m.NextCode(_m.Last(items[^1]));
-        ArrangeParentheses(open, close, statementStart, _s.Ddl.ParenthesisStyle, _s.Ddl.IndentParenthesesContents);
+        // come le CTE, con la parola chiave dell'istruzione (CREATE, DECLARE…) come riferimento;
+        // il rientro del contenuto vale solo per le parentesi espanse (verificato con la CLI)
+        var style = _s.Ddl.ParenthesisStyle;
+        ArrangeParenthesesAfter(open, close, statementStart, statementStart, style,
+            _s.Ddl.IndentParenthesesContents && style.ToString().StartsWith("Expanded"));
         ArrangeList(open, items, NewLineMode.Never, NewLineMode.Always);
+        if (_s.Ddl.AlignDataTypesAndConstraints) AlignColumnDefinitions(def.ColumnDefinitions);
+    }
+
+    // ddl.alignDataTypesAndConstraints: tipi in colonna e, dopo il tipo, il resto della definizione
+    private void AlignColumnDefinitions(IList<ColumnDefinition> columns)
+    {
+        var types = columns.Where(c => c.DataType != null).ToList();
+        _m.AddAlignGroup(types.Select(c => _m.FirstCode(c.DataType)));
+        _m.AddAlignGroup(types.Select(c => _m.NextCode(_m.Last(c.DataType))).Where(i => i >= 0 && i <= _m.Last(columns[^1])
+            && _m.Slots[i].Token.TokenType is not (TSqlTokenType.Comma or TSqlTokenType.RightParenthesis)));
+    }
+
+    // vincoli di colonna (CONSTRAINT nome …) a capo, rientrati rispetto alla colonna
+    public override void ExplicitVisit(ColumnDefinition node)
+    {
+        if (_s.Ddl.PlaceConstraintsOnNewLines)
+        {
+            int column = _m.FirstCode(node);
+            var named = node.Constraints.Cast<ConstraintDefinition>().Append(node.DefaultConstraint)
+                .Where(c => c?.ConstraintIdentifier != null).Select(c => c!);
+            foreach (var c in named)
+            {
+                int keyword = _m.PrevCode(_m.First(c.ConstraintIdentifier));
+                _m.Break(keyword);
+                _m.AlignTo(keyword, column, _tab);
+            }
+        }
+        base.ExplicitVisit(node);
     }
 
     public override void ExplicitVisit(AlterTableAddTableElementStatement node)

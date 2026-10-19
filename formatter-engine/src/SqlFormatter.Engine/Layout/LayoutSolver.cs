@@ -56,7 +56,7 @@ public sealed class LayoutSolver
             }
             else if (i > 0 && _col[i] > _end[i - 1])
             {
-                sb.Append(' ', _col[i] - _end[i - 1]);
+                sb.Append(InlinePadding(_end[i - 1], _col[i]));
             }
             else if (i == 0)
             {
@@ -64,7 +64,7 @@ public sealed class LayoutSolver
             }
             string text = s.Token.TokenType != Microsoft.SqlServer.TransactSql.ScriptDom.TSqlTokenType.MultilineComment ? s.Text
                 : _style.Whitespace.NewLines.AlignMultilineCommentsMatchingPatterns && StarredComment(s.Text)
-                    ? AlignContinuationLines(s.Text, _col[i])
+                    ? AlignContinuationLines(s.Text, Indent(_col[i]))
                     : ShiftContinuationLines(s.Text, _col[i] - (s.Token.Column - 1));
             sb.Append(NormalizeNewLines(text, newLine));
         }
@@ -260,17 +260,20 @@ public sealed class LayoutSolver
                 if (g.Select(x => _line[x]).Distinct().Count() != g.Count) continue;
                 bool following = _m.FollowingGroups.Contains(g);
                 int max = 0;
+                // nei gruppi "a seguire" un membro a capo conta con la sua colonna naturale
                 foreach (int x in g)
-                    if (!following || EffectiveBreaks(x) == 0) max = Math.Max(max, _col[x]);
+                    max = Math.Max(max, following && EffectiveBreaks(x) > 0 ? Math.Max(IndentColumn(x), padTo[x]) : _col[x]);
                 if (following)
                 {
                     if (max == 0) continue;
-                    // colonna comune arrotondata alla tabulazione successiva (lists.alignItemsToTabStops)
+                    // colonna comune arrotondata alla tabulazione successiva (lists.alignItemsToTabStops,
+                    // o rientro con sole tabulazioni)
                     int tab = Math.Max(1, _style.Whitespace.NumberOfSpacesInTabs);
-                    if (_style.Lists.AlignItemsToTabStops && max % tab != 0) max = (max / tab + 1) * tab;
+                    bool toTabStop = _style.Lists.AlignItemsToTabStops || _style.Whitespace.SpacesOrTabs == TabBehaviour.Tabs;
+                    if (toTabStop && max % tab != 0) max = (max / tab + 1) * tab;
                     foreach (int x in g)
                     {
-                        if (EffectiveBreaks(x) == 0 || padTo[x] == max) continue;
+                        if (EffectiveBreaks(x) == 0 || padTo[x] >= max) continue;
                         padTo[x] = max;
                         changed = true;
                     }
@@ -291,6 +294,9 @@ public sealed class LayoutSolver
         }
     }
 
+    // colonna del primo token di ogni riga
+    private Dictionary<int, int> _lineStart = new();
+
     // membri di gruppi "a seguire" (vedi LayoutModel.FollowingGroups)
     private bool[] _followsGroup = [];
 
@@ -300,6 +306,7 @@ public sealed class LayoutSolver
         _col = new int[n];
         _end = new int[n];
         _line = new int[n];
+        _lineStart = new Dictionary<int, int>();
         int line = 0;
         Array.Clear(_wrapBreak);
         for (int i = 0; i < n; i++)
@@ -317,6 +324,7 @@ public sealed class LayoutSolver
                 col = Math.Max(Math.Max(_end[i - 1] + (s.SpaceBefore ? 1 : 0), padTo[i]),
                     s.PadInline ? IndentColumn(i) : 0);
             _col[i] = col;
+            if (i == 0 || _line[i] != _line[i - 1]) _lineStart[_line[i]] = col;
             int nl = s.Text.LastIndexOf('\n');
             _end[i] = nl < 0 ? col + s.Text.Length : s.Text.Length - nl - 1;
         }
@@ -327,9 +335,12 @@ public sealed class LayoutSolver
         var s = _m.Slots[i];
         if (s.Anchor < 0 || s.Anchor >= i) return Math.Max(0, s.Offset);
         int a = s.Anchor;
-        int col = s.Align == AlignKind.Right
-            ? _col[a] + _m.Slots[a].Text.Length - s.Text.Length + s.Offset
-            : _col[a] + s.Offset;
+        int col = s.Align switch
+        {
+            AlignKind.Right => _col[a] + _m.Slots[a].Text.Length - s.Text.Length + s.Offset,
+            AlignKind.LineStart => _lineStart[_line[a]] + s.Offset,
+            _ => _col[a] + s.Offset,
+        };
         return Math.Max(0, col);
     }
 
@@ -343,6 +354,23 @@ public sealed class LayoutSolver
         for (int i = first; i <= last; i++)
             if (_end[i] > _width) return true;
         return false;
+    }
+
+    // Spazi tra due token sulla stessa riga: con le tabulazioni un riempimento (più di uno spazio)
+    // usa tabulazioni fin dove arrivano, poi spazi (verificato con la CLI)
+    private string InlinePadding(int from, int to)
+    {
+        var ws = _style.Whitespace;
+        int tab = ws.NumberOfSpacesInTabs;
+        if (ws.SpacesOrTabs == TabBehaviour.Spaces || tab <= 0 || to - from <= 1) return new string(' ', to - from);
+        var sb = new System.Text.StringBuilder();
+        int col = from;
+        while ((col / tab + 1) * tab <= to)
+        {
+            sb.Append('\t');
+            col = (col / tab + 1) * tab;
+        }
+        return sb.Append(' ', to - col).ToString();
     }
 
     private string Indent(int col)
@@ -364,13 +392,13 @@ public sealed class LayoutSolver
     }
 
     // Le righe con "*" si allineano alla colonna di "/*" (verificato con la CLI)
-    private static string AlignContinuationLines(string text, int column)
+    private static string AlignContinuationLines(string text, string indent)
     {
         var lines = text.Replace("\r\n", "\n").Split('\n');
         for (int k = 1; k < lines.Length; k++)
         {
             string trimmed = lines[k].TrimStart();
-            if (trimmed.Length > 0) lines[k] = new string(' ', column) + trimmed;
+            if (trimmed.Length > 0) lines[k] = indent + trimmed;
         }
         return string.Join("\n", lines);
     }

@@ -126,13 +126,30 @@ public sealed partial class RuleBuilder
             if (following >= 0) _m.AlignTo(following, op, _tab);
             return;
         }
+        // dentro una parentesi l'operatore finisce prima della colonna "(" + 1, anche se il contenuto
+        // è rientrato; l'operando che segue si incolonna con il primo (verificato con la CLI)
+        if (keyword == firstOperand && alignment == AndOrAlignment.BeforeFirstListItem
+            && open >= 0 && _m.Slots[open].Token.TokenType == TSqlTokenType.LeftParenthesis)
+        {
+            _m.AlignTo(op, open, (_s.Parentheses.AddSpacesInsideParentheses ? 1 : 0) - len);
+            int operand = _m.NextCode(op);
+            if (operand >= 0)
+            {
+                _m.AlignTo(operand, op, _tab);
+                _m.AddAlignGroup([firstOperand, operand]);
+            }
+            return;
+        }
         switch (alignment)
         {
             case AndOrAlignment.LeftAligned: _m.AlignTo(op, keyword, 0); break;
             case AndOrAlignment.RightAligned: _m.AlignTo(op, keyword, 0, AlignKind.Right); break;
             case AndOrAlignment.BeforeFirstListItem: _m.AlignTo(op, firstOperand, -(len + 1)); break;
             case AndOrAlignment.ToFirstListItem: _m.AlignTo(op, firstOperand, 0); break;
-            case AndOrAlignment.Indented: _m.AlignTo(op, keyword, _tab); break;
+            // dentro una parentesi il rientro parte dalla "(" (verificato con la CLI)
+            case AndOrAlignment.Indented:
+                _m.AlignTo(op, keyword == firstOperand && open >= 0 && _m.Slots[open].Token.TokenType == TSqlTokenType.LeftParenthesis ? open : keyword, _tab);
+                break;
         }
         // l'operando che segue l'operatore, se va a capo, rientra rispetto all'operatore
         int next = _m.NextCode(op);
@@ -140,8 +157,10 @@ public sealed partial class RuleBuilder
         // operatore allineato alla parola chiave: l'operando si incolonna con il primo
         // (solo con il primo elemento delle liste sulla riga della parola chiave, verificato con la CLI)
         if (alignment is AndOrAlignment.LeftAligned or AndOrAlignment.RightAligned && _s.Lists.AlignSubsequentItemsWithFirstItem
-            && _s.Lists.PlaceFirstItemOnNewLine == NewLineMode.Never)
-            _m.AddAlignGroup([firstOperand, next]);
+            && _s.Lists.PlaceFirstItemOnNewLine == NewLineMode.Never
+            && _m.AddAlignGroup([firstOperand, next]) is { } operands)
+            // il primo operando a capo (es. ON con placeConditionOnNewLine) va nella colonna degli altri
+            _m.FollowingGroups.Add(operands);
     }
 
     public override void ExplicitVisit(BooleanParenthesisExpression node)
@@ -159,7 +178,7 @@ public sealed partial class RuleBuilder
             // dopo AND/OR la colonna dell'elemento è quella del primo operando della catena;
             // dopo WHERE/ON/… la parentesi è il primo elemento e non va a capo
             int item = baseAnchor != open && _chainFirstOperand.TryGetValue(open, out int chainFirst) ? chainFirst : open;
-            ArrangeParenthesesAfter(open, close, before, item, _s.Parentheses.ParenthesisStyle, _s.Parentheses.IndentParenthesesContents);
+            ArrangeParenthesesAfter(open, close, before, item, _s.Parentheses.ParenthesisStyle, _s.Parentheses.IndentParenthesesContents, boolean: true);
             if (_s.Parentheses.CollapseShortParenthesisContents)
                 _m.AddCollapse(open, close, _s.Parentheses.CollapseParenthesesShorterThan);
         }
@@ -269,11 +288,15 @@ public sealed partial class RuleBuilder
                     default: _m.AlignTo(then, when, _tab); break;
                 }
             }
-            if (o.PlaceExpressionOnNewLine)
+            // THEN allineato all'espressione del WHEN: il risultato resta sulla riga del THEN
+            bool inlineResult = o.PlaceThenOnNewLine && o.ThenAlignment == CaseThenAlignment.ToWhenExpression;
+            if (o.PlaceExpressionOnNewLine && !inlineResult)
             {
-                // il risultato rientra dal WHEN anche con THEN su una riga propria (verificato con la CLI)
+                // il risultato va sotto il THEN quando THEN ha una riga propria, altrimenti rientra dal WHEN
+                // (verificato con la CLI)
                 _m.Break(thenValue);
-                _m.AlignTo(thenValue, when, _tab);
+                if (o.PlaceThenOnNewLine) _m.AlignTo(thenValue, then, 0);
+                else _m.AlignTo(thenValue, when, _tab);
             }
         }
 
@@ -290,10 +313,13 @@ public sealed partial class RuleBuilder
             }
             _m.AlignRange(elseValue, _m.Last(elseExpr), @else, _tab);
             // con ELSE in linea anche il suo valore resta in linea
-            if (o.PlaceExpressionOnNewLine && o.PlaceElseOnNewLine)
+            bool inlineElse = o.PlaceThenOnNewLine && o.ThenAlignment == CaseThenAlignment.ToWhenExpression;
+            if (o.PlaceExpressionOnNewLine && o.PlaceElseOnNewLine && !inlineElse)
             {
+                // stesso rientro dei risultati dei WHEN
+                int offset = o.PlaceThenOnNewLine && o.ThenAlignment == CaseThenAlignment.ToWhen ? 0 : _tab;
                 _m.Break(elseValue);
-                _m.AlignTo(elseValue, @else, _tab);
+                _m.AlignTo(elseValue, @else, offset);
             }
         }
 
@@ -327,7 +353,7 @@ public sealed partial class RuleBuilder
         {
             int open = _m.PrevCode(_m.FirstCode(node.Parameters[0]));
             int close = _m.NextCode(_m.Last(node.Parameters[^1]));
-            ArrangeArguments(open, close, node.Parameters);
+            ArrangeArguments(_m.FirstCode(node), open, close, node.Parameters);
             // con collapseShortParenthesisContents una sottoquery come primo argomento va a capo
             // e si allinea al nome della funzione: STUFF(\n(SELECT …), 1, 1, '')
             if (_s.Parentheses.CollapseShortParenthesisContents && node.Parameters[0] is ScalarSubquery)
@@ -340,11 +366,33 @@ public sealed partial class RuleBuilder
         base.ExplicitVisit(node);
     }
 
-    private void ArrangeArguments<T>(int open, int close, IList<T> args) where T : TSqlFragment
+    // CONVERT(tipo, valore[, stile]): argomenti come quelli delle altre funzioni
+    public override void ExplicitVisit(ConvertCall node)
+    {
+        var args = new List<TSqlFragment> { node.DataType, node.Parameter };
+        if (node.Style != null) args.Add(node.Style);
+        int open = _m.PrevCode(_m.FirstCode(node.DataType));
+        int close = _m.Last(node);
+        if (open >= 0 && close > open && _m.Slots[close].Token.TokenType == TSqlTokenType.RightParenthesis)
+            ArrangeArguments(_m.FirstCode(node), open, close, args);
+        _callArgumentDepth++;
+        base.ExplicitVisit(node);
+        _callArgumentDepth--;
+    }
+
+    private void ArrangeArguments<T>(int name, int open, int close, IList<T> args) where T : TSqlFragment
     {
         int first = _m.FirstCode(args[0]);
         _m.AlignRange(first, close, first, 0);
         var points = new List<int>();
+        // a capo perché troppo lunga: anche il primo argomento va a capo, rientrato dal nome
+        // della funzione, tranne una sottoquery (verificato con la CLI)
+        if (_s.FunctionCalls.PlaceArgumentsOnNewLines == NewLineMode.IfLongerThanMaxLineLength && args.Count > 1
+            && args[0] is not ScalarSubquery)
+        {
+            points.Add(first);
+            _m.AlignTo(first, name, _tab);
+        }
         for (int i = 1; i < args.Count; i++)
         {
             int start = _m.FirstCode(args[i]);
@@ -394,6 +442,53 @@ public sealed partial class RuleBuilder
         }
     }
 
+    // ---- BETWEEN … AND … ----
+
+    public override void ExplicitVisit(BooleanTernaryExpression node)
+    {
+        var o = _s.Operators.Between;
+        int low = _m.FirstCode(node.SecondExpression);
+        int high = _m.FirstCode(node.ThirdExpression);
+        int between = _m.FindBackward(low, _m.FirstCode(node), sl => sl.Token.TokenType == TSqlTokenType.Between);
+        int and = _m.PrevCode(high);
+        // BETWEEN a capo all'inizio della riga dell'operando, solo nelle condizioni con AND/OR
+        // sempre a capo e fuori dagli argomenti delle funzioni (verificato con la CLI)
+        if (between >= 0 && o.PlaceOnNewLine && _s.Operators.AndOr.PlaceOnNewLine == NewLineMode.Always && _callArgumentDepth == 0)
+        {
+            _m.Break(between);
+            // colonna in cui andrebbe un AND allineato a sinistra (verificato con la CLI)
+            int operand = _m.FirstCode(node);
+            int keyword = ChainKeyword(operand);
+            if (keyword < 0) _m.AlignTo(between, operand, 0, AlignKind.LineStart);
+            else if (_s.Operators.AndOr.Alignment == AndOrAlignment.Indented) _m.AlignTo(between, keyword, _tab);
+            else if (_s.Operators.AndOr.Alignment == AndOrAlignment.ToFirstListItem) _m.AlignTo(between, _chainFirstOperand[operand], 0);
+            else _m.AlignTo(between, keyword, 0);
+        }
+        if (between >= 0 && and >= 0 && o.PlaceAndKeywordOnNewLine)
+        {
+            _m.Break(and);
+            switch (o.AndAlignment)
+            {
+                case BetweenAndAlignment.RightAlignedToBetween: _m.AlignTo(and, between, 0, AlignKind.Right); break;
+                case BetweenAndAlignment.ToBeginningOfExpression: _m.AlignTo(and, low, 0); break;
+                default:
+                    // AND sotto BETWEEN, con i due valori incolonnati
+                    _m.AlignTo(and, between, 0);
+                    _m.AddAlignGroup([low, high]);
+                    break;
+            }
+        }
+        base.ExplicitVisit(node);
+    }
+
+    // Parola chiave (WHERE, ON, …) della catena AND/OR di cui l'operando fa parte, o -1
+    private int ChainKeyword(int operand)
+    {
+        if (!_chainFirstOperand.TryGetValue(operand, out int first)) return -1;
+        int keyword = _m.PrevCode(first);
+        return keyword >= 0 && Keywords.IsReservedKeyword(_m.Slots[keyword].Token) ? keyword : -1;
+    }
+
     // ---- IN (valori) ----
 
     public override void ExplicitVisit(InPredicate node)
@@ -409,7 +504,33 @@ public sealed partial class RuleBuilder
                 _m.SpaceBefore(first);
                 _m.SpaceBefore(close);
             }
+            // "(" a capo all'inizio della riga dell'IN (in.alignment: a sinistra, rientrata, a destra)
+            if (o.PlaceOpeningParenthesisOnNewLine)
+            {
+                int inKw = _m.PrevCode(open);
+                _m.Break(open);
+                switch (o.Alignment)
+                {
+                    case CteAlignment.Indented: _m.AlignTo(open, inKw, _tab, AlignKind.LineStart); break;
+                    case CteAlignment.RightAligned: _m.AlignTo(open, inKw, 0, AlignKind.Right); break;
+                    default: _m.AlignTo(open, inKw, 0, AlignKind.LineStart); break;
+                }
+            }
+            // primo valore a capo, rientrato rispetto alla parola chiave della condizione (WHERE…)
+            // o, fuori da una condizione, all'inizio della riga (verificato con la CLI)
             _m.AlignRange(first, close, first, 0);
+            int keyword = ChainKeyword(_m.FirstCode(node));
+            if (keyword >= 0) _m.AlignTo(first, keyword, _tab);
+            else _m.AlignTo(first, open, _tab, AlignKind.LineStart);
+            var firstMode = o.PlaceFirstValueOnNewLine switch
+            {
+                NewLineMode.Always => BreakMode.Always,
+                NewLineMode.IfSubsequentValues => node.Values.Count > 1 ? BreakMode.Always : BreakMode.Never,
+                NewLineMode.IfLongerThanMaxLineLength => BreakMode.IfLong,
+                _ => BreakMode.Never,
+            };
+            // "troppo lungo" si valuta sulla riga con il solo primo valore
+            _m.AddGroup(firstMode, open, _m.Last(node.Values[0]), [first]);
             var points = new List<int>();
             for (int i = 1; i < node.Values.Count; i++)
             {
@@ -418,7 +539,7 @@ public sealed partial class RuleBuilder
                 points.Add(start);
                 _m.AlignTo(start, first, 0);
             }
-            _m.AddGroup(Mode(o.PlaceSubsequentValuesOnNewLines), open, close, points, node.Values.Count);
+            _m.AddGroup(Mode(o.PlaceSubsequentValuesOnNewLines), first, close, points, node.Values.Count);
         }
         base.ExplicitVisit(node);
     }
