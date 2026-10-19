@@ -103,7 +103,7 @@
                     "default": "dotnet",
                     "enumDescriptions": [
                         "Built-in TypeScript formatter (fallback when .NET is not available).",
-                        "Default: .NET engine built on Microsoft ScriptDom, aiming at SQL Prompt parity. Requires the .NET 10 runtime."
+                        "Default: .NET engine built on Microsoft ScriptDom, compatible with SQL Prompt style files. Requires the .NET 10 runtime."
                     ],
                     "markdownDescription": "Formatting engine. `dotnet` (default) parses the script with Microsoft ScriptDom like SQL Prompt does and needs the .NET 10 runtime, downloaded automatically by the *.NET Install Tool* extension (an extension dependency) unless `sqlPrompt.formatting.dotnetPath` is set. If the engine cannot start, the built-in `legacy` formatter is used."
                 },

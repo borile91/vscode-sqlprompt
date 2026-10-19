@@ -28,8 +28,6 @@ for f in "$corpus"/mocks/*.sql; do
   cp "$f" "$corpus/inputs/$(basename "$f")"
 done
 
-# Stili incorporati in SQL Prompt (estratti da SQLPrompt.Format.exe): già in corpus/styles/embedded_*.json
-
 for s in "$corpus"/styles/*.json; do
   style=$(basename "$s" .json)
   rm -rf "$corpus/expected/$style"

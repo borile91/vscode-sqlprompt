@@ -84,15 +84,3 @@
 4_Scripting/4_Scripting__example3.sql
 4_Scripting/4_Scripting__example4.sql
 4_Scripting/notpassing_4_Scripting__example7.sql
-embedded_Collapsed/1_Vertical__example2.sql
-embedded_Collapsed/2_Inline__example2.sql
-embedded_Collapsed/3_Tsqlt__example2.sql
-embedded_Collapsed/4_Scripting__example2.sql
-embedded_Default/1_Vertical__example2.sql
-embedded_Default/1_Vertical__example4.sql
-embedded_Default/2_Inline__example2.sql
-embedded_Default/2_Inline__example4.sql
-embedded_Default/3_Tsqlt__example2.sql
-embedded_Default/3_Tsqlt__example4.sql
-embedded_Default/4_Scripting__example2.sql
-embedded_Default/4_Scripting__example4.sql
