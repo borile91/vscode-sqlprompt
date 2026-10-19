@@ -38,8 +38,11 @@ Motore alternativo al formatter TypeScript, attivabile con `sqlPrompt.formatting
 1. **Commenti di riga**: dopo un commento di riga si va sempre a capo.
 2. **Compattazione**: dall'esterno verso l'interno, gli intervalli più corti della soglia finiscono su una riga.
 3. **Gruppi `Always`**: si applicano tutti.
-4. **Gruppi `IfLong`**: si spezzano uno alla volta, dal più esterno, finché tutto sta nella larghezza.
-5. **Colonne**: l'ancora dà il rientro, i gruppi verticali danno l'incolonnamento (alias, tipi, elementi tra clausole).
+4. **Correzioni dall'esterno verso l'interno**, una alla volta finché tutto sta nella larghezza:
+   - un intervallo compattato che finisce oltre la soglia si riapre, e i suoi interni si rivalutano;
+   - un gruppo `IfLong` che sfora (o contiene un commento di riga) si spezza;
+   - un pezzo di riempimento che, su più righe, sfora va a capo.
+5. **Colonne**: l'ancora dà il rientro, i gruppi verticali danno l'incolonnamento (alias, tipi, elementi tra clausole, commenti in coda).
 
 ## Protocollo del sidecar
 
@@ -76,8 +79,9 @@ Motore alternativo al formatter TypeScript, attivabile con `sqlPrompt.formatting
 
 ## Stato attuale
 
-- **68/252** casi identici, **67,5%** di righe in comune con Redgate.
-- **Profili utente**: Vertical 82%, Inline 78%, Tsqlt 74%, Scripting 72%.
+- **78/252** casi identici, **77,9%** di righe in comune con Redgate.
+- **Profili utente**: Vertical 99%, Inline 92%, Tsqlt 91%, Scripting 89%.
+- **Example7** (`docs/formatting/example-not-passing/`, irrisolti con il formatter TS): tutti e 4 **identici** a Redgate con il proprio profilo, ora nel ratchet.
 - **Stili incorporati**: Collapsed e Indented sotto il 45%; mancano `toFirstListItem` e la compattazione completa.
 
 ### Coperti
