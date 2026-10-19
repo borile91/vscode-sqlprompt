@@ -10,10 +10,35 @@ public sealed partial class RuleBuilder
     // catene AND/OR già sistemate (il visitor scende anche nei nodi interni della catena)
     private readonly HashSet<BooleanExpression> _arrangedChains = [];
 
+    // profondità negli argomenti di chiamate a funzione: lì AND/OR restano in linea
+    private int _callArgumentDepth;
+
     public override void ExplicitVisit(BooleanBinaryExpression node)
     {
-        if (!_arrangedChains.Contains(node)) ArrangeBooleanChain(node);
+        if (!_arrangedChains.Contains(node))
+        {
+            if (_callArgumentDepth > 0) Flatten(node, []);
+            else ArrangeBooleanChain(node);
+        }
         base.ExplicitVisit(node);
+    }
+
+    // IIF(a = 1 AND b = 2, …): la condizione resta su una riga (verificato con la CLI)
+    public override void ExplicitVisit(IIfCall node)
+    {
+        _callArgumentDepth++;
+        base.ExplicitVisit(node);
+        _callArgumentDepth--;
+    }
+
+    // dentro una sottoquery si torna alle regole normali, anche se è argomento di una funzione
+    public override void ExplicitVisit(ScalarSubquery node)
+    {
+        ArrangeSubquery(node.QueryExpression, StatementAnchor());
+        int saved = _callArgumentDepth;
+        _callArgumentDepth = 0;
+        base.ExplicitVisit(node);
+        _callArgumentDepth = saved;
     }
 
     // Una catena di AND/OR al primo livello: gli operatori vanno a capo e si allineano
@@ -259,6 +284,13 @@ public sealed partial class RuleBuilder
 
     public override void ExplicitVisit(FunctionCall node)
     {
+        _callArgumentDepth++;
+        VisitFunctionCall(node);
+        _callArgumentDepth--;
+    }
+
+    private void VisitFunctionCall(FunctionCall node)
+    {
         _m.NoSpaceBefore(_m.NextCode(_m.Last(node.FunctionName)));
         if (node.Parameters.Count > 0)
         {
@@ -300,9 +332,15 @@ public sealed partial class RuleBuilder
 
     public override void ExplicitVisit(SchemaObjectFunctionTableReference node)
     {
-        _m.NoSpaceBefore(_m.NextCode(_m.Last(node.SchemaObject)));
+        int open = _m.NextCode(_m.Last(node.SchemaObject));
+        _m.NoSpaceBefore(open);
+        // dopo la parentesi di una funzione tabellare la ) che segue è staccata: f(1, @x) );
+        int close = node.Parameters.Count > 0 ? _m.NextCode(_m.Last(node.Parameters[^1])) : _m.NextCode(open);
+        _tableFunctionCloses.Add(close);
         base.ExplicitVisit(node);
     }
+
+    private readonly HashSet<int> _tableFunctionCloses = [];
 
     // ---- IN (valori) ----
 

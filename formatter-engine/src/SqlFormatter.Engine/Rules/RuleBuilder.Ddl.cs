@@ -163,14 +163,62 @@ public sealed partial class RuleBuilder
     public override void ExplicitVisit(DefaultConstraintDefinition node) { ArrangeConstraint(node); base.ExplicitVisit(node); }
     public override void ExplicitVisit(CheckConstraintDefinition node) { ArrangeConstraint(node); base.ExplicitVisit(node); }
 
-    // WITH ( opzione = valore, … ): a capo solo se la riga è troppo lunga
+    // WITH ( opzione = valore, … ): a capo solo se la riga è troppo lunga;
+    // con una sola opzione nei vincoli tutto attaccato: WITH(FILLFACTOR = 80)
     private void ArrangeIndexOptions(IList<IndexOption> options)
     {
+        if (options.Count == 1)
+        {
+            int only = _m.FirstCode(options[0]);
+            int o = _m.PrevCode(only);
+            int c = _m.NextCode(_m.Last(options[0]));
+            if (o >= 0 && _m.Slots[o].Token.TokenType == TSqlTokenType.LeftParenthesis)
+            {
+                _m.NoSpaceBefore(o);
+                _m.NoSpaceBefore(only);
+                _m.NoSpaceBefore(c);
+            }
+            return;
+        }
         if (options.Count < 2) return;
         int first = _m.FirstCode(options[0]);
         int open = _m.PrevCode(first);
         int close = _m.NextCode(_m.Last(options[^1]));
         ArrangeList(open, options, NewLineMode.Never, NewLineMode.IfLongerThanMaxLineLength);
         _m.AlignRange(first, close, first, 0);
+    }
+
+    // ---- indici ----
+
+    // CREATE INDEX nome / ON tabella ( colonne ) / INCLUDE / WHERE / WITH, rientrati
+    public override void ExplicitVisit(CreateIndexStatement node)
+    {
+        int create = _m.FirstCode(node);
+        int on = _m.PrevCode(_m.FirstCode(node.OnName));
+        IndexClause(on, create);
+        if (node.IncludeColumns.Count > 0)
+            IndexClause(_m.FindBackward(_m.FirstCode(node.IncludeColumns[0]), on, sl => sl.Token.Text.Equals("INCLUDE", StringComparison.OrdinalIgnoreCase)), create);
+        if (node.FilterPredicate != null)
+            IndexClause(_m.FindBackward(_m.FirstCode(node.FilterPredicate), on, sl => sl.Token.TokenType == TSqlTokenType.Where), create);
+        if (node.IndexOptions.Count > 0)
+            IndexClause(_m.FindBackward(_m.FirstCode(node.IndexOptions[0]), on, sl => sl.Token.TokenType == TSqlTokenType.With), create);
+        base.ExplicitVisit(node);
+    }
+
+    // ALTER INDEX nome / ON tabella / azione
+    public override void ExplicitVisit(AlterIndexStatement node)
+    {
+        int alter = _m.FirstCode(node);
+        int on = _m.PrevCode(_m.FirstCode(node.OnName));
+        IndexClause(on, alter);
+        IndexClause(_m.NextCode(_m.Last(node.OnName)), alter);
+        base.ExplicitVisit(node);
+    }
+
+    private void IndexClause(int keyword, int statement)
+    {
+        if (keyword < 0 || keyword <= statement) return;
+        _m.Break(keyword);
+        _m.AlignTo(keyword, statement, _tab);
     }
 }

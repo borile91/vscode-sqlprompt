@@ -48,6 +48,8 @@ public sealed class BreakGroup
     public required int Last { get; init; }
     public List<int> Points { get; } = [];
     public int ItemCount { get; init; }
+    // primo token del primo elemento (per riconoscere elementi su più righe)
+    public int ContentStart { get; set; } = -1;
     public bool Broken { get; set; }
 }
 
@@ -89,8 +91,17 @@ public sealed class LayoutModel
             if (t.TokenType == TSqlTokenType.EndOfFile)
                 continue;
             _streamToSlot[i] = Slots.Count;
-            Slots.Add(new Slot { Token = t, StreamIndex = i, Text = t.Text, OriginalNewLinesBefore = newLines });
-            newLines = 0;
+            string text = t.Text;
+            int trailingNewLines = 0;
+            // con fine riga LF il commento di riga ScriptDom include il \n: va tolto dal testo
+            // e contato come a capo prima del token successivo
+            if (t.TokenType == TSqlTokenType.SingleLineComment)
+            {
+                trailingNewLines = CountNewLines(text);
+                text = text.TrimEnd('\r', '\n');
+            }
+            Slots.Add(new Slot { Token = t, StreamIndex = i, Text = text, OriginalNewLinesBefore = newLines });
+            newLines = trailingNewLines;
         }
     }
 

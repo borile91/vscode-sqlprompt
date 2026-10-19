@@ -163,6 +163,42 @@ public sealed partial class RuleBuilder
         }
     }
 
+    public override void ExplicitVisit(CreateTriggerStatement node) { ArrangeTrigger(node); base.ExplicitVisit(node); }
+    public override void ExplicitVisit(AlterTriggerStatement node) { ArrangeTrigger(node); base.ExplicitVisit(node); }
+    public override void ExplicitVisit(CreateOrAlterTriggerStatement node) { ArrangeTrigger(node); base.ExplicitVisit(node); }
+
+    // CREATE TRIGGER nome / ON tabella / AFTER … / AS / corpo rientrato
+    private void ArrangeTrigger(TriggerStatementBody node)
+    {
+        int create = _m.FirstCode(node);
+        int on = _m.PrevCode(_m.FirstCode(node.TriggerObject));
+        if (on >= 0 && _m.Slots[on].Token.TokenType == TSqlTokenType.On)
+        {
+            _m.Break(on);
+            _m.AlignTo(on, create, 0);
+        }
+        int afterObject = _m.NextCode(_m.Last(node.TriggerObject));
+        // WITH opzioni facoltative, poi FOR/AFTER/INSTEAD OF
+        int kind = _m.FindForward(afterObject, _m.Last(node), sl => sl.Token.Text.ToUpperInvariant() is "FOR" or "AFTER" or "INSTEAD");
+        if (kind >= 0)
+        {
+            _m.Break(kind);
+            _m.AlignTo(kind, create, 0);
+        }
+        if (node.StatementList != null && node.StatementList.Statements.Count > 0)
+        {
+            int @as = _m.PrevCode(_m.FirstCode(node.StatementList.Statements[0]));
+            while (@as > create && _m.Slots[@as].Token.TokenType != TSqlTokenType.As) @as = _m.PrevCode(@as);
+            if (@as > create)
+            {
+                _m.Break(@as);
+                _m.AlignTo(@as, create, 0);
+            }
+            ArrangeStatements(node.StatementList.Statements, create, _s.Ddl.IndentClauses ? _tab : 0);
+            _m.SetBreaks(_m.FirstCode(node.StatementList.Statements[0]), 1);
+        }
+    }
+
     public override void ExplicitVisit(CreateViewStatement node) { ArrangeView(node); base.ExplicitVisit(node); }
     public override void ExplicitVisit(AlterViewStatement node) { ArrangeView(node); base.ExplicitVisit(node); }
     public override void ExplicitVisit(CreateOrAlterViewStatement node) { ArrangeView(node); base.ExplicitVisit(node); }
@@ -174,7 +210,8 @@ public sealed partial class RuleBuilder
         int @as = _m.PrevCode(select);
         _m.Break(@as);
         _m.AlignTo(@as, create, 0);
-        _m.Break(select);
+        // la riga vuota originale tra AS e la SELECT resta
+        _m.Break(select, Math.Clamp(_m.Slots[select].OriginalNewLinesBefore, 1, 2));
         _m.AlignRange(select, _m.Last(node), create, _s.Ddl.IndentClauses ? _tab : 0);
     }
 
@@ -202,7 +239,9 @@ public sealed partial class RuleBuilder
             int select = _m.FirstCode(node.Select);
             int stmt = _m.FindBackward(select, 0, sl => sl.Token.TokenType is TSqlTokenType.Set or TSqlTokenType.Declare);
             _m.Break(select);
-            _m.AlignRange(select, _m.Last(node.Select), stmt >= 0 ? stmt : select, 0);
+            // SET @c = CURSOR … FOR: SELECT allineata a SET; DECLARE c CURSOR … FOR: rientrata
+            bool declare = stmt >= 0 && _m.Slots[stmt].Token.TokenType == TSqlTokenType.Declare;
+            _m.AlignRange(select, _m.Last(node.Select), stmt >= 0 ? stmt : select, declare ? _tab : 0);
         }
         base.ExplicitVisit(node);
     }
@@ -221,7 +260,33 @@ public sealed partial class RuleBuilder
         base.ExplicitVisit(node);
     }
 
+    // RAISERROR(messaggio, gravità, stato): argomenti come una lista, ) a capo se va a capo
+    public override void ExplicitVisit(RaiseErrorStatement node)
+    {
+        var args = new List<ScalarExpression> { node.FirstParameter, node.SecondParameter, node.ThirdParameter };
+        args.AddRange(node.OptionalParameters);
+        args.RemoveAll(a => a == null);
+        if (args.Count > 0)
+        {
+            int raise = _m.FirstCode(node);
+            int open = _m.PrevCode(_m.FirstCode(args[0]));
+            int close = _m.NextCode(_m.Last(args[^1]));
+            ArrangeList(open, args, NewLineMode.Never, NewLineMode.Never);
+            // la ) chiusa su una riga propria (dopo un commento) si allinea a RAISERROR
+            _m.AlignTo(close, raise, 0);
+        }
+        base.ExplicitVisit(node);
+    }
+
     // ---- variabili ----
+
+    // DECLARE @t TABLE ( … ): colonne come in CREATE TABLE
+    public override void ExplicitVisit(DeclareTableVariableStatement node)
+    {
+        if (node.Body?.Definition != null)
+            ArrangeTableDefinition(node.Body.Definition, _m.FirstCode(node));
+        base.ExplicitVisit(node);
+    }
 
     public override void ExplicitVisit(DeclareVariableStatement node)
     {
@@ -231,12 +296,16 @@ public sealed partial class RuleBuilder
             ArrangeList(declare, node.Declarations, NewLineMode.Never, _s.Lists.PlaceSubsequentItemsOnNewLines);
             if (_s.Variables.AlignDataTypesAndValues && node.Declarations.Count > 1)
             {
-                _m.AddAlignGroup(node.Declarations.Where(d => d.DataType != null).Select(d => _m.FirstCode(d.DataType)));
-                // = incolonnati: con almeno due valori la colonna tiene conto anche dei tipi senza valore
+                // la colonna dei tipi parte dal primo token dopo il nome (AS facoltativo incluso)
+                _m.AddAlignGroup(node.Declarations.Where(d => d.DataType != null).Select(d => _m.NextCode(_m.Last(d.VariableName))));
+                // = incolonnati sulla fine del tipo più lungo solo se almeno un valore sta su una
+                // dichiarazione intermedia (né la prima né l'ultima): regola osservata con la CLI
                 var values = node.Declarations.Where(d => d.Value != null).ToList();
+                int count = node.Declarations.Count;
+                bool middle = values.Any(v => node.Declarations.IndexOf(v) is var k && k > 0 && k < count - 1);
                 _m.AddAlignGroup(
                     values.Select(d => _m.PrevCode(_m.FirstCode(d.Value))),
-                    values.Count > 1 ? node.Declarations.Where(d => d.Value == null && d.DataType != null).Select(d => _m.Last(d.DataType)) : null);
+                    middle ? node.Declarations.Where(d => d.Value == null && d.DataType != null).Select(d => _m.Last(d.DataType)) : null);
             }
         }
         base.ExplicitVisit(node);

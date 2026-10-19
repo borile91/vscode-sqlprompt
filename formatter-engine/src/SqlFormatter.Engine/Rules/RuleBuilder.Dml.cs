@@ -34,6 +34,8 @@ public sealed partial class RuleBuilder
             if (_s.Lists.AlignAliases) AlignAliases(node.SelectElements);
         }
 
+        if (_selectInto.TryGetValue(select, out int intoItem))
+            clauses.Add((_m.PrevCode(intoItem), intoItem));
         if (node.FromClause != null)
         {
             int kw = _m.FirstCode(node.FromClause);
@@ -143,8 +145,9 @@ public sealed partial class RuleBuilder
         int extended = last;
         while (extended + 1 < _m.Count && _m.Slots[extended + 1].IsComment && _m.Slots[extended + 1].OriginalNewLinesBefore == 0) extended++;
         // la virgola o il ; dopo l'ultimo elemento possono precedere il commento in coda
-        if (extended == last && last + 2 < _m.Count && !_m.Slots[last + 1].IsComment && _m.Slots[last + 2].IsLineComment
-            && _m.Slots[last + 2].OriginalNewLinesBefore == 0)
+        if (extended == last && last + 2 < _m.Count
+            && _m.Slots[last + 1].Token.TokenType is TSqlTokenType.Comma or TSqlTokenType.Semicolon
+            && _m.Slots[last + 2].IsLineComment && _m.Slots[last + 2].OriginalNewLinesBefore == 0)
             extended = last + 2;
         _listRanges.Add((first, extended));
 
@@ -193,7 +196,7 @@ public sealed partial class RuleBuilder
                 _m.AlignTo(start, itemAnchor, itemOffset);
             }
         }
-        _m.AddGroup(Mode(subsequentMode), keyword, last, points, items.Count);
+        _m.AddGroup(Mode(subsequentMode), keyword, last, points, items.Count).ContentStart = first;
     }
 
     // AS degli alias allineati in colonna
@@ -308,12 +311,6 @@ public sealed partial class RuleBuilder
         base.ExplicitVisit(node);
     }
 
-    public override void ExplicitVisit(ScalarSubquery node)
-    {
-        ArrangeSubquery(node.QueryExpression, StatementAnchor());
-        base.ExplicitVisit(node);
-    }
-
     private int StatementAnchor() => _queryStarts.Count > 0 ? _queryStarts.Peek() : -1;
 
     // Parentesi intorno a una sottoquery secondo lo stile delle parentesi
@@ -398,13 +395,24 @@ public sealed partial class RuleBuilder
     public override void ExplicitVisit(DeleteSpecification node)
     {
         int delete = _m.FirstCode(node);
+        // DELETE destinazione FROM …: gli elementi delle clausole partono dalla stessa colonna;
+        // con DELETE FROM destinazione non c'è nulla da incolonnare
+        var items = new List<int>();
+        if (node.FromClause != null && _m.NextCode(delete) == _m.FirstCode(node.Target)) items.Add(_m.FirstCode(node.Target));
         if (node.FromClause != null)
         {
             int kw = _m.FirstCode(node.FromClause);
             Clause(kw, delete);
             ArrangeList(kw, node.FromClause.TableReferences, _s.Dml.ListItems.PlaceFromTableOnNewLine, NewLineMode.Always);
+            items.Add(_m.FirstCode(node.FromClause.TableReferences[0]));
         }
-        if (node.WhereClause != null) Clause(_m.FirstCode(node.WhereClause), delete);
+        if (node.WhereClause != null)
+        {
+            Clause(_m.FirstCode(node.WhereClause), delete);
+            if (node.WhereClause.SearchCondition != null) items.Add(_m.FirstCode(node.WhereClause.SearchCondition));
+        }
+        if (_s.Lists.AlignItemsAcrossClauses && items.Count > 1)
+            _m.AddAlignGroup(items);
         _queryStarts.Push(delete);
         base.ExplicitVisit(node);
         _queryStarts.Pop();
@@ -426,6 +434,9 @@ public sealed partial class RuleBuilder
             int kw = _m.FirstCode(values);
             Clause(kw, insert);
             var v = _s.InsertStatements.Values;
+            // più righe: una per riga, separate come una lista (sempre a capo, verificato con la CLI)
+            if (values.RowValues.Count > 1)
+                ArrangeList(kw, values.RowValues, NewLineMode.Never, NewLineMode.Always);
             foreach (var row in values.RowValues)
             {
                 if (row.ColumnValues.Count == 0) continue;
@@ -460,8 +471,18 @@ public sealed partial class RuleBuilder
 
     // ---- statement DML compattati se corti ----
 
+    // SELECT … INTO tabella: INTO è una clausola, incolonnata con le altre
+    private readonly Dictionary<int, int> _selectInto = new();
+
     public override void ExplicitVisit(SelectStatement node)
     {
+        if (node.Into != null && node.QueryExpression is QuerySpecification qs)
+        {
+            int into = _m.PrevCode(_m.First(node.Into));
+            int select = _m.FirstCode(qs);
+            Clause(into, select);
+            _selectInto[select] = _m.First(node.Into);
+        }
         CollapseStatement(node, _s.Dml.CollapseShortStatements, _s.Dml.CollapseStatementsShorterThan);
         base.ExplicitVisit(node);
     }

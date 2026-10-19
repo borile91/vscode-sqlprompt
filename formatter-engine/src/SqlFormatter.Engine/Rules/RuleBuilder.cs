@@ -25,6 +25,12 @@ public sealed partial class RuleBuilder : TSqlFragmentVisitor
         Spacing.Apply(_m, _s);
         script.Accept(this);
         Spacing.FixCallParentheses(_m, _s);
+        foreach (int close in _tableFunctionCloses)
+        {
+            int next = close + 1;
+            if (next < _m.Count && _m.Slots[next].Token.TokenType == TSqlTokenType.RightParenthesis && _s.Parentheses.AddSpacesInsideParentheses)
+                _m.SpaceBefore(next);
+        }
         ArrangeBatches(script);
         ArrangeComments();
     }
@@ -41,7 +47,10 @@ public sealed partial class RuleBuilder : TSqlFragmentVisitor
             _m.Break(i);
             _m.AlignTo(i, -1);
             int next = i + 1;
-            if (next < _m.Count && !(_m.Slots[next].IsComment && _m.Slots[next].OriginalNewLinesBefore == 0))
+            // GO seguito da un ; isolato: il ; va solo a capo
+            if (next < _m.Count && _m.Slots[next].Token.TokenType == TSqlTokenType.Semicolon)
+                _m.SetBreaks(next, 1);
+            else if (next < _m.Count && !(_m.Slots[next].IsComment && _m.Slots[next].OriginalNewLinesBefore == 0))
                 _m.SetBreaks(next, BlankLines(next, nl.EmptyLinesAfterBatchSeparator, nl.PreserveExistingEmptyLinesAfterBatchSeparator));
         }
     }
@@ -53,11 +62,15 @@ public sealed partial class RuleBuilder : TSqlFragmentVisitor
         return configured + 1;
     }
 
+    // primo token degli statement di primo livello (nei batch)
+    private readonly HashSet<int> _topLevelStarts = [];
+
     private void ArrangeStatements(IList<TSqlStatement> list, int anchor, int offset)
     {
         TSqlStatement? prev = null;
         foreach (var st in list)
         {
+            if (anchor < 0) _topLevelStarts.Add(_m.FirstCode(st));
             StatementStart(st, prev, anchor, offset);
             prev = st;
         }
@@ -70,6 +83,7 @@ public sealed partial class RuleBuilder : TSqlFragmentVisitor
         SetVariableStatement => "set",
         PrintStatement => "print",
         CloseCursorStatement or DeallocateCursorStatement => "cursor-close",
+        DropObjectsStatement => "drop",
         _ => null,
     };
 
@@ -80,12 +94,15 @@ public sealed partial class RuleBuilder : TSqlFragmentVisitor
         int first = _m.FirstCode(stmt);
         if (first < 0) return;
         int lead = first;
-        while (lead - 1 >= 0 && _m.Slots[lead - 1].IsComment && _m.Slots[lead - 1].OriginalNewLinesBefore > 0) lead--;
+        // commenti su riga propria che precedono lo statement (anche in testa al file)
+        while (lead - 1 >= 0 && _m.Slots[lead - 1].IsComment && (_m.Slots[lead - 1].OriginalNewLinesBefore > 0 || lead - 1 == 0)) lead--;
         if (lead > 0)
         {
             var prev = _m.Slots[lead - 1];
             var nl = _s.Whitespace.NewLines;
-            bool afterBlockStart = prev.Token.TokenType is TSqlTokenType.Begin or TSqlTokenType.Go;
+            // dopo BEGIN, GO o un'etichetta (ERRORE:) si va solo a capo
+            bool afterBlockStart = prev.Token.TokenType is TSqlTokenType.Begin or TSqlTokenType.Go
+                || prevStmt is LabelStatement;
             bool grouped = prevStmt != null && GroupKey(stmt) != null && GroupKey(stmt) == GroupKey(prevStmt)
                 && !nl.PreserveExistingEmptyLinesBetweenStatements;
             // primo statement di un blocco (BEGIN, BEGIN TRY, corpo di procedura): nessuna riga vuota
@@ -143,25 +160,54 @@ public sealed partial class RuleBuilder : TSqlFragmentVisitor
                 c.SpaceBefore = true;
                 continue;
             }
-            int next = i;
-            while (next < _m.Count && _m.Slots[next].IsComment) next++;
-            if (next >= _m.Count)
+            // gruppo di commenti su righe proprie, seguito dal codice
+            int last = i;
+            while (last + 1 < _m.Count && _m.Slots[last + 1].IsComment && _m.Slots[last + 1].OriginalNewLinesBefore > 0) last++;
+            int next = last + 1;
+            if (next < _m.Count && _m.Slots[next].IsComment) next = -1;
+            var code = next >= 0 && next < _m.Count ? _m.Slots[next] : null;
+            // a capo previsto per lo statement: sta sul primo commento (StatementStart) o sul codice
+            int planned = Math.Max(_m.Slots[i].Breaks, code?.Breaks ?? 0);
+            bool topLevel = next >= 0 && _topLevelStarts.Contains(next);
+            // un commento su riga propria subito dopo un commento in coda lo prosegue: si allinea
+            // a quel commento e le righe vuote previste vanno tra i commenti e il codice
+            bool continuation = i > 0 && _m.Slots[i - 1].IsLineComment && _m.Slots[i - 1].OriginalNewLinesBefore == 0
+                && _m.Slots[i].IsLineComment;
+            // i commenti attaccati allo statement precedente e separati da una riga vuota da quelli
+            // che seguono restano con il precedente: le righe vuote previste vanno prima del gruppo
+            // di commenti che apre lo statement (regola osservata con la CLI)
+            int leadStart = i;
+            if (_m.Slots[i].OriginalNewLinesBefore <= 1)
+                for (int k = last; k > i; k--)
+                    if (_m.Slots[k].OriginalNewLinesBefore >= 2) { leadStart = k; break; }
+            for (int k = i; k <= last; k++)
             {
-                c.Breaks = Math.Max(c.Breaks, Math.Min(c.OriginalNewLinesBefore, 2));
-                continue;
+                var ck = _m.Slots[k];
+                if (k == 0) ck.Breaks = 0;
+                else if (k == i && continuation) ck.Breaks = 1;
+                else if (k == leadStart && !continuation) ck.Breaks = Math.Max(planned, Math.Clamp(ck.OriginalNewLinesBefore, 1, 2));
+                else ck.Breaks = Math.Clamp(ck.OriginalNewLinesBefore, 1, 2);
+                if (continuation)
+                {
+                    ck.Anchor = i - 1;
+                    ck.Offset = 0;
+                    ck.Align = AlignKind.Left;
+                }
+                else if (code != null)
+                {
+                    ck.Anchor = code.Anchor;
+                    ck.Offset = code.Offset;
+                    ck.Align = code.Align;
+                }
             }
-            var code = _m.Slots[next];
-            if (i > 0)
+            // dopo i commenti il codice va a capo una volta sola, tranne davanti agli statement
+            // di primo livello (es. intestazione prima di CREATE), dove le righe vuote restano
+            if (code != null && code.OriginalNewLinesBefore > 0)
             {
-                // l'a capo previsto per il codice passa al primo commento del gruppo
-                int lines = Math.Max(c.Breaks, Math.Max(code.Breaks, 1));
-                if (code.Breaks == 0) lines = Math.Min(Math.Max(c.OriginalNewLinesBefore, 1), 2);
-                c.Breaks = lines;
-                if (code.OriginalNewLinesBefore > 0) code.Breaks = Math.Min(code.OriginalNewLinesBefore, 2);
+                if (continuation) code.Breaks = Math.Max(planned, 1);
+                else code.Breaks = topLevel ? Math.Min(code.OriginalNewLinesBefore, 2) : 1;
             }
-            c.Anchor = code.Anchor;
-            c.Offset = code.Offset;
-            c.Align = code.Align;
+            i = last;
         }
     }
 
