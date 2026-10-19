@@ -240,6 +240,8 @@ public sealed class LayoutSolver
                 if (g.Select(x => _line[x]).Distinct().Count() != g.Count) continue;
                 int max = 0;
                 foreach (int x in g) max = Math.Max(max, _col[x]);
+                if (_m.AlignGroupEnds.TryGetValue(g, out var ends))
+                    foreach (int e in ends) max = Math.Max(max, _end[e]);
                 foreach (int x in g)
                 {
                     if (EffectiveBreaks(x) > 0 || padTo[x] == max) continue;

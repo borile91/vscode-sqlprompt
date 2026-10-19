@@ -140,6 +140,13 @@ public sealed partial class RuleBuilder
         if (items.Count == 0) return;
         int first = _m.FirstCode(items[0]);
         int last = _m.Last(items[^1]);
+        int extended = last;
+        while (extended + 1 < _m.Count && _m.Slots[extended + 1].IsComment && _m.Slots[extended + 1].OriginalNewLinesBefore == 0) extended++;
+        // la virgola o il ; dopo l'ultimo elemento possono precedere il commento in coda
+        if (extended == last && last + 2 < _m.Count && !_m.Slots[last + 1].IsComment && _m.Slots[last + 2].IsLineComment
+            && _m.Slots[last + 2].OriginalNewLinesBefore == 0)
+            extended = last + 2;
+        _listRanges.Add((first, extended));
 
         bool firstBreaks = firstMode == NewLineMode.Always
             || (firstMode is NewLineMode.IfSubsequentItems or NewLineMode.IfMultiple && items.Count > 1);

@@ -63,9 +63,15 @@ public sealed partial class RuleBuilder : TSqlFragmentVisitor
         }
     }
 
-    // Statement brevi che, se consecutivi dello stesso tipo, restano senza righe vuote tra loro
-    private static bool IsGroupable(TSqlStatement s) =>
-        s is DeclareVariableStatement or SetVariableStatement or PrintStatement;
+    // Statement brevi che, se consecutivi dello stesso gruppo, restano senza righe vuote tra loro
+    private static string? GroupKey(TSqlStatement s) => s switch
+    {
+        DeclareVariableStatement => "declare",
+        SetVariableStatement => "set",
+        PrintStatement => "print",
+        CloseCursorStatement or DeallocateCursorStatement => "cursor-close",
+        _ => null,
+    };
 
     // Inizio di uno statement: a capo con le righe vuote richieste; l'a capo va al primo
     // commento che precede lo statement, se c'è
@@ -80,7 +86,7 @@ public sealed partial class RuleBuilder : TSqlFragmentVisitor
             var prev = _m.Slots[lead - 1];
             var nl = _s.Whitespace.NewLines;
             bool afterBlockStart = prev.Token.TokenType is TSqlTokenType.Begin or TSqlTokenType.Go;
-            bool grouped = prevStmt != null && IsGroupable(stmt) && stmt.GetType() == prevStmt.GetType()
+            bool grouped = prevStmt != null && GroupKey(stmt) != null && GroupKey(stmt) == GroupKey(prevStmt)
                 && !nl.PreserveExistingEmptyLinesBetweenStatements;
             // primo statement di un blocco (BEGIN, BEGIN TRY, corpo di procedura): nessuna riga vuota
             bool firstInBlock = prevStmt == null && anchor >= 0;
@@ -109,20 +115,22 @@ public sealed partial class RuleBuilder : TSqlFragmentVisitor
     // destinato a quel codice; un commento in coda resta sulla riga del codice precedente
     private void ArrangeComments()
     {
-        // commenti in coda su righe consecutive: incolonnati (lists.alignComments)
+        // commenti in coda dentro la stessa lista: incolonnati dopo l'elemento più lungo
+        // (lists.alignComments); vale la lista più interna che contiene il commento
         if (_s.Lists.AlignComments)
         {
-            var run = new List<int>();
-            int lastLine = -2;
+            var byList = new Dictionary<(int, int), List<int>>();
             for (int i = 1; i < _m.Count; i++)
             {
                 var c = _m.Slots[i];
                 if (!c.IsLineComment || c.OriginalNewLinesBefore > 0) continue;
-                if (c.Token.Line != lastLine + 1) { _m.AddAlignGroup(run); run = []; }
-                run.Add(i);
-                lastLine = c.Token.Line;
+                var inner = _listRanges.Where(r => r.First <= i && i <= r.Last)
+                    .OrderBy(r => r.Last - r.First).Cast<(int First, int Last)?>().FirstOrDefault();
+                if (inner == null) continue;
+                if (!byList.TryGetValue(inner.Value, out var list)) byList[inner.Value] = list = [];
+                list.Add(i);
             }
-            _m.AddAlignGroup(run);
+            foreach (var group in byList.Values) _m.AddAlignGroup(group);
         }
 
         for (int i = 0; i < _m.Count; i++)
@@ -156,6 +164,9 @@ public sealed partial class RuleBuilder : TSqlFragmentVisitor
             c.Align = code.Align;
         }
     }
+
+    // intervalli delle liste (dal primo elemento al commento in coda dopo l'ultimo)
+    private readonly List<(int First, int Last)> _listRanges = [];
 
     // ---- utilità ----
 
