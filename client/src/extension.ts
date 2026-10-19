@@ -1596,7 +1596,7 @@ export async function activate(context: ExtensionContext) {
             [{ scheme: 'file', language: 'sql' }, { scheme: 'untitled', language: 'sql' }],
             new SqlFormattingProvider(
                 getActiveStyle,
-                () => formattingConfig().get<FormattingEngine>('engine', 'legacy'),
+                () => formattingConfig().get<FormattingEngine>('engine', 'dotnet'),
                 dotnetFormatter,
             ),
         ),
