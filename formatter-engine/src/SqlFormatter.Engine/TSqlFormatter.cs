@@ -24,6 +24,7 @@ public static class TSqlFormatter
         var model = new LayoutModel(script.ScriptTokenStream);
         if (model.Count == 0) return new FormatResult(true, sql, []);
 
+        if (style.Lists.PlaceCommasBeforeItems) model.MoveLineCommentsBeforeCommas();
         FragmentFixUp.Apply(script);
         new RuleBuilder(model, style).Build(script);
         CasingRules.Apply(model, script, style.Casing);

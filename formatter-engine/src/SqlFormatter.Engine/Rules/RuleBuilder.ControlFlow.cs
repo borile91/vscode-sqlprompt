@@ -95,7 +95,12 @@ public sealed partial class RuleBuilder
             if (node.ElseStatement is IfStatement)
                 _m.AlignRange(@else + 1, _m.Last(node.ElseStatement), @else, 0);
             else
+            {
                 ArrangeControlBody(@else, node.ElseStatement);
+                // anche ELSE con un singolo statement breve si compatta (verificato con la CLI)
+                if (_s.ControlFlow.CollapseShortStatements && node.ElseStatement is not BeginEndBlockStatement)
+                    _m.AddCollapse(@else, _m.Last(node.ElseStatement), _s.ControlFlow.CollapseStatementsShorterThan);
+            }
         }
         if (_s.ControlFlow.CollapseShortStatements && node.ThenStatement is not BeginEndBlockStatement)
             _m.AddCollapse(@if, _m.Last(node.ThenStatement), _s.ControlFlow.CollapseStatementsShorterThan);
@@ -157,6 +162,9 @@ public sealed partial class RuleBuilder
             {
                 ArrangeList(create, node.Parameters, d.PlaceFirstProcedureParameterOnNewLine, _s.Lists.PlaceSubsequentItemsOnNewLines, (create, 0));
             }
+            // ddl.alignDataTypesAndConstraints: tipi dei parametri in colonna
+            if (d.AlignDataTypesAndConstraints)
+                _m.AddAlignGroup(node.Parameters.Where(p => p.DataType != null).Select(p => _m.FirstCode(p.DataType)));
         }
         if (node.StatementList != null && node.StatementList.Statements.Count > 0)
         {
@@ -167,7 +175,9 @@ public sealed partial class RuleBuilder
                 _m.Break(@as);
                 _m.AlignTo(@as, create, 0);
             }
-            ArrangeStatements(node.StatementList.Statements, create, d.IndentClauses ? _tab : 0);
+            // un corpo BEGIN … END non rientra anche con indentClauses (verificato con la CLI)
+            bool block = node.StatementList.Statements is [BeginEndBlockStatement];
+            ArrangeStatements(node.StatementList.Statements, create, d.IndentClauses && !block ? _tab : 0);
             int first = _m.FirstCode(node.StatementList.Statements[0]);
             _m.SetBreaks(first, 1);
         }
@@ -232,9 +242,8 @@ public sealed partial class RuleBuilder
         if (node.Definition != null)
         {
             int create = _m.FirstCode(node);
+            // CREATE TABLE non si compatta nemmeno con ddl.collapseShortStatements (verificato con la CLI)
             ArrangeTableDefinition(node.Definition, create);
-            if (_s.Ddl.CollapseShortStatements)
-                _m.AddCollapse(create, _m.Last(node), _s.Ddl.CollapseStatementsShorterThan);
         }
         base.ExplicitVisit(node);
     }

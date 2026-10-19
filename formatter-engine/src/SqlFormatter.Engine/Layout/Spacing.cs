@@ -79,7 +79,9 @@ public static class Spacing
         if (ct == TSqlTokenType.Semicolon) return s.Whitespace.WhiteSpaceBeforeSemiColon == SemicolonWhitespace.SpaceBefore;
         // con le virgole prima degli elementi lo spazio prima della virgola vale solo a inizio riga
         if (ct == TSqlTokenType.Comma) return s.Lists.AddSpaceBeforeComma && !s.Lists.PlaceCommasBeforeItems;
-        if (pt == TSqlTokenType.Comma) return s.Lists.AddSpaceAfterComma;
+        // lists.addSpaceAfterComma = false non toglie lo spazio: come per gli operatori aritmetici,
+        // SQL Prompt rinuncia solo alla propria regola (verificato con la CLI)
+        if (pt == TSqlTokenType.Comma) return true;
         if (ct == TSqlTokenType.Dot || pt == TSqlTokenType.Dot) return false;
         if (ct == TSqlTokenType.DoubleColon || pt == TSqlTokenType.DoubleColon) return false;
         // parentesi consecutive "((" e "))" sempre attaccate
@@ -99,13 +101,10 @@ public static class Spacing
         if (IsComparisonPart(pt) && IsComparisonPart(ct) && AdjacentInSource(prev, cur)) return false;
 
         if (IsComparisonPart(ct) || IsComparisonPart(pt)) return s.Operators.Comparison.AddSpacesAround;
-        if (Arithmetic.Contains(ct)) return s.Operators.Arithmetic.AddSpacesAround || ct == TSqlTokenType.Star && IsStarColumn(m, c);
-        if (Arithmetic.Contains(pt))
-        {
-            if (IsUnary(m, p)) return false;
-            if (pt == TSqlTokenType.Star && IsStarColumn(m, p)) return true;
-            return s.Operators.Arithmetic.AddSpacesAround;
-        }
+        // operators.arithmetic.addSpacesAround = false non toglie gli spazi: SQL Prompt rinuncia solo
+        // alla propria regola e restano gli spazi predefiniti (verificato con la CLI)
+        if (Arithmetic.Contains(ct)) return true;
+        if (Arithmetic.Contains(pt)) return !IsUnary(m, p);
         return true;
     }
 
@@ -152,15 +151,5 @@ public static class Spacing
         if (bt.TokenType is TSqlTokenType.LeftParenthesis or TSqlTokenType.Comma) return true;
         if (Comparison.Contains(bt.TokenType) || Arithmetic.Contains(bt.TokenType)) return true;
         return Keywords.IsReservedKeyword(bt) && bt.TokenType is not TSqlTokenType.Null;
-    }
-
-    // SELECT * / COUNT(*) / t.*: l'asterisco come colonna, non come moltiplicazione
-    private static bool IsStarColumn(LayoutModel m, int star)
-    {
-        int before = m.PrevCode(star);
-        if (before < 0) return true;
-        var bt = m.Slots[before].Token.TokenType;
-        return bt is TSqlTokenType.LeftParenthesis or TSqlTokenType.Comma or TSqlTokenType.Dot
-            || Keywords.IsReservedKeyword(m.Slots[before].Token);
     }
 }

@@ -31,7 +31,7 @@ public sealed partial class RuleBuilder
             if (afterSelect != select && _s.Dml.PlaceDistinctAndTopClausesOnNewLine)
             {
                 _m.Break(firstAfterKeyword);
-                _m.AlignTo(firstAfterKeyword, select, _m.Slots[select].Text.Length + 1);
+                _m.AlignTo(firstAfterKeyword, select, 0);
             }
             // dopo DISTINCT/TOP il primo elemento va a capo, nella colonna in cui sarebbe dopo SELECT
             if (afterSelect != select && _s.Dml.AddNewLineAfterDistinctAndTopClauses)
@@ -145,11 +145,26 @@ public sealed partial class RuleBuilder
     private void FirstItemOnNewLine(int keyword, TSqlFragment item, NewLineMode mode)
     {
         int first = _m.FirstCode(item);
-        if (mode == NewLineMode.Always)
+        // "se sono più d'uno": più condizioni AND/OR, oppure una condizione con sottoquery (verificato con la CLI)
+        bool multiple = item is BooleanBinaryExpression || ContainsSubquery(item);
+        if (mode == NewLineMode.Always || mode == NewLineMode.IfMultiple && multiple)
         {
             _m.Break(first);
             _m.AlignTo(first, keyword, _tab);
         }
+    }
+
+    private static bool ContainsSubquery(TSqlFragment fragment)
+    {
+        var finder = new SubqueryFinder();
+        fragment.Accept(finder);
+        return finder.Found;
+    }
+
+    private sealed class SubqueryFinder : TSqlFragmentVisitor
+    {
+        public bool Found { get; private set; }
+        public override void Visit(QueryExpression node) => Found = true;
     }
 
     // Lista di elementi separati da virgola dopo una parola chiave
@@ -171,7 +186,7 @@ public sealed partial class RuleBuilder
         _listRanges.Add((first, extended));
 
         bool firstBreaks = firstMode == NewLineMode.Always
-            || (firstMode is NewLineMode.IfSubsequentItems or NewLineMode.IfMultiple && items.Count > 1);
+            || (firstMode is NewLineMode.IfSubsequentItems or NewLineMode.IfMultiple or NewLineMode.IfMultipleItems && items.Count > 1);
         if (firstBreaks)
         {
             _m.Break(first);
@@ -195,7 +210,7 @@ public sealed partial class RuleBuilder
             if (commasBefore && comma >= 0)
             {
                 points.Add(comma);
-                int width = 1 + (_s.Lists.AddSpaceAfterComma ? 1 : 0);
+                const int width = 2;
                 switch (_s.Lists.CommaAlignment)
                 {
                     case CommaAlignment.BeforeItem:
@@ -205,7 +220,10 @@ public sealed partial class RuleBuilder
                         _m.AlignTo(comma, itemAnchor, itemOffset);
                         break;
                     default:
+                        // virgola sotto lo statement, elemento comunque nella colonna del primo (verificato con la CLI)
                         _m.AlignTo(comma, _queryStarts.Count > 0 ? _queryStarts.Peek() : keyword, 0);
+                        _m.AlignTo(start, itemAnchor, itemOffset);
+                        _m.Slots[start].PadInline = true;
                         break;
                 }
             }
@@ -375,6 +393,9 @@ public sealed partial class RuleBuilder
         ArrangeParenthesesAfter(open, close, keyword, item, _s.Parentheses.ParenthesisStyle, _s.Parentheses.IndentParenthesesContents);
         if (_s.Dml.CollapseShortSubqueries)
             _m.AddCollapse(open, close, _s.Dml.CollapseSubqueriesShorterThan);
+        // anche una sottoquery è uno statement: vale collapseShortStatements (verificato con la CLI)
+        if (_s.Dml.CollapseShortStatements)
+            _m.AddCollapse(open, close, _s.Dml.CollapseStatementsShorterThan);
         // anche le sottoquery sono parentesi: valgono le soglie delle parentesi
         if (_s.Parentheses.CollapseShortParenthesisContents)
             _m.AddCollapse(open, close, _s.Parentheses.CollapseParenthesesShorterThan);
@@ -394,7 +415,9 @@ public sealed partial class RuleBuilder
     //   split lascia la "(" dopo la parola chiave e porta contenuto e ")" alla colonna dell'elemento.
     // item è il token che dà la colonna dell'elemento; se è la "(" stessa (primo elemento di una
     // clausola) la parentesi non va a capo.
-    private void ArrangeParenthesesAfter(int open, int close, int keyword, int item, ParenthesisStyle style, bool indentContents)
+    // boolean: parentesi di una condizione (AND/OR), con qualche differenza osservata con la CLI
+    private void ArrangeParenthesesAfter(int open, int close, int keyword, int item, ParenthesisStyle style, bool indentContents,
+        bool boolean = false)
     {
         int first = _m.NextCode(open);
         int last = _m.PrevCode(close);
@@ -416,11 +439,25 @@ public sealed partial class RuleBuilder
                     _m.AlignTo(open, keyword, _tab);
                     break;
                 default:
-                    _m.AlignTo(open, keyword, 0, AlignKind.Right);
+                    // dopo AND/OR la "(" allineata a destra non sta prima della colonna degli operandi
+                    if (boolean && _m.Slots[keyword].Token.TokenType is TSqlTokenType.And or TSqlTokenType.Or)
+                        _m.AlignTo(open, item, 0);
+                    else
+                        _m.AlignTo(open, keyword, 0, AlignKind.Right);
                     break;
             }
         }
-        if (expanded)
+        if (expanded && boolean)
+        {
+            // condizione: il contenuto parte dopo la "(" (sulla sua colonna se la "(" è il primo elemento
+            // di WHERE con toStatement/rightAligned); con split la ")" torna alla parola chiave
+            int shift = firstItem && style is ParenthesisStyle.ExpandedToStatement or ParenthesisStyle.ExpandedRightAligned ? 0 : 1;
+            _m.Break(first);
+            _m.AlignRange(first, last, open, shift + (indentContents ? _tab : 0));
+            _m.Break(close);
+            _m.AlignTo(close, style == ParenthesisStyle.ExpandedSplit ? keyword : open, 0);
+        }
+        else if (expanded)
         {
             int column = style == ParenthesisStyle.ExpandedSplit && !firstItem ? item : open;
             _m.Break(first);
@@ -428,9 +465,10 @@ public sealed partial class RuleBuilder
             _m.Break(close);
             _m.AlignTo(close, column, 0);
         }
-        else if (indentContents)
+        else if (indentContents && style is ParenthesisStyle.CompactSimple or ParenthesisStyle.CompactToStatement)
         {
-            // contenuto rientrato anche sulla riga della "(": "(   select"
+            // contenuto rientrato anche sulla riga della "(": "(   select"; con le compatte
+            // rientrate o allineate a destra la "(" è già rientrata (verificato con la CLI)
             _m.AlignRange(first, last, open, _tab);
             _m.Slots[first].PadInline = true;
         }
@@ -559,13 +597,24 @@ public sealed partial class RuleBuilder
         {
             int open = _m.PrevCode(_m.FirstCode(node.Columns[0]));
             int close = _m.NextCode(_m.Last(node.Columns[^1]));
-            ArrangeParentheses(open, close, insert, cols.ParenthesisStyle, cols.IndentContents);
+            // con le colonne compatte semplici il rientro del contenuto non si vede (verificato con la CLI)
+            ArrangeParenthesesAfter(open, close, insert, insert, cols.ParenthesisStyle,
+                cols.IndentContents && cols.ParenthesisStyle != ParenthesisStyle.CompactSimple);
             ArrangeList(open, node.Columns, NewLineMode.Never, cols.PlaceSubsequentColumnsOnNewLines);
+        }
+        // dml.placeInsertTableOnNewLine: la tabella di destinazione a capo, rientrata da INSERT
+        if (_s.Dml.PlaceInsertTableOnNewLine && node.Target != null)
+        {
+            int target = _m.FirstCode(node.Target);
+            _m.Break(target);
+            _m.AlignTo(target, insert, _tab);
         }
         if (node.InsertSource is ValuesInsertSource values)
         {
+            // VALUES sotto INSERT, senza il rientro delle clausole (verificato con la CLI)
             int kw = _m.FirstCode(values);
-            Clause(kw, insert);
+            _m.Break(kw);
+            _m.AlignTo(kw, insert, 0);
             var v = _s.InsertStatements.Values;
             // più righe: una per riga, separate come una lista (sempre a capo, verificato con la CLI)
             if (values.RowValues.Count > 1)
@@ -575,7 +624,11 @@ public sealed partial class RuleBuilder
                 if (row.ColumnValues.Count == 0) continue;
                 int open = _m.PrevCode(_m.FirstCode(row.ColumnValues[0]));
                 int close = _m.NextCode(_m.Last(row.ColumnValues[^1]));
-                ArrangeParentheses(open, close, kw, v.ParenthesisStyle, v.IndentContents);
+                // espanse: come le altre parentesi, con VALUES come riferimento (verificato con la CLI)
+                if (v.ParenthesisStyle.ToString().StartsWith("Expanded"))
+                    ArrangeParenthesesAfter(open, close, kw, kw, v.ParenthesisStyle, v.IndentContents);
+                else
+                    ArrangeParentheses(open, close, kw, v.ParenthesisStyle, v.IndentContents);
                 ArrangeList(open, row.ColumnValues, NewLineMode.Never, v.PlaceSubsequentValuesOnNewLines);
                 // compatte non semplici: la riga di valori va a capo sotto VALUES (verificato con la CLI)
                 if (row == values.RowValues[0])

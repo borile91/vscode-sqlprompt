@@ -82,7 +82,7 @@ Motore di formattazione **predefinito** (`sqlPrompt.formatting.engine = "dotnet"
   - `mock_ddl`: CREATE TABLE con `WITH(FILLFACTOR)`, CREATE/ALTER INDEX, ALTER TABLE, `sp_addextendedproperty`, trigger, viste, funzioni inline e multi-istruzione, `DECLARE @t TABLE`;
   - `mock_tsqlt`: un test tSQLt con FakeTable, VALUES multi-riga e AssertEqualsTable;
   - `mock_varie`: etichette e GOTO, DROP consecutivi, alias con maiuscole diverse, vista con riga vuota dopo AS.
-- **Ratchet**: `passing.txt` elenca i casi identici, che devono restarlo (**84**, di cui 14 mock).
+- **Ratchet**: `passing.txt` elenca i casi identici, che devono restarlo (**96**, di cui 15 mock).
 - **Punteggio**: `dotnet test --filter Punteggio --logger "console;verbosity=detailed"`.
 
 ## Casi una opzione per volta
@@ -112,11 +112,11 @@ Motore di formattazione **predefinito** (`sqlPrompt.formatting.engine = "dotnet"
 
 ## Stato attuale
 
-- **Corpus**: **84/136** casi identici, **94,5%** di righe in comune con l'output di riferimento.
-- **Profili utente**: Vertical 99%, Inline 92%, Tsqlt 97%, Scripting 87%.
-- **Una opzione per volta**: **148/238** casi identici (ratchet `tests/options/passing.txt`).
-  - Completi: Casing, RESTORE; quasi: CTE 19/20, CASE 16/18, Functions 6/7, Variables 4/5.
-  - Più indietro: Operators 0/25, DDL 2/20, Insert 14/24, Whitespace 8/17, Parentheses 8/15.
+- **Corpus**: **96/136** casi identici, **95,5%** di righe in comune con l'output di riferimento.
+- **Profili utente**: Vertical 99%, Inline 96%, Tsqlt 97%, Scripting 87%.
+- **Una opzione per volta**: **231/238** casi identici (ratchet `tests/options/passing.txt`).
+  - Tutte le sezioni complete tranne Operators 21/25, DDL 19/20, Insert 23/24, Joins 18/19.
+  - I 7 casi rimasti sono output anomali della CLI (riempimenti irregolari, JOIN in linea con colonna comune enorme, `comparison.align`).
 - **Example7** (`docs/formatting/example-not-passing/`, irrisolti con il formatter TS): **anonimizzati** (nomi di tabelle, colonne, parametri e commenti sostituiti) e riformattati con la CLI; tutti e 4 **identici** a Redgate con il proprio profilo, nel ratchet.
 
 ### Coperti
@@ -136,7 +136,6 @@ Motore di formattazione **predefinito** (`sqlPrompt.formatting.engine = "dotnet"
 
 - **Casi per opzione ancora diversi**: elenco con `dotnet test --filter "FullyQualifiedName~OptionTests.Punteggio" --logger "console;verbosity=detailed"`.
 - **Stili Indented e Collapsed**: `clauseAlignment = toFirstListItem`, compattazione di statement e sottoquery.
-- **Parentesi espanse nelle condizioni** (WHERE/AND con `expanded*`), **IN** lunghi (a capo dopo `in (`).
 - **Colonne dei vincoli** negli stili con virgola iniziale (anche negli indici dello stile Test).
 - **Virgola seguita da commento** nelle liste con virgola iniziale: Redgate sposta il commento prima della virgola.
 - **Operatori**: `operators.between.*`, `operators.comparison.align`, `insertStatements.*` di tipo `expandedSplit`.
@@ -156,6 +155,13 @@ Motore di formattazione **predefinito** (`sqlPrompt.formatting.engine = "dotnet"
   - `))` sempre attaccate, tranne dopo una funzione tabellare in FROM: `dbo.f(1, @x) );`.
 - **`WITH(opzione)`**: nei vincoli con una sola opzione è tutto attaccato; con più opzioni è spaziato.
 - **Fine file**: l'a capo finale resta, tranne dopo un GO.
+- **Dopo GO**: le righe vuote originali restano, qualunque sia `emptyLinesAfterBatchSeparator`; senza `preserveExistingEmptyLinesBetweenStatements` ce n'è almeno una.
+- **Opzioni senza effetto a false**: `lists.addSpaceAfterComma` e `operators.arithmetic.addSpacesAround` a false lasciano gli spazi (SQL Prompt rinuncia solo alla propria regola).
+- **Virgola iniziale e commento in coda**: il commento va prima della virgola (`a -- nota` / `, b`).
+- **Colonna comune delle clausole**: è quella della parola chiave più lunga; con le tabulazioni (`spacesOrTabs = tabs`) va alla tabulazione successiva e i riempimenti diventano tabulazioni.
+- **IN**: con più valori il primo va a capo, rientrato dalla parola chiave della condizione; gli altri seguono sulla stessa riga finché c'è spazio.
+- **Parentesi delle condizioni**: AND/OR finiscono prima della colonna "(" + 1, anche con contenuto rientrato.
+- **Limite di riga**: il `;` finale non conta.
 
 ## Note sullo schema degli stili
 
@@ -164,4 +170,4 @@ Motore di formattazione **predefinito** (`sqlPrompt.formatting.engine = "dotnet"
   - `operators.comparisonOperators`, che in Redgate è `operators.comparison`;
   - `joinStatements.join.breakType`;
   - `lists.placeFirstItemOnNewLines`, che in Redgate è al singolare.
-- `lists.addSpaceBeforeComma` non ha effetti visibili nell'output della CLI. È verificato con l'oracolo.
+- `lists.addSpaceBeforeComma` vale solo con le virgole dopo gli elementi (con la virgola iniziale non si vede).

@@ -18,7 +18,9 @@ public enum BreakMode
     Never,
 }
 
-public enum AlignKind { Left, Right }
+// Left: colonna dell'ancora; Right: fine allineata alla fine dell'ancora;
+// LineStart: colonna del primo token della riga su cui sta l'ancora
+public enum AlignKind { Left, Right, LineStart }
 
 public sealed class Slot
 {
@@ -76,8 +78,8 @@ public sealed class LayoutModel
     // per ogni gruppo, token la cui fine (+1 spazio) entra nel calcolo della colonna comune
     // senza essere spostati (es. tipi di dato delle DECLARE senza valore)
     public Dictionary<List<int>, List<int>> AlignGroupEnds { get; } = new();
-    // gruppi in cui i membri che aprono una riga si mettono nella colonna del gruppo,
-    // decisa dai soli membri che restano sulla riga della loro parola chiave
+    // gruppi in cui anche i membri che aprono una riga si mettono nella colonna del gruppo
+    // (la massima tra le colonne dei membri, per quelli a capo la loro colonna naturale)
     public HashSet<List<int>> FollowingGroups { get; } = new(ReferenceEqualityComparer.Instance);
     public IList<TSqlParserToken> Stream { get; }
 
@@ -111,6 +113,26 @@ public sealed class LayoutModel
     }
 
     public int Count => Slots.Count;
+
+    // Virgola seguita da un commento di riga ("a, -- nota" + a capo): con le virgole prima degli
+    // elementi SQL Prompt porta il commento prima della virgola ("a -- nota" / ", b")
+    public void MoveLineCommentsBeforeCommas()
+    {
+        for (int k = 0; k + 2 < Slots.Count; k++)
+        {
+            var comma = Slots[k];
+            var comment = Slots[k + 1];
+            if (comma.Token.TokenType != TSqlTokenType.Comma || !comment.IsLineComment || comment.OriginalNewLinesBefore > 0)
+                continue;
+            comment.OriginalNewLinesBefore = comma.OriginalNewLinesBefore;
+            comma.OriginalNewLinesBefore = 1;
+            Slots[k] = comment;
+            Slots[k + 1] = comma;
+            _streamToSlot[comment.StreamIndex] = k;
+            _streamToSlot[comma.StreamIndex] = k + 1;
+            k++;
+        }
+    }
 
     // Slot del primo token significativo con indice di stream >= streamIndex
     public int SlotAtOrAfter(int streamIndex)

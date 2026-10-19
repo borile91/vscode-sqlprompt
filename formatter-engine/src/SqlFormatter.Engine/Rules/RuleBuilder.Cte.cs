@@ -36,6 +36,12 @@ public sealed partial class RuleBuilder
                 AlignCtePart(asKw, with, o.AsAlignment);
             }
             ArrangeParenthesesAfter(open, close, asKw, with, o.ParenthesisStyle, o.IndentContents);
+            // nome rientrato: la "(" che segue AS si allinea al nome (verificato con la CLI)
+            if (o.PlaceNameOnNewLine && o.IndentName && o.ParenthesisStyle == ParenthesisStyle.CompactSimple)
+            {
+                _m.AlignTo(open, name, 0);
+                _m.Slots[open].PadInline = true;
+            }
         }
         // la query principale riparte dalla colonna di WITH
         int main = _m.NextCode(_m.Last(node));

@@ -52,8 +52,16 @@ public sealed partial class RuleBuilder : TSqlFragmentVisitor
             if (next < _m.Count && _m.Slots[next].Token.TokenType == TSqlTokenType.Semicolon)
                 _m.SetBreaks(next, 1);
             else if (next < _m.Count && !(_m.Slots[next].IsComment && _m.Slots[next].OriginalNewLinesBefore == 0))
-                _m.SetBreaks(next, BlankLines(next, nl.EmptyLinesAfterBatchSeparator, nl.PreserveExistingEmptyLinesAfterBatchSeparator));
+                _m.SetBreaks(next, AfterBatchSeparator(next));
         }
+    }
+
+    // Dopo GO SQL Prompt conserva le righe vuote originali, qualunque sia emptyLinesAfterBatchSeparator;
+    // senza preserveExistingEmptyLinesBetweenStatements ne garantisce almeno una (verificato con la CLI)
+    private int AfterBatchSeparator(int slot)
+    {
+        int original = _m.Slots[slot].OriginalNewLinesBefore;
+        return Math.Max(original, _s.Whitespace.NewLines.PreserveExistingEmptyLinesBetweenStatements ? 1 : 2);
     }
 
     private int BlankLines(int slot, int configured, bool preserve)
@@ -73,6 +81,14 @@ public sealed partial class RuleBuilder : TSqlFragmentVisitor
         {
             if (anchor < 0) _topLevelStarts.Add(_m.FirstCode(st));
             StatementStart(st, prev, anchor, offset);
+            // whiteSpaceBeforeSemiColon = newLineBefore: il ; su una riga propria, sotto l'inizio dello statement
+            int semi = _m.Last(st);
+            if (_s.Whitespace.WhiteSpaceBeforeSemiColon == SemicolonWhitespace.NewLineBefore
+                && semi > _m.FirstCode(st) && _m.Slots[semi].Token.TokenType == TSqlTokenType.Semicolon)
+            {
+                _m.Break(semi);
+                _m.AlignTo(semi, _m.FirstCode(st), 0);
+            }
             prev = st;
         }
     }
