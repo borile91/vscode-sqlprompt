@@ -1,0 +1,8 @@
+{
+  "metadata": {
+    "name": "whitespace__whitespace.whiteSpaceBeforeSemiColon=spaceBefore"
+  },
+  "whitespace": {
+    "whiteSpaceBeforeSemiColon": "spaceBefore"
+  }
+}

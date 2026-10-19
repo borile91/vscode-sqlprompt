@@ -1,0 +1,8 @@
+{
+  "metadata": {
+    "name": "ddl__ddl.placeConstraintsOnNewLines=true"
+  },
+  "ddl": {
+    "placeConstraintsOnNewLines": true
+  }
+}

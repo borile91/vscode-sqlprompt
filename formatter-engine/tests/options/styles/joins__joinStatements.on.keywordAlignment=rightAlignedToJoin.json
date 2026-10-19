@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "name": "joins__joinStatements.on.keywordAlignment=rightAlignedToJoin"
+  },
+  "joinStatements": {
+    "on": {
+      "keywordAlignment": "rightAlignedToJoin"
+    }
+  }
+}

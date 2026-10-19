@@ -1,0 +1,8 @@
+{
+  "metadata": {
+    "name": "casing__casing.builtInFunctions=lowercase"
+  },
+  "casing": {
+    "builtInFunctions": "lowercase"
+  }
+}

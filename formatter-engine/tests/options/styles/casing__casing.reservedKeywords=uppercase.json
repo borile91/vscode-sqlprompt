@@ -1,0 +1,8 @@
+{
+  "metadata": {
+    "name": "casing__casing.reservedKeywords=uppercase"
+  },
+  "casing": {
+    "reservedKeywords": "uppercase"
+  }
+}

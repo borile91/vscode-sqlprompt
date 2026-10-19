@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "name": "insert__insertStatements.columns.parenthesisStyle=expandedIndented"
+  },
+  "insertStatements": {
+    "columns": {
+      "parenthesisStyle": "expandedIndented"
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "name": "whitespace__whitespace.newLines.emptyLinesAfterBatchSeparator=default"
+  },
+  "whitespace": {
+    "newLines": {
+      "preserveExistingEmptyLinesAfterBatchSeparator": false
+    }
+  }
+}

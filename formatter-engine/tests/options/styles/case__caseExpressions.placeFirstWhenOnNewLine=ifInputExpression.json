@@ -1,0 +1,8 @@
+{
+  "metadata": {
+    "name": "case__caseExpressions.placeFirstWhenOnNewLine=ifInputExpression"
+  },
+  "caseExpressions": {
+    "placeFirstWhenOnNewLine": "ifInputExpression"
+  }
+}

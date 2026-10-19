@@ -1,0 +1,9 @@
+{
+  "metadata": {
+    "name": "case__caseExpressions.thenAlignment=toWhen"
+  },
+  "caseExpressions": {
+    "placeThenOnNewLine": true,
+    "thenAlignment": "toWhen"
+  }
+}

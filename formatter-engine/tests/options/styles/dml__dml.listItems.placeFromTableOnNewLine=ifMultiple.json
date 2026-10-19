@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "name": "dml__dml.listItems.placeFromTableOnNewLine=ifMultiple"
+  },
+  "dml": {
+    "listItems": {
+      "placeFromTableOnNewLine": "ifMultiple"
+    }
+  }
+}

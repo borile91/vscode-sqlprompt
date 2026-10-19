@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "name": "operators__operators.andOr.alignment=rightAligned"
+  },
+  "operators": {
+    "andOr": {
+      "alignment": "rightAligned"
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "name": "insert__insertStatements.columns.parenthesisStyle=compactToStatement"
+  },
+  "insertStatements": {
+    "columns": {
+      "parenthesisStyle": "compactToStatement"
+    }
+  }
+}

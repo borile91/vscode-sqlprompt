@@ -1,0 +1,8 @@
+{
+  "metadata": {
+    "name": "dml__dml.placeDistinctAndTopClausesOnNewLine=true"
+  },
+  "dml": {
+    "placeDistinctAndTopClausesOnNewLine": true
+  }
+}

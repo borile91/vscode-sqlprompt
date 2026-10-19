@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "name": "insert__insertStatements.columns.placeSubsequentColumnsOnNewLines=ifLongerThanMaxLineLength"
+  },
+  "insertStatements": {
+    "columns": {
+      "placeSubsequentColumnsOnNewLines": "ifLongerThanMaxLineLength"
+    }
+  }
+}

@@ -1,6 +1,6 @@
 # Motore di formattazione .NET
 
-Motore di formattazione **predefinito** (`sqlPrompt.formatting.engine = "dotnet"`); il formatter TypeScript resta disponibile con `legacy` e come ripiego. L'obiettivo è la **parità con Redgate SQL Prompt**, misurata con la CLI di Redgate usata come oracolo.
+Motore di formattazione **predefinito** (`sqlPrompt.formatting.engine = "dotnet"`); il formatter TypeScript resta disponibile con `legacy` e come ripiego. L'obiettivo è la **compatibilità con i file di stile di SQL Prompt**, verificata con la CLI di SQL Prompt usata come riferimento.
 
 ## Perché un motore separato
 
@@ -73,8 +73,8 @@ Motore di formattazione **predefinito** (`sqlPrompt.formatting.engine = "dotnet"
   - La CLI scrive sempre **CRLF**: i test confrontano il testo con fine riga normalizzati.
 - **Corpus**: `tools/redgate-oracle/build-corpus.sh` rigenera `formatter-engine/tests/corpus/`:
   - `inputs/`: fixture del formatter TS, esempi non passanti e **casi mock** (`mocks/`);
-  - `styles/`: i 4 profili utente e i 5 stili incorporati di SQL Prompt (Default, Collapsed, CommasBefore, Indented, RightAligned);
-  - `expected/<stile>/`: output Redgate, **306 casi** (34 input × 9 stili).
+  - `styles/`: i 4 profili utente, esportati da SQL Prompt dagli utenti (gli stili incorporati nel prodotto non vengono ridistribuiti);
+  - `expected/<stile>/`: output Redgate, **136 casi** (34 input × 4 stili).
 - **Casi mock** (`tests/corpus/mocks/`): SQL **inventato** (dominio biblioteca, nessun nome reale), scritto per riprodurre le combinazioni particolari trovate negli script del DB:
   - `mock_commenti`: intestazioni, commenti attaccati allo statement precedente o al successivo, commenti in coda incolonnati, commenti a blocco su più righe, prosecuzione di un commento in coda;
   - `mock_procedura_cursori`: parametri con commenti, DECLARE con `=` incolonnati, `SET … = CURSOR … FOR` e `DECLARE … CURSOR FOR`, `FETCH … INTO`, EXEC con parametri, RAISERROR con commenti, TRY/CATCH, `ELSE IF`;
@@ -82,8 +82,22 @@ Motore di formattazione **predefinito** (`sqlPrompt.formatting.engine = "dotnet"
   - `mock_ddl`: CREATE TABLE con `WITH(FILLFACTOR)`, CREATE/ALTER INDEX, ALTER TABLE, `sp_addextendedproperty`, trigger, viste, funzioni inline e multi-istruzione, `DECLARE @t TABLE`;
   - `mock_tsqlt`: un test tSQLt con FakeTable, VALUES multi-riga e AssertEqualsTable;
   - `mock_varie`: etichette e GOTO, DROP consecutivi, alias con maiuscole diverse, vista con riga vuota dopo AS.
-- **Ratchet**: `passing.txt` elenca i casi identici, che devono restarlo (**96**, di cui 14 mock).
+- **Ratchet**: `passing.txt` elenca i casi identici, che devono restarlo (**84**, di cui 14 mock).
 - **Punteggio**: `dotnet test --filter Punteggio --logger "console;verbosity=detailed"`.
+
+## Casi una opzione per volta
+
+- **Scopo**: ogni impostazione dell'editor degli stili ha un caso di test con l'**output della CLI**.
+- **Generatore**: `tools/redgate-oracle/options-cases.mjs` legge lo schema dell'editor (`client/src/formatter/styleSchema.ts`, client compilato) e scrive `formatter-engine/tests/options/`:
+  - `inputs/<sezione>.sql`: l'**SQL di anteprima** della sezione;
+  - `styles/<sezione>__<chiave>=<valore>.json`: stile predefinito + **una sola opzione** + le sue condizioni (`enabledWhen`, `appliesWhen`);
+  - `cases.txt`: `caso sezione caso-di-confronto` (il confronto è lo stile predefinito, o le sole condizioni dell'opzione).
+- **Oracolo**: `tools/redgate-oracle/build-options.sh [sezione…]` genera `expected/`.
+  - Più casi per sessione della VM; i casi rimasti **identici all'input** (sessione caduta) vengono **rifatti**.
+  - Con delle sezioni rigenera solo quelle.
+- **Test**:
+  - motore (`OptionTests`): ratchet `tests/options/passing.txt`, punteggio con `--filter "FullyQualifiedName~OptionTests.Punteggio"`;
+  - client (`styleSchema.test.ts`): i casi coprono **tutte le opzioni** dello schema, e ogni opzione **cambia l'anteprima** della sua sezione (le eccezioni note sono elencate nel test).
 
 ## Validazione sugli script reali del DB
 
@@ -92,34 +106,37 @@ Motore di formattazione **predefinito** (`sqlPrompt.formatting.engine = "dotnet"
   - **Tutto resta nella cartella di lavoro, fuori dal repo**: nel repo finiscono solo i casi mock.
   - `tools/redgate-oracle/cluster.py` raggruppa le differenze per tipo (rientro, a capo, spazi, maiuscole, righe vuote).
 - **Risultati su un database reale** (progetto SSDT non pubblicato, 3.882 script, 2026-10-19):
-  - **profilo Vertical** (2.732 script): **2.023 identici a Redgate**, **95,4%** delle righe uguali.
+  - **profilo Vertical** (2.732 script): **2.023 identici all'output di riferimento**, **95,4%** delle righe uguali.
   - **profilo Tsqlt** (1.150 test tSQLt): **1.053 identici**, **98,9%** delle righe uguali.
   - Script analizzabili: tutti tranne 1, che ha un errore di sintassi anche per ScriptDom.
 
 ## Stato attuale
 
-- **Corpus**: **96/306** casi identici, **78,4%** di righe in comune con Redgate.
+- **Corpus**: **84/136** casi identici, **94,5%** di righe in comune con l'output di riferimento.
 - **Profili utente**: Vertical 99%, Inline 92%, Tsqlt 97%, Scripting 87%.
+- **Una opzione per volta**: **148/238** casi identici (ratchet `tests/options/passing.txt`).
+  - Completi: Casing, RESTORE; quasi: CTE 19/20, CASE 16/18, Functions 6/7, Variables 4/5.
+  - Più indietro: Operators 0/25, DDL 2/20, Insert 14/24, Whitespace 8/17, Parentheses 8/15.
 - **Example7** (`docs/formatting/example-not-passing/`, irrisolti con il formatter TS): **anonimizzati** (nomi di tabelle, colonne, parametri e commenti sostituiti) e riformattati con la CLI; tutti e 4 **identici** a Redgate con il proprio profilo, nel ratchet.
-- **Stili incorporati**: Collapsed e Indented sotto il 46%; mancano `toFirstListItem` e la compattazione completa.
 
 ### Coperti
 
 - **Statement**: statement e batch (GO, righe vuote, gruppi DECLARE/SET/PRINT/DROP/CLOSE-DEALLOCATE, etichette).
 - **Commenti**: in testa al file, prima degli statement (di primo livello o nei blocchi), in coda nelle liste, prosecuzioni, a blocco su più righe.
-- **Query**: SELECT con TOP/DISTINCT/INTO; FROM/JOIN/ON in tutte le varianti di allineamento; WHERE/HAVING con AND/OR; GROUP BY e ORDER BY; FOR XML.
+- **Query**: SELECT con TOP/DISTINCT/INTO; FROM/JOIN/ON in tutte le varianti di allineamento; WHERE/HAVING con AND/OR; GROUP BY e ORDER BY; FOR XML; CTE (`cte.*`).
+- **Colonna comune delle clausole** (`alignItemsAcrossClauses`): parola chiave più lunga, tabelle dei JOIN comprese; un elemento a capo prende la colonna comune; disattivata con clausole allineate a destra o senza `alignSubsequentItemsWithFirstItem`.
 - **Liste**: virgole prima/dopo, allineamento al primo elemento, incolonnamento tra clausole e degli alias.
 - **Espressioni**: sottoquery e parentesi espanse/compatte; EXISTS; CASE; chiamate a funzione (AND/OR in linea negli argomenti); IN; espressioni lunghe con riempimento.
-- **DML**: INSERT (VALUES su più righe), UPDATE, DELETE, EXEC, RAISERROR.
+- **DML**: INSERT (VALUES su più righe), UPDATE, DELETE, EXEC, RAISERROR, RESTORE … MOVE … TO.
 - **Controllo di flusso**: BEGIN/END, IF/ELSE, WHILE, TRY/CATCH, cursori (SET/DECLARE … CURSOR FOR, FETCH INTO).
 - **DDL**: procedure, funzioni (anche inline), viste, trigger; CREATE TABLE, ALTER TABLE ADD, vincoli, CREATE/ALTER INDEX, `DECLARE @t TABLE`.
 - **Maiuscole**: parole chiave, funzioni, tipi; variabili come nella dichiarazione; nomi dei parametri di EXEC come i parametri della procedura; alias di tabella come nella definizione (per query).
 
 ### Da fare, in ordine di impatto
 
+- **Casi per opzione ancora diversi**: elenco con `dotnet test --filter "FullyQualifiedName~OptionTests.Punteggio" --logger "console;verbosity=detailed"`.
 - **Stili Indented e Collapsed**: `clauseAlignment = toFirstListItem`, compattazione di statement e sottoquery.
-- **Variabili**: `placeEqualsSignOnNewLine`, `placeAssignedValueOnNewLineIfLongerThanMaxLineLength`, `addSpaceBetweenDataTypeAndPrecision`.
-- **CTE** e la sezione `cte.*`.
+- **Parentesi espanse nelle condizioni** (WHERE/AND con `expanded*`), **IN** lunghi (a capo dopo `in (`).
 - **Colonne dei vincoli** negli stili con virgola iniziale (anche negli indici dello stile Test).
 - **Virgola seguita da commento** nelle liste con virgola iniziale: Redgate sposta il commento prima della virgola.
 - **Operatori**: `operators.between.*`, `operators.comparison.align`, `insertStatements.*` di tipo `expandedSplit`.

@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "name": "operators__operators.andOr.alignment=beforeFirstListItem"
+  },
+  "operators": {
+    "andOr": {
+      "alignment": "beforeFirstListItem"
+    }
+  }
+}

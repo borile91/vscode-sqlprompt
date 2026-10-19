@@ -16,8 +16,9 @@ public sealed partial class RuleBuilder
         if (_controlBodies.Contains(node) || !_s.ControlFlow.IndentBeginAndEndKeywords) return;
         int begin = _m.FirstCode(node);
         var slot = _m.Slots[begin];
-        // se il contenitore rientra già i suoi statement, il rientro non si somma
-        if (slot.Offset > 0) return;
+        // se il contenitore rientra già i suoi statement, il rientro non si somma;
+        // al primo livello del batch non si rientra (verificato con la CLI)
+        if (slot.Offset > 0 || slot.Anchor < 0) return;
         int anchor = slot.Anchor, offset = slot.Offset + _tab;
         for (int i = begin; i <= _m.Last(node); i++)
         {
@@ -26,16 +27,24 @@ public sealed partial class RuleBuilder
         }
     }
 
+    // BEGIN rimasto sulla riga di IF/WHILE (placeBeginAndEndOnNewLine = false): contenuto ed END
+    // si allineano all'IF/WHILE
+    private readonly Dictionary<BeginEndBlockStatement, int> _blockAnchors = [];
+
+    // rientro del contenuto dei blocchi (controlFlow.indentContentsOfStatements)
+    private int BlockIndent => _s.ControlFlow.IndentContentsOfStatements ? _tab : 0;
+
     public override void ExplicitVisit(BeginEndBlockStatement node)
     {
         IndentStandaloneBlock(node);
         int begin = _m.FirstCode(node);
         int end = EndKeyword(node);
-        ArrangeStatements(node.StatementList.Statements, begin, _tab);
+        int anchor = _blockAnchors.TryGetValue(node, out int head) ? head : begin;
+        ArrangeStatements(node.StatementList.Statements, anchor, BlockIndent);
         if (end >= 0)
         {
             _m.Break(end);
-            _m.AlignTo(end, begin, 0);
+            _m.AlignTo(end, anchor, 0);
             // il ; dopo END resta attaccato
         }
         base.ExplicitVisit(node);
@@ -50,8 +59,8 @@ public sealed partial class RuleBuilder
     {
         IndentStandaloneBlock(node);
         int begin = _m.FirstCode(node);
-        ArrangeStatements(node.TryStatements.Statements, begin, _tab);
-        ArrangeStatements(node.CatchStatements.Statements, begin, _tab);
+        ArrangeStatements(node.TryStatements.Statements, begin, BlockIndent);
+        ArrangeStatements(node.CatchStatements.Statements, begin, BlockIndent);
         // END TRY, BEGIN CATCH, END CATCH allineati al BEGIN TRY
         for (int i = begin + 1; i <= _m.Last(node); i++)
         {
@@ -110,6 +119,7 @@ public sealed partial class RuleBuilder
         if (body is BeginEndBlockStatement)
         {
             if (o.PlaceBeginAndEndOnNewLine) _m.Break(first);
+            else _blockAnchors[(BeginEndBlockStatement)body] = head;
             _m.AlignRange(first, _m.Last(body), head, o.IndentBeginAndEndKeywords ? _tab : 0);
         }
         else
@@ -306,6 +316,17 @@ public sealed partial class RuleBuilder
                 _m.AddAlignGroup(
                     values.Select(d => _m.PrevCode(_m.FirstCode(d.Value))),
                     middle ? node.Declarations.Where(d => d.Value == null && d.DataType != null).Select(d => _m.Last(d.DataType)) : null);
+            }
+            // valore troppo lungo: va a capo (con l'= se placeEqualsSignOnNewLine), rientrato da DECLARE
+            if (_s.Variables.PlaceAssignedValueOnNewLineIfLongerThanMaxLineLength)
+            {
+                foreach (var d in node.Declarations.Where(d => d.Value != null))
+                {
+                    int value = _m.FirstCode(d.Value);
+                    int point = _s.Variables.PlaceEqualsSignOnNewLine ? _m.PrevCode(value) : value;
+                    _m.AlignTo(point, declare, _tab);
+                    _m.AddGroup(BreakMode.IfLong, _m.FirstCode(d), _m.Last(d), [point]);
+                }
             }
         }
         base.ExplicitVisit(node);

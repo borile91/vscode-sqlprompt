@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "name": "whitespace__whitespace.newLines.emptyLinesBetweenStatements=default"
+  },
+  "whitespace": {
+    "newLines": {
+      "preserveExistingEmptyLinesBetweenStatements": false
+    }
+  }
+}

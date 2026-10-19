@@ -1,0 +1,9 @@
+{
+  "metadata": {
+    "name": "dml__dml.collapseSubqueriesShorterThan=30"
+  },
+  "dml": {
+    "collapseShortSubqueries": true,
+    "collapseSubqueriesShorterThan": 30
+  }
+}

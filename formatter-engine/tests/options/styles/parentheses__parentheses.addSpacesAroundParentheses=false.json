@@ -1,0 +1,8 @@
+{
+  "metadata": {
+    "name": "parentheses__parentheses.addSpacesAroundParentheses=false"
+  },
+  "parentheses": {
+    "addSpacesAroundParentheses": false
+  }
+}

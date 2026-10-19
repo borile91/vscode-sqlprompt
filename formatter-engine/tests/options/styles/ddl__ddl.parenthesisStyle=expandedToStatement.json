@@ -1,0 +1,8 @@
+{
+  "metadata": {
+    "name": "ddl__ddl.parenthesisStyle=expandedToStatement"
+  },
+  "ddl": {
+    "parenthesisStyle": "expandedToStatement"
+  }
+}

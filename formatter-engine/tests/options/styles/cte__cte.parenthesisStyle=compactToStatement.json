@@ -1,0 +1,8 @@
+{
+  "metadata": {
+    "name": "cte__cte.parenthesisStyle=compactToStatement"
+  },
+  "cte": {
+    "parenthesisStyle": "compactToStatement"
+  }
+}

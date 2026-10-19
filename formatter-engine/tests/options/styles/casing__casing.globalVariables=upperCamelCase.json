@@ -1,0 +1,8 @@
+{
+  "metadata": {
+    "name": "casing__casing.globalVariables=upperCamelCase"
+  },
+  "casing": {
+    "globalVariables": "upperCamelCase"
+  }
+}

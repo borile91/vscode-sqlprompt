@@ -1,0 +1,8 @@
+{
+  "metadata": {
+    "name": "lists__lists.placeSubsequentItemsOnNewLines=ifLongerThanMaxLineLength"
+  },
+  "lists": {
+    "placeSubsequentItemsOnNewLines": "ifLongerThanMaxLineLength"
+  }
+}

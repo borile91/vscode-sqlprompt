@@ -1,0 +1,9 @@
+{
+  "metadata": {
+    "name": "lists__lists.commaAlignment=toList"
+  },
+  "lists": {
+    "placeCommasBeforeItems": true,
+    "commaAlignment": "toList"
+  }
+}

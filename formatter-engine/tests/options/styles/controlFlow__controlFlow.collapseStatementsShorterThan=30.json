@@ -1,0 +1,9 @@
+{
+  "metadata": {
+    "name": "controlFlow__controlFlow.collapseStatementsShorterThan=30"
+  },
+  "controlFlow": {
+    "collapseShortStatements": true,
+    "collapseStatementsShorterThan": 30
+  }
+}

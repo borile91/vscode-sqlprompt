@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "name": "insert__insertStatements.values.placeSubsequentValuesOnNewLines=ifLongerThanMaxLineLength"
+  },
+  "insertStatements": {
+    "values": {
+      "placeSubsequentValuesOnNewLines": "ifLongerThanMaxLineLength"
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "name": "operators__operators.in.placeOpeningParenthesisOnNewLine=true"
+  },
+  "operators": {
+    "in": {
+      "placeOpeningParenthesisOnNewLine": true
+    }
+  }
+}

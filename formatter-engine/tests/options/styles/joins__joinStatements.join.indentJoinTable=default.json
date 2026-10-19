@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "name": "joins__joinStatements.join.indentJoinTable=default"
+  },
+  "joinStatements": {
+    "join": {
+      "placeJoinTableOnNewLine": true
+    }
+  }
+}

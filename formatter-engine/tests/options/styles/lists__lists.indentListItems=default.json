@@ -1,0 +1,8 @@
+{
+  "metadata": {
+    "name": "lists__lists.indentListItems=default"
+  },
+  "lists": {
+    "placeFirstItemOnNewLine": "always"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "name": "operators__operators.in.placeFirstValueOnNewLine=ifLongerThanMaxLineLength"
+  },
+  "operators": {
+    "in": {
+      "placeFirstValueOnNewLine": "ifLongerThanMaxLineLength"
+    }
+  }
+}

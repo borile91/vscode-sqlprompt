@@ -1,0 +1,8 @@
+{
+  "metadata": {
+    "name": "whitespace__whitespace.wrapLinesLongerThan=60"
+  },
+  "whitespace": {
+    "wrapLinesLongerThan": 60
+  }
+}

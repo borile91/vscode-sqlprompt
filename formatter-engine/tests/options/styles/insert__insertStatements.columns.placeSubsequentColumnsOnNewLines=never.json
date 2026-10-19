@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "name": "insert__insertStatements.columns.placeSubsequentColumnsOnNewLines=never"
+  },
+  "insertStatements": {
+    "columns": {
+      "placeSubsequentColumnsOnNewLines": "never"
+    }
+  }
+}
