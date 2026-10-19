@@ -131,6 +131,10 @@
             {
                 "command": "sqlPrompt.selectFormattingStyle",
                 "title": "SQL Prompt: Select Formatting Style"
+            },
+            {
+                "command": "sqlPrompt.editFormattingStyles",
+                "title": "SQL Prompt: Edit Formatting Styles"
             }
         ]
     },

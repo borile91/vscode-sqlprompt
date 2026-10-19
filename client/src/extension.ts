@@ -36,6 +36,8 @@ import {
 import { loadStylesFromFolder, LoadedStyle } from './formatter/styleLoader';
 import { FormattingEngine, SqlFormattingProvider } from './formatter/sqlFormattingProvider';
 import { DotnetFormatterHost } from './formatter/dotnetFormatter';
+import { StyleEditorPanel, StyleEditorHost, PreviewResult } from './formatter/styleEditor';
+import { formatSqlText } from './formatter/formatPipeline';
 import { normalizeMode, planSuggestions } from './mssqlSuggestions';
 import { SchemaDiskCache, SchemaToken } from './schema/schemaCache';
 import { CompletionUsageStore, usageDatabaseKey } from './schema/usageStore';
@@ -1590,6 +1592,39 @@ export async function activate(context: ExtensionContext) {
         context.extension.id,
         () => formattingConfig().get<string>('dotnetPath', ''),
     );
+    // Editor degli stili: anteprima con il motore scelto, ripiego sul formatter TypeScript
+    const styleEditorHost: StyleEditorHost = {
+        getStylesFolder: () => formattingConfig().get<string>('stylesFolder', ''),
+        setStylesFolder: folder => formattingConfig().update('stylesFolder', folder, ConfigurationTarget.Global),
+        getActiveStyleName: () => formattingConfig().get<string>('activeStyle', ''),
+        setActiveStyleName: name => formattingConfig().update(
+            'activeStyle', name,
+            workspace.workspaceFolders?.length ? ConfigurationTarget.Workspace : ConfigurationTarget.Global,
+        ),
+        formatPreview: async (sql, style): Promise<PreviewResult> => {
+            if (formattingConfig().get<FormattingEngine>('engine', 'dotnet') === 'dotnet') {
+                try {
+                    const result = await dotnetFormatter.format(sql, style);
+                    if (result.ok) { return { text: result.text, engine: 'dotnet' }; }
+                    const first = result.errors[0];
+                    return {
+                        text: sql, engine: 'dotnet',
+                        error: first ? `Syntax error at line ${first.line}, column ${first.column}: ${first.message}` : 'The SQL could not be parsed.',
+                    };
+                } catch (err: any) {
+                    const text = formatSqlText(sql, style);
+                    return { text, engine: 'legacy', error: `.NET engine unavailable (${err?.message ?? err}): preview from the built-in formatter.` };
+                }
+            }
+            return { text: formatSqlText(sql, style), engine: 'legacy' };
+        },
+        stylesChanged: async () => {
+            const folder = formattingConfig().get<string>('stylesFolder', '');
+            loadedStyles = folder ? await loadStylesFromFolder(folder) : [];
+            updateFormatterStatusBar();
+        },
+    };
+
     context.subscriptions.push(
         { dispose: () => dotnetFormatter.dispose() },
         languages.registerDocumentFormattingEditProvider(
@@ -1600,6 +1635,9 @@ export async function activate(context: ExtensionContext) {
                 dotnetFormatter,
             ),
         ),
+        commands.registerCommand('sqlPrompt.editFormattingStyles', () => {
+            StyleEditorPanel.show(context.extensionUri, styleEditorHost);
+        }),
         commands.registerCommand('sqlPrompt.selectFormattingStyle', async () => {
             const stylesFolder = workspace
                 .getConfiguration('sqlPrompt.formatting')
@@ -1607,17 +1645,27 @@ export async function activate(context: ExtensionContext) {
             if (stylesFolder) {
                 loadedStyles = await loadStylesFromFolder(stylesFolder);
             }
+            const editItem = { label: '$(edit) Edit formatting styles…', description: '', edit: true };
             if (loadedStyles.length === 0) {
-                window.showWarningMessage(
-                    'SQL Prompt: no style files found. Set sqlPrompt.formatting.stylesFolder to a folder containing .json style files.',
+                const choice = await window.showWarningMessage(
+                    'SQL Prompt: no style files found. Set sqlPrompt.formatting.stylesFolder to a folder containing .json style files, or create one in the style editor.',
+                    'Open style editor',
                 );
+                if (choice) { StyleEditorPanel.show(context.extensionUri, styleEditorHost); }
                 return;
             }
-            const items = loadedStyles.map(s => ({ label: s.name, description: s.filePath }));
+            const items = [
+                ...loadedStyles.map(s => ({ label: s.name, description: s.filePath, edit: false })),
+                editItem,
+            ];
             const picked = await window.showQuickPick(items, {
                 placeHolder: 'Select a SQL formatting style',
             });
             if (!picked) { return; }
+            if (picked.edit) {
+                StyleEditorPanel.show(context.extensionUri, styleEditorHost);
+                return;
+            }
             await workspace.getConfiguration('sqlPrompt.formatting').update(
                 'activeStyle',
                 picked.label,

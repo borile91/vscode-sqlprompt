@@ -33,6 +33,7 @@ Both settings have `resource` scope, so they can differ per workspace folder.
 |---|---|
 | **Status bar item** | Shows the active style name (or `No SQL style`); click it to open the style picker |
 | **`SQL Prompt: Select Formatting Style`** | Command Palette entry; rescans `stylesFolder`, then opens the picker |
+| **`SQL Prompt: Edit Formatting Styles`** | Opens the style editor (also from the picker, item *Edit formatting styles…*) |
 | **Format Document** (`⇧⌥F`) | Formats the whole document with the active style |
 
 There is **one formatting provider** and **no per-style command**: VS Code shows a single entry per extension in the **Format Document With…** picker, so the style is chosen through the picker above, not through the formatter picker.
@@ -48,6 +49,17 @@ To make the extension the default formatter for SQL files:
 ```
 
 The provider is registered for `sql` documents with the `file` and `untitled` schemes. **Format Selection** is not supported.
+
+### Editing styles
+
+**`SQL Prompt: Edit Formatting Styles`** opens a page modelled on the SQL Prompt *Formatting styles* dialog in SSMS:
+
+- **Toolbar**: pick the style, *New…*, *Duplicate…*, *Rename…*, *Delete* (to the trash), *Open JSON*, *Use for formatting* (makes it the active style), *Revert*, *Save*.
+- **Sections**: the same groups as SQL Prompt (Whitespace, Lists, Parentheses, Casing, DML, DDL, Control flow, CTE, Variables, Joins, INSERT, Function calls, CASE, Operators, RESTORE); a dot marks the sections with options different from the default.
+- **Options**: every SQL Prompt key, with its default; options that depend on another one are disabled while it is off; ↺ restores the default.
+- **Preview**: the sample SQL of the section, formatted live with the current (unsaved) values and the configured engine; the sample can be edited, and syntax errors are shown above it.
+
+Saving writes the file in the SQL Prompt format: only the values **different from the default**, `metadata` first, `lastModified` updated; unknown keys are kept. Files saved by the editor can be imported back into SQL Prompt.
 
 ### What happens when formatting cannot run
 
