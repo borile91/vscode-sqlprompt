@@ -13,6 +13,8 @@ public sealed class CasingRules : TSqlFragmentVisitor
     private readonly HashSet<int> _names = [];
     private readonly HashSet<int> _functions = [];
     private readonly HashSet<int> _dataTypes = [];
+    // nome dichiarato (parametri, DECLARE) per ogni variabile, senza distinzione di maiuscole
+    private readonly Dictionary<string, string> _declared = new(StringComparer.OrdinalIgnoreCase);
 
     private CasingRules(LayoutModel model) => _m = model;
 
@@ -36,6 +38,18 @@ public sealed class CasingRules : TSqlFragmentVisitor
         base.ExplicitVisit(node);
     }
 
+    public override void ExplicitVisit(ProcedureParameter node)
+    {
+        if (node.VariableName != null) _declared.TryAdd(node.VariableName.Value, node.VariableName.Value);
+        base.ExplicitVisit(node);
+    }
+
+    public override void ExplicitVisit(DeclareVariableElement node)
+    {
+        if (node.VariableName != null) _declared.TryAdd(node.VariableName.Value, node.VariableName.Value);
+        base.ExplicitVisit(node);
+    }
+
     public override void ExplicitVisit(SqlDataTypeReference node)
     {
         if (node.SqlDataTypeOption != SqlDataTypeOption.None && node.Name != null)
@@ -54,6 +68,12 @@ public sealed class CasingRules : TSqlFragmentVisitor
             if (_functions.Contains(i)) casing = o.BuiltInFunctions;
             else if (_dataTypes.Contains(i)) casing = o.BuiltInDataTypes;
             else if (t.TokenType == TSqlTokenType.Variable && t.Text.StartsWith("@@")) casing = o.GlobalVariables;
+            else if (t.TokenType == TSqlTokenType.Variable)
+            {
+                // useObjectDefinitionCase: la variabile prende le maiuscole della sua dichiarazione
+                if (o.UseObjectDefinitionCase && _declared.TryGetValue(slot.Text, out var declared)) slot.Text = declared;
+                continue;
+            }
             else if (Keywords.IsReservedKeyword(t)) casing = o.ReservedKeywords;
             else if (t.TokenType == TSqlTokenType.Identifier && !_names.Contains(i)) casing = o.ReservedKeywords;
             else continue;

@@ -69,6 +69,9 @@ public sealed class LayoutModel
     // Token che, quando restano sulla riga del token precedente, si allineano alla stessa colonna
     // (la massima tra le loro colonne naturali): elementi dopo le parole chiave, alias, tipi di dato
     public List<List<int>> AlignGroups { get; } = [];
+    // per ogni gruppo, token la cui fine (+1 spazio) entra nel calcolo della colonna comune
+    // senza essere spostati (es. tipi di dato delle DECLARE senza valore)
+    public Dictionary<List<int>, List<int>> AlignGroupEnds { get; } = new();
     public IList<TSqlParserToken> Stream { get; }
 
     public LayoutModel(IList<TSqlParserToken> stream)
@@ -200,10 +203,13 @@ public sealed class LayoutModel
             Collapses.Add(new CollapseRange { First = first, Last = last, MaxLength = maxLength });
     }
 
-    public void AddAlignGroup(IEnumerable<int> slots)
+    public void AddAlignGroup(IEnumerable<int> slots, IEnumerable<int>? ends = null)
     {
         var list = slots.Where(x => x >= 0).Distinct().ToList();
-        if (list.Count > 1) AlignGroups.Add(list);
+        var endList = ends?.Where(x => x >= 0).ToList() ?? [];
+        if (list.Count + endList.Count < 2 || list.Count == 0) return;
+        AlignGroups.Add(list);
+        if (endList.Count > 0) AlignGroupEnds[list] = endList;
     }
 
     public void NoSpaceBefore(int slot)

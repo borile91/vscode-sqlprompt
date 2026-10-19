@@ -192,6 +192,35 @@ public sealed partial class RuleBuilder
         base.ExplicitVisit(node);
     }
 
+    // ---- cursori ----
+
+    // CURSOR … FOR: la SELECT va a capo, allineata all'inizio dello statement
+    public override void ExplicitVisit(CursorDefinition node)
+    {
+        if (node.Select != null)
+        {
+            int select = _m.FirstCode(node.Select);
+            int stmt = _m.FindBackward(select, 0, sl => sl.Token.TokenType is TSqlTokenType.Set or TSqlTokenType.Declare);
+            _m.Break(select);
+            _m.AlignRange(select, _m.Last(node.Select), stmt >= 0 ? stmt : select, 0);
+        }
+        base.ExplicitVisit(node);
+    }
+
+    // FETCH … INTO: INTO a capo allineato a FETCH, variabili come una lista
+    public override void ExplicitVisit(FetchCursorStatement node)
+    {
+        if (node.IntoVariables.Count > 0)
+        {
+            int fetch = _m.FirstCode(node);
+            int into = _m.PrevCode(_m.FirstCode(node.IntoVariables[0]));
+            _m.Break(into);
+            _m.AlignTo(into, fetch, 0);
+            ArrangeList(into, node.IntoVariables, NewLineMode.Never, _s.Lists.PlaceSubsequentItemsOnNewLines);
+        }
+        base.ExplicitVisit(node);
+    }
+
     // ---- variabili ----
 
     public override void ExplicitVisit(DeclareVariableStatement node)
@@ -203,7 +232,11 @@ public sealed partial class RuleBuilder
             if (_s.Variables.AlignDataTypesAndValues && node.Declarations.Count > 1)
             {
                 _m.AddAlignGroup(node.Declarations.Where(d => d.DataType != null).Select(d => _m.FirstCode(d.DataType)));
-                _m.AddAlignGroup(node.Declarations.Where(d => d.Value != null).Select(d => _m.PrevCode(_m.FirstCode(d.Value))));
+                // = incolonnati: con almeno due valori la colonna tiene conto anche dei tipi senza valore
+                var values = node.Declarations.Where(d => d.Value != null).ToList();
+                _m.AddAlignGroup(
+                    values.Select(d => _m.PrevCode(_m.FirstCode(d.Value))),
+                    values.Count > 1 ? node.Declarations.Where(d => d.Value == null && d.DataType != null).Select(d => _m.Last(d.DataType)) : null);
             }
         }
         base.ExplicitVisit(node);

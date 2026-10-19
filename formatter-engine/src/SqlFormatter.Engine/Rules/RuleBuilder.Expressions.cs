@@ -22,7 +22,7 @@ public sealed partial class RuleBuilder
     {
         var operands = new List<BooleanExpression>();
         Flatten(root, operands);
-        int first = _m.FirstCode(operands[0]);
+        int first = OperandStart(operands[0]);
         int keyword = _m.PrevCode(first);
         // parola chiave che introduce la condizione (WHERE, ON, HAVING, IF, WHILE, WHEN…)
         if (keyword >= 0 && !Keywords.IsReservedKeyword(_m.Slots[keyword].Token)) keyword = first;
@@ -49,6 +49,18 @@ public sealed partial class RuleBuilder
             }
         }
         _m.AddGroup(Mode(o.PlaceOnNewLine), first, _m.Last(root), points, operands.Count);
+    }
+
+    // Primo token di un operando: EXISTS non include la propria parola chiave nell'intervallo
+    private int OperandStart(BooleanExpression e)
+    {
+        int first = _m.FirstCode(e);
+        if (e is ExistsPredicate)
+        {
+            int kw = _m.FindBackward(first, 0, sl => sl.Token.TokenType == TSqlTokenType.Exists);
+            if (kw >= 0) first = kw;
+        }
+        return first;
     }
 
     private void Flatten(BooleanExpression e, List<BooleanExpression> operands)
