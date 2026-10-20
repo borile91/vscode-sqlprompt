@@ -514,7 +514,7 @@ public sealed partial class RuleBuilder
 
     // ---- INSERT, UPDATE, DELETE ----
 
-    public override void ExplicitVisit(UpdateSpecification node)
+    private void VisitUpdate(UpdateSpecification node)
     {
         int update = _m.FirstCode(node);
         var items = new List<int> { _m.NextCode(update) };
@@ -542,6 +542,7 @@ public sealed partial class RuleBuilder
                 items.Add(_m.FirstCode(node.WhereClause.SearchCondition));
             }
         }
+        AddOutputItems(items, node.OutputClause, node.OutputIntoClause);
         if (_s.Lists.AlignItemsAcrossClauses && _s.Lists.AlignSubsequentItemsWithFirstItem && _s.Dml.Clauses.ClauseAlignment != ClauseAlignment.RightAligned
             && _m.AddAlignGroup(items) is { } across)
             _m.FollowingGroups.Add(across);
@@ -550,7 +551,7 @@ public sealed partial class RuleBuilder
         _queryStarts.Pop();
     }
 
-    public override void ExplicitVisit(DeleteSpecification node)
+    private void VisitDelete(DeleteSpecification node)
     {
         int delete = _m.FirstCode(node);
         // DELETE destinazione FROM …: gli elementi delle clausole partono dalla stessa colonna;
@@ -581,6 +582,7 @@ public sealed partial class RuleBuilder
                 items.Add(_m.FirstCode(node.WhereClause.SearchCondition));
             }
         }
+        AddOutputItems(items, node.OutputClause, node.OutputIntoClause);
         if (_s.Lists.AlignItemsAcrossClauses && _s.Lists.AlignSubsequentItemsWithFirstItem && items.Count > 1 && _s.Dml.Clauses.ClauseAlignment != ClauseAlignment.RightAligned
             && _m.AddAlignGroup(items) is { } across)
             _m.FollowingGroups.Add(across);
@@ -589,19 +591,10 @@ public sealed partial class RuleBuilder
         _queryStarts.Pop();
     }
 
-    public override void ExplicitVisit(InsertSpecification node)
+    private void VisitInsert(InsertSpecification node)
     {
         int insert = _m.FirstCode(node);
-        var cols = _s.InsertStatements.Columns;
-        if (node.Columns.Count > 0)
-        {
-            int open = _m.PrevCode(_m.FirstCode(node.Columns[0]));
-            int close = _m.NextCode(_m.Last(node.Columns[^1]));
-            // con le colonne compatte semplici il rientro del contenuto non si vede (verificato con la CLI)
-            ArrangeParenthesesAfter(open, close, insert, insert, cols.ParenthesisStyle,
-                cols.IndentContents && cols.ParenthesisStyle != ParenthesisStyle.CompactSimple);
-            ArrangeList(open, node.Columns, NewLineMode.Never, cols.PlaceSubsequentColumnsOnNewLines);
-        }
+        ArrangeInsertColumns(insert, node.Columns);
         // dml.placeInsertTableOnNewLine: la tabella di destinazione a capo, rientrata da INSERT
         if (_s.Dml.PlaceInsertTableOnNewLine && node.Target != null)
         {
@@ -610,38 +603,7 @@ public sealed partial class RuleBuilder
             _m.AlignTo(target, insert, _tab);
         }
         if (node.InsertSource is ValuesInsertSource values)
-        {
-            // VALUES sotto INSERT, senza il rientro delle clausole (verificato con la CLI)
-            int kw = _m.FirstCode(values);
-            _m.Break(kw);
-            _m.AlignTo(kw, insert, 0);
-            var v = _s.InsertStatements.Values;
-            // più righe: una per riga, separate come una lista (sempre a capo, verificato con la CLI)
-            if (values.RowValues.Count > 1)
-                ArrangeList(kw, values.RowValues, NewLineMode.Never, NewLineMode.Always);
-            foreach (var row in values.RowValues)
-            {
-                if (row.ColumnValues.Count == 0) continue;
-                int open = _m.PrevCode(_m.FirstCode(row.ColumnValues[0]));
-                int close = _m.NextCode(_m.Last(row.ColumnValues[^1]));
-                // espanse: come le altre parentesi, con VALUES come riferimento (verificato con la CLI)
-                if (v.ParenthesisStyle.ToString().StartsWith("Expanded"))
-                    ArrangeParenthesesAfter(open, close, kw, kw, v.ParenthesisStyle, v.IndentContents);
-                else
-                    ArrangeParentheses(open, close, kw, v.ParenthesisStyle, v.IndentContents);
-                ArrangeList(open, row.ColumnValues, NewLineMode.Never, v.PlaceSubsequentValuesOnNewLines);
-                // compatte non semplici: la riga di valori va a capo sotto VALUES (verificato con la CLI)
-                if (row == values.RowValues[0])
-                {
-                    switch (v.ParenthesisStyle)
-                    {
-                        case ParenthesisStyle.CompactToStatement: _m.Break(open); _m.AlignTo(open, kw, 0); break;
-                        case ParenthesisStyle.CompactIndented: _m.Break(open); _m.AlignTo(open, kw, _tab); break;
-                        case ParenthesisStyle.CompactRightAligned: _m.Break(open); _m.AlignTo(open, kw, 0, AlignKind.Right); break;
-                    }
-                }
-            }
-        }
+            ArrangeInsertValues(insert, values);
         else if (node.InsertSource is SelectInsertSource sel)
         {
             int first = _m.FirstCode(sel);
@@ -651,6 +613,61 @@ public sealed partial class RuleBuilder
         _queryStarts.Push(insert);
         base.ExplicitVisit(node);
         _queryStarts.Pop();
+    }
+
+    // Il primo elemento di OUTPUT entra nella colonna comune delle clausole; INTO no (verificato con la CLI)
+    private void AddOutputItems(List<int> items, OutputClause? output, OutputIntoClause? outputInto)
+    {
+        if (output?.SelectColumns.Count > 0) items.Add(_m.FirstCode(output.SelectColumns[0]));
+        if (outputInto?.SelectColumns.Count > 0) items.Add(_m.FirstCode(outputInto.SelectColumns[0]));
+    }
+
+    // Colonne di INSERT ( … ) secondo insertStatements.columns
+    private void ArrangeInsertColumns(int insert, IList<ColumnReferenceExpression> columns)
+    {
+        if (columns.Count == 0) return;
+        var cols = _s.InsertStatements.Columns;
+        int open = _m.PrevCode(_m.FirstCode(columns[0]));
+        int close = _m.NextCode(_m.Last(columns[^1]));
+        // con le colonne compatte semplici il rientro del contenuto non si vede (verificato con la CLI)
+        ArrangeParenthesesAfter(open, close, insert, insert, cols.ParenthesisStyle,
+            cols.IndentContents && cols.ParenthesisStyle != ParenthesisStyle.CompactSimple);
+        ArrangeList(open, columns, NewLineMode.Never, cols.PlaceSubsequentColumnsOnNewLines);
+    }
+
+    // VALUES ( … ), ( … ) di un INSERT, sotto INSERT, secondo insertStatements.values
+    private void ArrangeInsertValues(int insert, ValuesInsertSource values)
+    {
+        // VALUES sotto INSERT, senza il rientro delle clausole (verificato con la CLI)
+        int kw = _m.FirstCode(values);
+        _m.Break(kw);
+        _m.AlignTo(kw, insert, 0);
+        var v = _s.InsertStatements.Values;
+        // più righe: una per riga, separate come una lista (sempre a capo, verificato con la CLI)
+        if (values.RowValues.Count > 1)
+            ArrangeList(kw, values.RowValues, NewLineMode.Never, NewLineMode.Always);
+        foreach (var row in values.RowValues)
+        {
+            if (row.ColumnValues.Count == 0) continue;
+            int open = _m.PrevCode(_m.FirstCode(row.ColumnValues[0]));
+            int close = _m.NextCode(_m.Last(row.ColumnValues[^1]));
+            // espanse: come le altre parentesi, con VALUES come riferimento (verificato con la CLI)
+            if (v.ParenthesisStyle.ToString().StartsWith("Expanded"))
+                ArrangeParenthesesAfter(open, close, kw, kw, v.ParenthesisStyle, v.IndentContents);
+            else
+                ArrangeParentheses(open, close, kw, v.ParenthesisStyle, v.IndentContents);
+            ArrangeList(open, row.ColumnValues, NewLineMode.Never, v.PlaceSubsequentValuesOnNewLines);
+            // compatte non semplici: la riga di valori va a capo sotto VALUES (verificato con la CLI)
+            if (row == values.RowValues[0])
+            {
+                switch (v.ParenthesisStyle)
+                {
+                    case ParenthesisStyle.CompactToStatement: _m.Break(open); _m.AlignTo(open, kw, 0); break;
+                    case ParenthesisStyle.CompactIndented: _m.Break(open); _m.AlignTo(open, kw, _tab); break;
+                    case ParenthesisStyle.CompactRightAligned: _m.Break(open); _m.AlignTo(open, kw, 0, AlignKind.Right); break;
+                }
+            }
+        }
     }
 
     // ---- EXEC ----

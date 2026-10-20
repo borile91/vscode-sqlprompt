@@ -74,15 +74,16 @@ Motore di formattazione **predefinito** (`sqlPrompt.formatting.engine = "dotnet"
 - **Corpus**: `tools/redgate-oracle/build-corpus.sh` rigenera `formatter-engine/tests/corpus/`:
   - `inputs/`: fixture del formatter TS, esempi non passanti e **casi mock** (`mocks/`);
   - `styles/`: i 4 profili utente, esportati da SQL Prompt dagli utenti (gli stili incorporati nel prodotto non vengono ridistribuiti);
-  - `expected/<stile>/`: output Redgate, **136 casi** (34 input × 4 stili).
+  - `expected/<stile>/`: output Redgate, **140 casi** (35 input × 4 stili).
 - **Casi mock** (`tests/corpus/mocks/`): SQL **inventato** (dominio biblioteca, nessun nome reale), scritto per riprodurre le combinazioni particolari trovate negli script del DB:
   - `mock_commenti`: intestazioni, commenti attaccati allo statement precedente o al successivo, commenti in coda incolonnati, commenti a blocco su più righe, prosecuzione di un commento in coda;
   - `mock_procedura_cursori`: parametri con commenti, DECLARE con `=` incolonnati, `SET … = CURSOR … FOR` e `DECLARE … CURSOR FOR`, `FETCH … INTO`, EXEC con parametri, RAISERROR con commenti, TRY/CATCH, `ELSE IF`;
   - `mock_query_annidate`: EXISTS annidati, IN con funzione tabellare, IIF e CASE con AND, STUFF/FOR XML, OUTER APPLY TOP, DELETE/UPDATE con alias, SELECT INTO, VALUES su più righe con commenti;
   - `mock_ddl`: CREATE TABLE con `WITH(FILLFACTOR)`, CREATE/ALTER INDEX, ALTER TABLE, `sp_addextendedproperty`, trigger, viste, funzioni inline e multi-istruzione, `DECLARE @t TABLE`;
   - `mock_tsqlt`: un test tSQLt con FakeTable, VALUES multi-riga e AssertEqualsTable;
-  - `mock_varie`: etichette e GOTO, DROP consecutivi, alias con maiuscole diverse, vista con riga vuota dopo AS.
-- **Ratchet**: `passing.txt` elenca i casi identici, che devono restarlo (**96**, di cui 15 mock).
+  - `mock_varie`: etichette e GOTO, DROP consecutivi, alias con maiuscole diverse, vista con riga vuota dopo AS;
+  - `mock_merge_output`: MERGE (sottoquery e tabella di valori, UPDATE/INSERT/DELETE), OUTPUT … INTO, tabella di valori in JOIN.
+- **Ratchet**: `passing.txt` elenca i casi identici, che devono restarlo (**99**, di cui 18 mock).
 - **Punteggio**: `dotnet test --filter Punteggio --logger "console;verbosity=detailed"`.
 
 ## Casi una opzione per volta
@@ -105,14 +106,16 @@ Motore di formattazione **predefinito** (`sqlPrompt.formatting.engine = "dotnet"
   - Copia gli script, li formatta con la CLI Redgate (`--oracle`) e con il motore, e confronta.
   - **Tutto resta nella cartella di lavoro, fuori dal repo**: nel repo finiscono solo i casi mock.
   - `tools/redgate-oracle/cluster.py` raggruppa le differenze per tipo (rientro, a capo, spazi, maiuscole, righe vuote).
-- **Risultati su un database reale** (progetto SSDT non pubblicato, 3.882 script, 2026-10-19):
-  - **profilo Vertical** (2.732 script): **2.023 identici all'output di riferimento**, **95,4%** delle righe uguali.
+- **Risultati su un database reale** (progetto SSDT non pubblicato, 3.882 script, 2026-10-20):
+  - **profilo Vertical** (2.732 script): **2.057 identici all'output di riferimento**, **97,3%** delle righe uguali.
   - **profilo Tsqlt** (1.150 test tSQLt): **1.053 identici**, **98,9%** delle righe uguali.
+  - **T-SQL invariato**: stessi token dell'originale in tutti gli script (stringhe e identificatori identici, il resto a meno di spazi e maiuscole); fanno eccezione solo `[int]` → `[INT]` e un carattere invisibile in testa a un file, come con SQL Prompt.
+  - **Stabilità**: riformattare l'output non cambia nulla (idempotenza su tutti gli script).
   - Script analizzabili: tutti tranne 1, che ha un errore di sintassi anche per ScriptDom.
 
 ## Stato attuale
 
-- **Corpus**: **96/136** casi identici, **95,5%** di righe in comune con l'output di riferimento.
+- **Corpus**: **99/140** casi identici, **95,6%** di righe in comune con l'output di riferimento.
 - **Profili utente**: Vertical 99%, Inline 96%, Tsqlt 97%, Scripting 87%.
 - **Una opzione per volta**: **231/238** casi identici (ratchet `tests/options/passing.txt`).
   - Tutte le sezioni complete tranne Operators 21/25, DDL 19/20, Insert 23/24, Joins 18/19.
@@ -127,7 +130,7 @@ Motore di formattazione **predefinito** (`sqlPrompt.formatting.engine = "dotnet"
 - **Colonna comune delle clausole** (`alignItemsAcrossClauses`): parola chiave più lunga, tabelle dei JOIN comprese; un elemento a capo prende la colonna comune; disattivata con clausole allineate a destra o senza `alignSubsequentItemsWithFirstItem`.
 - **Liste**: virgole prima/dopo, allineamento al primo elemento, incolonnamento tra clausole e degli alias.
 - **Espressioni**: sottoquery e parentesi espanse/compatte; EXISTS; CASE; chiamate a funzione (AND/OR in linea negli argomenti); IN; espressioni lunghe con riempimento.
-- **DML**: INSERT (VALUES su più righe), UPDATE, DELETE, EXEC, RAISERROR, RESTORE … MOVE … TO.
+- **DML**: INSERT (VALUES su più righe), UPDATE, DELETE, MERGE, OUTPUT … INTO, tabelle `( VALUES … )`, EXEC, RAISERROR, RESTORE … MOVE … TO.
 - **Controllo di flusso**: BEGIN/END, IF/ELSE, WHILE, TRY/CATCH, cursori (SET/DECLARE … CURSOR FOR, FETCH INTO).
 - **DDL**: procedure, funzioni (anche inline), viste, trigger; CREATE TABLE, ALTER TABLE ADD, vincoli, CREATE/ALTER INDEX, `DECLARE @t TABLE`.
 - **Maiuscole**: parole chiave, funzioni, tipi; variabili come nella dichiarazione; nomi dei parametri di EXEC come i parametri della procedura; alias di tabella come nella definizione (per query).

@@ -22,6 +22,7 @@
 1_Vertical/4_Scripting__example6.sql
 1_Vertical/mock_commenti.sql
 1_Vertical/mock_ddl.sql
+1_Vertical/mock_merge_output.sql
 1_Vertical/mock_procedura_cursori.sql
 1_Vertical/mock_query_annidate.sql
 1_Vertical/mock_tsqlt.sql
@@ -75,6 +76,7 @@
 3_Tsqlt/4_Scripting__example5.sql
 3_Tsqlt/4_Scripting__example6.sql
 3_Tsqlt/mock_commenti.sql
+3_Tsqlt/mock_merge_output.sql
 3_Tsqlt/mock_procedura_cursori.sql
 3_Tsqlt/mock_query_annidate.sql
 3_Tsqlt/mock_tsqlt.sql
@@ -95,4 +97,5 @@
 4_Scripting/4_Scripting__example2.sql
 4_Scripting/4_Scripting__example3.sql
 4_Scripting/4_Scripting__example4.sql
+4_Scripting/mock_merge_output.sql
 4_Scripting/notpassing_4_Scripting__example7.sql
