@@ -105,7 +105,7 @@ function verifica(caso) {
     if (!s) esiti.push(`sorgente "${oggetto}" non visibile`);
     else if (s.alias !== aliasAtteso) esiti.push(`alias di ${oggetto} = "${s.alias}" invece di "${aliasAtteso}"`);
   }
-  // Un inserimento che deve comparire esattamente (es. "dbo.LIBRI AS a").
+  // Un inserimento che deve comparire esattamente (es. "dbo.LIBRI AS l").
   for (const atteso of caso.inserimentiAttesi ?? []) {
     if (!ins.some((t) => t === atteso)) {
       const simili = ins.filter((t) => typeof t === 'string' && t.includes(atteso.split(' ')[0]));
@@ -146,7 +146,12 @@ function verifica(caso) {
 
 // ── Runner ────────────────────────────────────────────────────────────────────
 
-const casi = require('./casi.js');
+// I casi veri citano tabelle reali: stanno fuori dal repo, accanto allo snapshot
+// (SQLPROMPT_LIVE_CASES, oppure casi.js nella cartella dello snapshot). Senza, si usano
+// quelli d'esempio, con nomi inventati, che mostrano il formato.
+const CASI = process.env.SQLPROMPT_LIVE_CASES
+  || (fs.existsSync(path.join(SNAP, 'casi.js')) ? path.join(SNAP, 'casi.js') : path.join(__dirname, 'casi.esempio.js'));
+const casi = require(CASI);
 const filtroPr = process.argv.slice(2).find((a) => /^\d+$/.test(a));
 const verboso = process.argv.includes('-v');
 const selezionati = filtroPr ? casi.filter((c) => String(c.pr) === filtroPr) : casi;

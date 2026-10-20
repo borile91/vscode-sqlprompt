@@ -21,22 +21,21 @@ restano una suite separata e opt-in.
 1. **Una volta**, estrai lo snapshot di schema (serve la password `sa`):
 
    ```bash
-   SA_PW='…' npm run test:live:schema
+   SA_PW='…' npm run test:live:schema -- <database> [<database>…]
    ```
 
    Con SQL Server in un container Docker la password si può passare senza
    scriverla a mano né stamparla a schermo:
 
    ```bash
-   SA_PW="$(docker exec sqlserver printenv SA_PASSWORD)" npm run test:live:schema
+   SA_PW="$(docker exec sqlserver printenv SA_PASSWORD)" npm run test:live:schema -- <database>
    ```
 
    Lo snapshot finisce in `.live-schema/` nella radice del repo (gitignored:
    contiene nomi di tabelle e colonne di database reali). Per cambiare
    destinazione, imposta `SQLPROMPT_LIVE_SCHEMA`.
 
-   Per usare database diversi da `Biblioteca_Master` / `Archivio_Master`, passali
-   come argomenti a `dump-schema.mjs` e aggiorna i casi.
+   I nomi dei database si passano come argomenti: nel repo non compaiono nomi reali.
 
 2. **Esegui i casi**:
 
@@ -59,16 +58,19 @@ ricompilare.
 
 ## Come si aggiunge un caso
 
-I casi stanno in [`casi.js`](./casi.js), uno per oggetto. Il cursore si segna
-con `|` dentro l'SQL:
+I casi veri citano tabelle reali, quindi **stanno fuori dal repo**: in
+`.live-schema/casi.js` (gitignored, accanto allo snapshot) o nel file indicato da
+`SQLPROMPT_LIVE_CASES`. Nel repo c'è solo [`casi.esempio.js`](./casi.esempio.js),
+con nomi inventati, che mostra il formato e viene usato se manca il file locale.
+Un caso per oggetto; il cursore si segna con `|` dentro l'SQL:
 
 ```js
 {
   pr: 20, db: 'Biblioteca_Master',
-  nome: 'prima tabella della query: alias base, non "a2"',
+  nome: 'prima tabella della query: alias base, non "l2"',
   sql: 'SELECT * FROM dbo.LIBR|',
-  inserimentiAttesi: ['LIBRI AS a'],
-  inserimentiVietati: ['LIBRI AS a2'],
+  inserimentiAttesi: ['LIBRI AS l'],
+  inserimentiVietati: ['LIBRI AS l2'],
 }
 ```
 

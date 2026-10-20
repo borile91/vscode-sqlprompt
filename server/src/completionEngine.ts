@@ -779,7 +779,7 @@ function capTableSourceItems(items: CompletionItem[]): CompletionItem[] {
 /**
  * Quanto bene il nome di un oggetto (`label`, `schema.nome` o `nome`) corrisponde
  * alla parola digitata: 0 nome uguale, 1 nome che inizia così, 2 inizio di una
- * parte del nome (`vwLibri`, `ORDINI_ARTICOLI`), 3 contenuta nel nome,
+ * parte del nome (`vwLibri`, `PRESTITI_LIBRI`), 3 contenuta nel nome,
  * 4 lettere in ordine nel nome completo. `undefined` se non corrisponde.
  */
 function matchTier(word: string, label: string): number | undefined {

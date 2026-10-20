@@ -4,7 +4,7 @@ import { generateAlias, stripIdentifierDelimiters } from '../utils.js';
 
 describe('generateAlias — shape of the alias', () => {
     it('takes the initial of each underscore-separated part', () => {
-        assert.equal(generateAlias('PRESTITI_DETTAGLIO'), 'od');
+        assert.equal(generateAlias('PRESTITI_DETTAGLIO'), 'pd');
     });
 
     it('takes the capitals of a CamelCase name', () => {
@@ -12,7 +12,7 @@ describe('generateAlias — shape of the alias', () => {
     });
 
     it('takes the first letter of an all-uppercase name', () => {
-        assert.equal(generateAlias('LIBRI'), 'a');
+        assert.equal(generateAlias('LIBRI'), 'l');
     });
 
     it('takes the first letter of an all-lowercase name', () => {
@@ -24,11 +24,11 @@ describe('generateAlias — reserved words', () => {
     // `FROM dbo.OrariFestivi AS of` fails with "Incorrect syntax near the keyword
     // 'of'", so the alias is extended with what follows the last initial.
     it('extends a CamelCase alias that would be a reserved word', () => {
-        assert.equal(generateAlias('OrariFestivi'), 'ofa');
+        assert.equal(generateAlias('OrariFestivi'), 'ofe');
     });
 
     it('extends an underscore alias that would be a reserved word', () => {
-        assert.equal(generateAlias('ORARI_FESTIVI'), 'ofa');
+        assert.equal(generateAlias('ORARI_FESTIVI'), 'ofe');
         assert.equal(generateAlias('TIPO_ORARIO'), 'tor');
         assert.equal(generateAlias('IMP_SPOSTAMENTI'), 'isp');
         assert.equal(generateAlias('IMP_NOTIFICHE'), 'ino');
@@ -36,12 +36,12 @@ describe('generateAlias — reserved words', () => {
     });
 
     it('extends across the "vw" prefix of a view', () => {
-        assert.equal(generateAlias('vwOrariFestivi'), 'ofa');
+        assert.equal(generateAlias('vwOrariFestivi'), 'ofe');
         assert.equal(generateAlias('vwOrariRitardi'), 'ori');
     });
 
     it('leaves an alias that is not reserved untouched', () => {
-        assert.equal(generateAlias('PRESTITI_TESTATA'), 'ot');
+        assert.equal(generateAlias('PRESTITI_TESTATA'), 'pt');
         assert.equal(generateAlias('OrariFestiviNote'), 'ofn');
     });
 
@@ -61,16 +61,16 @@ describe('generateAlias — reserved words', () => {
 
 describe('generateAlias — deduplication', () => {
     it('appends a counter when the alias is taken', () => {
-        assert.equal(generateAlias('LIBRI', new Set(['a'])), 'a2');
-        assert.equal(generateAlias('LIBRI', new Set(['a', 'a2'])), 'a3');
+        assert.equal(generateAlias('LIBRI', new Set(['l'])), 'l2');
+        assert.equal(generateAlias('LIBRI', new Set(['l', 'l2'])), 'l3');
     });
 
     it('deduplicates the extended form, not the reserved one', () => {
-        assert.equal(generateAlias('OrariFestivi', new Set(['ofa'])), 'ofa2');
+        assert.equal(generateAlias('OrariFestivi', new Set(['ofe'])), 'ofe2');
     });
 
     it('ignores unrelated aliases', () => {
-        assert.equal(generateAlias('LIBRI', new Set(['o', 'od'])), 'a');
+        assert.equal(generateAlias('LIBRI', new Set(['p', 'pd'])), 'l');
     });
 });
 

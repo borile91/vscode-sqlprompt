@@ -5,7 +5,7 @@ SQL Prompt is a SQL Server IntelliSense and formatting extension for VS Code, in
 ## Features at a glance
 
 **Completion**
-- Tables, views and table-valued functions after `FROM`, `JOIN`, `APPLY`, `INSERT INTO`, `UPDATE` and `MERGE`, with an automatic alias (`dbo.PRESTITI_TESTATA AS ot`)
+- Tables, views and table-valued functions after `FROM`, `JOIN`, `APPLY`, `INSERT INTO`, `UPDATE` and `MERGE`, with an automatic alias (`dbo.PRESTITI_TESTATA AS pt`)
 - After `JOIN`, the tables related by a foreign key come first, with the `ON` condition already written (`dbo.Customers AS c ON o.CustomerId = c.CustomerId`); all columns of a composite key are joined with `AND`
 - `ON` predicates from foreign keys, column completion qualified with the right alias, `★ Expand all columns` for `SELECT *`
 - After `INSERT INTO <table>`: the column list with a matching `VALUES` row; inside `VALUES (...)`: `NULL`, `DEFAULT`, `GETDATE()` and similar
@@ -23,7 +23,7 @@ SQL Prompt is a SQL Server IntelliSense and formatting extension for VS Code, in
 **Writing faster**
 - Statement shortcuts: `ssf`, `scf`/`sct`, `st<N>`, `ap`/`av`/`af`, plus your own ([details](#statement-shortcuts))
 - ALTER scaffolding: `ALTER PROCEDURE ` → pick an object → its current definition replaces the header ([details](#alter-scaffolding))
-- Accepting a suggestion replaces the whole word being typed, wherever the cursor is in it (`Biblioteca.dbo.prestitite` → `Biblioteca.dbo.PRESTITI_TESTATA AS ot`)
+- Accepting a suggestion replaces the whole word being typed, wherever the cursor is in it (`Biblioteca.dbo.prestitite` → `Biblioteca.dbo.PRESTITI_TESTATA AS pt`)
 
 **Navigation and editing**
 - Go to Definition (`F12`) on tables, views, procedures and functions: opens the object's script
