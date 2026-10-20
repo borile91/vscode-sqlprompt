@@ -106,7 +106,8 @@ public sealed class LayoutSolver
             {
                 if (g.Broken || g.Points.All(p => _collapsedInside[p])) continue;
                 // un commento di riga dentro il gruppo obbliga comunque ad andare a capo
-                if (Exceeds(g.First, g.Last) || HasLineComment(g.First, g.Last - 1) || SpansLines(g))
+                bool tooLong = g.OnlyIfTooLong ? FirstLineTooLong(g.First, g.Last) : Exceeds(g.First, g.Last);
+                if (tooLong || HasLineComment(g.First, g.Last - 1) || SpansLines(g))
                     candidates.Add((g.First, g.Last, () => ApplyGroup(g)));
             }
             foreach (var (p, last) in _wrapRanges)
@@ -121,11 +122,24 @@ public sealed class LayoutSolver
         }
     }
 
+    // La prima riga dell'intervallo, senza gli a capo di riempimento, sfora la larghezza
+    private bool FirstLineTooLong(int first, int last)
+    {
+        int end = _col[first] + _m.Slots[first].Text.Length;
+        for (int i = first + 1; i <= last; i++)
+        {
+            var s = _m.Slots[i];
+            if (_m.Slots[i - 1].IsLineComment || s.Breaks > 0 || _groupBreaks[i] > 0) break;
+            end += (s.SpaceBefore ? 1 : 0) + s.Text.Length;
+        }
+        return end > _width;
+    }
+
     // Riapre un intervallo e rivaluta quelli che contiene, rimasti in sospeso finché era chiuso
     // Un gruppo "se lungo" va a capo anche se uno dei suoi elementi occupa già più righe
     private bool SpansLines(BreakGroup g)
     {
-        if (g.Mode != BreakMode.IfLong) return false;
+        if (g.Mode != BreakMode.IfLong || g.OnlyIfTooLong) return false;
         // a capo interni agli elementi: cambi di riga che non cadono su un punto del gruppo
         // (si parte dal primo elemento: l'a capo dopo la parola chiave non conta)
         int start = g.ContentStart >= 0 ? g.ContentStart : g.First + 1;

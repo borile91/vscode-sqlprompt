@@ -55,6 +55,8 @@ public sealed class BreakGroup
     // primo token del primo elemento (per riconoscere elementi su più righe)
     public int ContentStart { get; set; } = -1;
     public bool Broken { get; set; }
+    // "se lungo" valutato solo sulla lunghezza delle righe, non sugli elementi già su più righe
+    public bool OnlyIfTooLong { get; set; }
 }
 
 public sealed class CollapseRange
