@@ -82,7 +82,7 @@ describe('nameTokens', () => {
     });
 
     test('splits underscores', () => {
-        assert.deepEqual(nameTokens('PRESTITI_DETTAGLIO'), ['ordini', 'dettaglio']);
+        assert.deepEqual(nameTokens('PRESTITI_DETTAGLIO'), ['prestiti', 'dettaglio']);
     });
 
     test('a plural parent shares a token with its singular-prefixed child', () => {

@@ -4,9 +4,9 @@ import { isReservedWord } from './sqlLexer';
  * Generates a short alias from a table name.
  *
  * Examples:
- *   PRESTITI_DETTAGLIO → "od"
+ *   PRESTITI_DETTAGLIO → "pd"
  *   ClientiAttivi    → "ca"
- *   LIBRI         → "a"
+ *   LIBRI            → "l"
  *   Orders           → "o"
  */
 export function generateAlias(tableName: string, existingAliases?: Set<string>): string {
@@ -65,7 +65,7 @@ export function generateAlias(tableName: string, existingAliases?: Set<string>):
  * characters that follow, in the table name, the last initial it was built from.
  *
  * `OrariFestivi` would give `of`, which T-SQL rejects; the letter after `F` in the
- * name yields `ofa`. Same shape as SQL Prompt's own behaviour.
+ * name yields `ofe`. Same shape as SQL Prompt's own behaviour.
  *
  * @param alias           Alias built from the table name.
  * @param tableName       Name the alias came from.

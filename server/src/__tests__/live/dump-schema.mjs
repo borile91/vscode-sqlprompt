@@ -2,7 +2,7 @@
  * Estrae lo schema reale da localhost e lo salva come snapshot JSON, nella
  * stessa forma che il client invia al server LSP (`sqlPrompt/updateSchemaSnapshot`).
  *
- * Uso:  SA_PW=... node dump-schema.mjs Biblioteca_Master Archivio_Master
+ * Uso:  SA_PW=... node dump-schema.mjs <database> [<database>…]
  */
 import sql from 'mssql';
 import { writeFileSync, mkdirSync } from 'node:fs';

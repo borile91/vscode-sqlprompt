@@ -925,8 +925,8 @@ describe('completionEngine — ordine rispetto alla parola digitata', () => {
   const schema: TableInfo[] = [
     t('ui', 'vwLibri', true),
     t('cat', 'vwLibriCopie', true),
-    t('dbo', 'ORDINI_ARTICOLI'),
-    t('dbo', 'ARTICOLI_FORNITORI'),
+    t('dbo', 'PRESTITI_LIBRI'),
+    t('dbo', 'LIBRI_FORNITORI'),
     t('dbo', 'LIBRI'),
     t('dbo', 'CLIENTI'),
   ];
@@ -946,7 +946,7 @@ describe('completionEngine — ordine rispetto alla parola digitata', () => {
   it('the table whose name starts with the typed word comes first', () => {
     const { labels } = shown('SELECT * FROM libr');
     assert.equal(labels[0], 'dbo.LIBRI');
-    assert.equal(labels[1], 'dbo.ARTICOLI_FORNITORI');
+    assert.equal(labels[1], 'dbo.LIBRI_FORNITORI');
     assert.ok(labels.indexOf('ui.vwLibri') > 1);
     assert.ok(!labels.includes('dbo.CLIENTI'));
   });

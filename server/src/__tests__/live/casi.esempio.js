@@ -1,5 +1,7 @@
 /**
- * Casi di test live, su schema reale di localhost.
+ * Casi di test live d'ESEMPIO, con nomi inventati: mostrano il formato.
+ * I casi veri citano tabelle di database reali e stanno fuori dal repo, in
+ * `.live-schema/casi.js` (gitignored) o nel file indicato da SQLPROMPT_LIVE_CASES.
  *
  * Ogni caso è taggato con la PR che lo riguarda: `node live.js 20` esegue solo
  * quelli della PR #20. Il codice testato è quello COMPILATO nel branch in
@@ -7,10 +9,10 @@
  *
  * `|` marca il cursore. Con più marcatori, `cursorIndex` scegle quale usare.
  *
- * Tabelle usate (reali):
- *   Biblioteca_Master  dbo.LIBRI (103 col, alias atteso "a")
- *                     dbo.PRESTITI_TESTATA (82 col, "ot")
- *                     dbo.PRESTITI_DETTAGLIO (68 col, "od")
+ * Tabelle usate (inventate):
+ *   Biblioteca_Master  dbo.LIBRI (103 col, alias atteso "l")
+ *                     dbo.PRESTITI_TESTATA (82 col, "pt")
+ *                     dbo.PRESTITI_DETTAGLIO (68 col, "pd")
  *                     config.LIBRI (11 col) — stesso nome, altro schema
  *   Archivio_Master   dbo.OrariFestivi (53 col, "of")
  *                     config.Editori (28 col) / dbo.Editori (5 col)
@@ -24,43 +26,43 @@ module.exports = [
   {
     pr: 19, db: ES,
     nome: 'due SELECT nude: il secondo non vede la tabella del primo',
-    sql: 'SELECT * FROM dbo.PRESTITI_TESTATA ot\nSELECT | FROM dbo.LIBRI a',
+    sql: 'SELECT * FROM dbo.PRESTITI_TESTATA pt\nSELECT | FROM dbo.LIBRI l',
     sorgentiAttese: ['LIBRI'],
   },
   {
     pr: 19, db: ES,
     nome: 'INSERT … SELECT poi un altro SELECT (regressione corretta)',
-    sql: 'INSERT INTO dbo.PRESTITI_DETTAGLIO (SEDE)\nSELECT ot.SEDE FROM dbo.PRESTITI_TESTATA ot\nSELECT | FROM dbo.LIBRI a',
+    sql: 'INSERT INTO dbo.PRESTITI_DETTAGLIO (SEDE)\nSELECT pt.SEDE FROM dbo.PRESTITI_TESTATA pt\nSELECT | FROM dbo.LIBRI l',
     sorgentiAttese: ['LIBRI'],
   },
   {
     pr: 19, db: ES,
     nome: 'INSERT … VALUES poi un SELECT (regressione corretta)',
-    sql: 'INSERT INTO dbo.PRESTITI_DETTAGLIO (SEDE)\nVALUES (1)\nSELECT | FROM dbo.LIBRI a',
+    sql: 'INSERT INTO dbo.PRESTITI_DETTAGLIO (SEDE)\nVALUES (1)\nSELECT | FROM dbo.LIBRI l',
     sorgentiAttese: ['LIBRI'],
   },
   {
     pr: 19, db: ES,
     nome: 'CTE, query principale, poi un SELECT indipendente (regressione corretta)',
-    sql: 'WITH cte AS (SELECT 1 AS x)\nSELECT * FROM cte\nSELECT | FROM dbo.LIBRI a',
+    sql: 'WITH cte AS (SELECT 1 AS x)\nSELECT * FROM cte\nSELECT | FROM dbo.LIBRI l',
     sorgentiAttese: ['LIBRI'],
   },
   {
     pr: 19, db: ES,
     nome: 'UNION resta un solo statement',
-    sql: 'SELECT ot.SEDE FROM dbo.PRESTITI_TESTATA ot\nUNION\nSELECT | FROM dbo.PRESTITI_TESTATA ot2',
+    sql: 'SELECT pt.SEDE FROM dbo.PRESTITI_TESTATA pt\nUNION\nSELECT | FROM dbo.PRESTITI_TESTATA pt2',
     sorgentiAttese: ['PRESTITI_TESTATA', 'PRESTITI_TESTATA'],
   },
   {
     pr: 19, db: ES,
     nome: 'sottoquery: entrambe le tabelle restano visibili',
-    sql: 'SELECT *\nFROM dbo.PRESTITI_TESTATA ot\nWHERE ot.SEDE IN (\nSELECT | FROM dbo.LIBRI a\n)',
+    sql: 'SELECT *\nFROM dbo.PRESTITI_TESTATA pt\nWHERE pt.SEDE IN (\nSELECT | FROM dbo.LIBRI l\n)',
     sorgentiAttese: ['PRESTITI_TESTATA', 'LIBRI'],
   },
   {
     pr: 19, db: ES,
     nome: 'WITH (NOLOCK) a inizio riga non apre una CTE',
-    sql: 'SELECT * FROM dbo.PRESTITI_TESTATA ot\nWITH (NOLOCK)\nWHERE ot.|',
+    sql: 'SELECT * FROM dbo.PRESTITI_TESTATA pt\nWITH (NOLOCK)\nWHERE pt.|',
     sorgentiAttese: ['PRESTITI_TESTATA'],
   },
   {
@@ -72,66 +74,66 @@ module.exports = [
   {
     pr: 19, db: ES,
     nome: '`;` e `GO` continuano a fare da confine',
-    sql: 'SELECT * FROM dbo.PRESTITI_TESTATA ot;\nGO\nSELECT | FROM dbo.LIBRI a',
+    sql: 'SELECT * FROM dbo.PRESTITI_TESTATA pt;\nGO\nSELECT | FROM dbo.LIBRI l',
     sorgentiAttese: ['LIBRI'],
   },
 
   // ══ PR #20 — alias non riservati se non scritti nella query ════════════════
   {
     pr: 20, db: ES,
-    nome: 'prima tabella della query: alias base, non "a2"',
+    nome: 'prima tabella della query: alias base, non "l2"',
     sql: 'SELECT * FROM dbo.LIBR|',
-    inserimentiAttesi: ['LIBRI AS a'],
-    inserimentiVietati: ['LIBRI AS a2'],
+    inserimentiAttesi: ['LIBRI AS l'],
+    inserimentiVietati: ['LIBRI AS l2'],
   },
   {
     pr: 20, db: ES,
-    nome: 'alias esplicito occupato: la seconda tabella ottiene "a2"',
-    sql: 'SELECT * FROM dbo.LIBRI a JOIN dbo.LIBR|',
-    inserimentiAttesi: ['LIBRI AS a2'],
-    inserimentiVietati: ['LIBRI AS a'],
+    nome: 'alias esplicito occupato: la seconda tabella ottiene "l2"',
+    sql: 'SELECT * FROM dbo.LIBRI l JOIN dbo.LIBR|',
+    inserimentiAttesi: ['LIBRI AS l2'],
+    inserimentiVietati: ['LIBRI AS l'],
   },
   {
     pr: 20, db: ES,
-    nome: 'alias da nome con underscore: PRESTITI_TESTATA → ot',
-    sql: 'SELECT * FROM dbo.ORDINI_TESTAT|',
-    inserimentiAttesi: ['PRESTITI_TESTATA AS ot'],
-    inserimentiVietati: ['PRESTITI_TESTATA AS ot2'],
+    nome: 'alias da nome con underscore: PRESTITI_TESTATA → pt',
+    sql: 'SELECT * FROM dbo.PRESTITI_TESTAT|',
+    inserimentiAttesi: ['PRESTITI_TESTATA AS pt'],
+    inserimentiVietati: ['PRESTITI_TESTATA AS pt2'],
   },
   {
     pr: 20, db: ES,
-    nome: 'due tabelle diverse: nessuna collisione, od resta od',
-    sql: 'SELECT * FROM dbo.PRESTITI_TESTATA ot JOIN dbo.ORDINI_DETTAGL|',
-    inserimentiAttesi: ['PRESTITI_DETTAGLIO AS od'],
-    inserimentiVietati: ['PRESTITI_DETTAGLIO AS od2'],
+    nome: 'due tabelle diverse: nessuna collisione, pd resta pd',
+    sql: 'SELECT * FROM dbo.PRESTITI_TESTATA pt JOIN dbo.PRESTITI_DETTAGL|',
+    inserimentiAttesi: ['PRESTITI_DETTAGLIO AS pd'],
+    inserimentiVietati: ['PRESTITI_DETTAGLIO AS pd2'],
   },
   {
     pr: 20, db: ES,
     nome: 'la prima tabella senza alias scritto non riserva nulla',
-    sql: 'SELECT * FROM dbo.LIBRI JOIN dbo.ORDINI_TESTAT|',
-    inserimentiAttesi: ['PRESTITI_TESTATA AS ot'],
+    sql: 'SELECT * FROM dbo.LIBRI JOIN dbo.PRESTITI_TESTAT|',
+    inserimentiAttesi: ['PRESTITI_TESTATA AS pt'],
   },
   {
     pr: 20, db: ES,
-    nome: 'stesso nome in altro schema: config.LIBRI → a',
+    nome: 'stesso nome in altro schema: config.LIBRI → l',
     sql: 'SELECT * FROM config.LIBR|',
-    inserimentiAttesi: ['LIBRI AS a'],
-    inserimentiVietati: ['LIBRI AS a2'],
+    inserimentiAttesi: ['LIBRI AS l'],
+    inserimentiVietati: ['LIBRI AS l2'],
   },
   {
-    // "of" è una parola riservata T-SQL: l'alias viene esteso a "ofa", come fa
+    // "of" è una parola riservata T-SQL: l'alias viene esteso a "ofe", come fa
     // SQL Prompt. Prima il caso attendeva "of", cioè consolidava il difetto.
     pr: 20, db: EM,
-    nome: 'alias CamelCase riservato: OrariFestivi → ofa',
-    sql: 'SELECT * FROM dbo.OrdiniFas|',
-    inserimentiAttesi: ['OrariFestivi AS ofa'],
-    inserimentiVietati: ['OrariFestivi AS of', 'OrariFestivi AS ofa2'],
+    nome: 'alias CamelCase riservato: OrariFestivi → ofe',
+    sql: 'SELECT * FROM dbo.OrariFest|',
+    inserimentiAttesi: ['OrariFestivi AS ofe'],
+    inserimentiVietati: ['OrariFestivi AS of', 'OrariFestivi AS ofe2'],
   },
   {
     pr: 20, db: ES,
-    nome: 'tre alias espliciti occupati: la quarta ottiene a4',
-    sql: 'SELECT * FROM dbo.LIBRI a JOIN dbo.LIBRI a2 ON 1=1 JOIN dbo.LIBRI a3 ON 1=1 JOIN dbo.LIBR|',
-    inserimentiAttesi: ['LIBRI AS a4'],
+    nome: 'tre alias espliciti occupati: la quarta ottiene l4',
+    sql: 'SELECT * FROM dbo.LIBRI l JOIN dbo.LIBRI l2 ON 1=1 JOIN dbo.LIBRI l3 ON 1=1 JOIN dbo.LIBR|',
+    inserimentiAttesi: ['LIBRI AS l4'],
   },
 
   // ══ PR #21 — risoluzione per UPDATE e INSERT ═══════════════════════════════
@@ -145,7 +147,7 @@ module.exports = [
   {
     pr: 21, db: ES,
     nome: 'UPDATE con alias: le colonne restano visibili nella WHERE',
-    sql: 'UPDATE a SET a.TITOLO = 1 FROM dbo.LIBRI a WHERE a.|',
+    sql: 'UPDATE l SET l.TITOLO = 1 FROM dbo.LIBRI l WHERE l.|',
     sorgentiAttese: ['LIBRI'],
     attesi: ['LIBRO'],
   },
@@ -171,43 +173,43 @@ module.exports = [
     sql: 'DELETE FROM dbo.LIBRI WHERE |',
     sorgentiAttese: ['LIBRI'],
     attesi: ['LIBRI.LIBRO', 'LIBRI.TITOLO'],
-    vietati: ['a.LIBRO'],
+    vietati: ['l.LIBRO'],
   },
   {
     pr: 21, db: ES,
     nome: 'INSERT … SELECT: nella SELECT si vede la tabella di origine',
-    sql: 'INSERT INTO dbo.PRESTITI_DETTAGLIO (SEDE)\nSELECT | FROM dbo.PRESTITI_TESTATA ot',
-    attesi: ['ot.SEDE'],
+    sql: 'INSERT INTO dbo.PRESTITI_DETTAGLIO (SEDE)\nSELECT | FROM dbo.PRESTITI_TESTATA pt',
+    attesi: ['pt.SEDE'],
   },
 
   // ══ PR #22 — ordinamento per rilevanza ════════════════════════════════════
   {
-    // Su main l'ordine era alfabetico per alias, quindi "od" precedeva "ot".
-    // Con #22 conta la posizione della tabella nello statement: ot è la prima.
+    // Su main l'ordine era alfabetico per alias, quindi "pd" precedeva "pt".
+    // Con #22 conta la posizione della tabella nello statement: pt è la prima.
     pr: 22, db: ES,
     nome: 'le colonne della prima tabella dello statement vengono prima',
-    sql: 'SELECT | FROM dbo.PRESTITI_TESTATA ot JOIN dbo.PRESTITI_DETTAGLIO od ON od.SEDE = ot.SEDE',
-    ordine: { primo: 'ot.SEDE', dopo: ['od.SEDE', 'od.ANNO_PREST'] },
+    sql: 'SELECT | FROM dbo.PRESTITI_TESTATA pt JOIN dbo.PRESTITI_DETTAGLIO pd ON pd.SEDE = pt.SEDE',
+    ordine: { primo: 'pt.SEDE', dopo: ['pd.SEDE', 'pd.ANNO_PREST'] },
   },
   {
     // Su main l'ordine era alfabetico per nome colonna (ANNO_PREST prima di id);
     // con #22 segue l'ordine naturale delle colonne della tabella.
     pr: 22, db: ES,
     nome: 'le colonne seguono l ordine della tabella, non l alfabeto',
-    sql: 'SELECT | FROM dbo.PRESTITI_TESTATA ot',
-    ordine: { primo: 'ot.id', dopo: ['ot.ANNO_PREST', 'ot.D_ORDI', 'ot.PRIO'] },
+    sql: 'SELECT | FROM dbo.PRESTITI_TESTATA pt',
+    ordine: { primo: 'pt.id', dopo: ['pt.ANNO_PREST', 'pt.D_ORDI', 'pt.PRIO'] },
   },
   {
     pr: 22, db: ES,
     nome: 'nessuna label duplicata fra le colonne proposte',
-    sql: 'SELECT | FROM dbo.PRESTITI_TESTATA ot JOIN dbo.PRESTITI_DETTAGLIO od ON od.SEDE = ot.SEDE',
+    sql: 'SELECT | FROM dbo.PRESTITI_TESTATA pt JOIN dbo.PRESTITI_DETTAGLIO pd ON pd.SEDE = pt.SEDE',
     senzaDuplicati: true,
   },
   {
     pr: 22, db: ES,
     nome: 'le colonne in scope precedono le keyword',
-    sql: 'SELECT | FROM dbo.LIBRI a',
-    ordine: { primo: 'a.LIBRO', dopo: ['DISTINCT', 'TOP'] },
+    sql: 'SELECT | FROM dbo.LIBRI l',
+    ordine: { primo: 'l.LIBRO', dopo: ['DISTINCT', 'TOP'] },
   },
   {
     pr: 22, db: EM,
